@@ -1,8 +1,8 @@
 name: Release
 
 # A version tag (pushed by `make release-*`) is published only once the tests
-# pass on every supported Python version: the standalone archives to the GitHub
-# Release, the documentation to GitHub Pages (for a stable release only).
+# pass on every supported Python version: the sdist and wheel to PyPI, the
+# standalone archives to the GitHub Release, the documentation to GitHub Pages (for a stable release only).
 # The tests on main are not enough on their own: nothing waits for them.
 #
 # Also dispatched on a tag by nightly.yml, whose alpha tag is pushed with the
@@ -49,3 +49,66 @@ jobs:
     permissions:
       contents: write  # the gh-pages branch
       pages: read      # the address the site is served at
+
+  build:
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # hatch-vcs reads the version from the tag.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+
+      # The sdist, then the wheel built from it (see [tool.hatch.build.targets.sdist]).
+      - name: Build
+        run: uv build
+
+      # hatch-vcs takes the version from the tag. A build that reads anything
+      # else (no tags fetched, a commit after it) must not be published as it.
+      - name: Check the version is the tag's
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls dist
+          uv run --no-project --with packaging python -c '
+          import sys
+          from pathlib import Path
+          from packaging.version import Version
+          tag = Version(sys.argv[1].removeprefix("v"))
+          built = {Version(p.name.split("-")[1]) for p in Path("dist").glob("*.whl")}
+          print(f"tag {tag}, built {sorted(map(str, built))}")
+          sys.exit(built != {tag})
+          ' "$TAG"
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    # Trusted publishing: PyPI trusts this workflow file (release.yml) in the
+    # `pypi` environment, so no token is stored. It must run here, not in a
+    # called workflow, which PyPI does not accept as a trusted publisher.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/domyn/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
