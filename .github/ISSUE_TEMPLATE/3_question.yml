@@ -1,0 +1,21 @@
+name: Question
+description: How to do something, or why something behaves the way it does.
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [documentation](https://domynai.github.io/domyn-agents/) and search the [issues](https://github.com/domynai/domyn-agents/issues?q=is%3Aissue) first.
+        Keep it short, and remove API keys and anything private.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What you are trying to do, what you tried, and where you got stuck.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `domyn --version`, if it matters.

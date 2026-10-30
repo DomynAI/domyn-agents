@@ -1,0 +1,76 @@
+{
+  "$comment": "Page settings of pdf_layout.py. Lengths in points (1 mm = 2.835 pt, 1 in = 72 pt); a fraction is of the page height, from the bottom. Colours are palette keys (resources/palette.json, dotted), never hex; backgrounds are names of its `backgrounds`. Type comes from resources/typography.json: a text entry with a `role` takes that role's style and size; one without names its own `font` (a style of typography.json) and `size`, for what only a PDF has.",
+  "page": {
+    "size": "A4",
+    "margins": {"left": 56.693, "right": 56.693, "top": 62.362, "bottom": 73.701},
+    "footer_y": 31.181,
+    "footer_text_rise": 4
+  },
+  "backgrounds": {
+    "cover": ["blue", "navy", "violet"],
+    "content": ["white", "tint"],
+    "default_cover": "blue",
+    "default_content": "white"
+  },
+  "text": {
+    "h1": {"role": "title", "leading": 28, "space_before": 6, "color": "text.light_background.title", "room": 170},
+    "h2": {"role": "heading", "leading": 20, "space_before": 16, "space_after": 6, "color": "text.light_background.heading", "room": 110},
+    "h3": {"font": "bold", "size": 12, "leading": 16, "space_before": 12, "space_after": 4, "color": "text.light_background.heading", "room": 90},
+    "intro": {"role": "intro", "leading": 19, "space_after": 12, "color": "text.light_background.title"},
+    "body": {"role": "body", "leading": 15.5, "space_after": 8, "color": "text.light_background.body"},
+    "caption": {"role": "caption", "leading": 12, "space_before": 4, "color": "text.light_background.muted"},
+    "table_header": {"role": "table_header", "leading": 15, "color": "primary"},
+    "table_cell": {"role": "table_cell", "leading": 13, "color": "text.light_background.title"},
+    "callout": {"role": "body", "leading": 15.5},
+    "page_number": {"role": "page_number", "color": "text.light_background.heading"},
+    "cover_title": {"font": "regular", "size": 44, "leading": 48, "color": "text.dark_background.heading"},
+    "cover_subtitle": {"font": "regular", "size": 17, "leading": 23, "color": "text.dark_background.heading"},
+    "closing_title": {"role": "closing_title", "leading": 56, "color": "text.dark_background.heading"},
+    "explore_more": {"role": "explore_more", "leading": 16, "color": "text.dark_background.heading"},
+    "contact": {"role": "contact", "leading": 18, "color": "text.dark_background.heading"}
+  },
+  "h1_rule": {"width": 0.75, "color": "lines.title_rule_light", "space_before": 6, "space_after": 14},
+  "lists": {"indent": 16, "bullet_dedent": 12, "number_gap": 6, "bullet": "•", "bullet_size": 11, "number_size": 10, "color": "text.light_background.body", "space_after": 6},
+  "table": {
+    "padding_x": 7.2,
+    "padding_y": 6,
+    "header_padding_y": 8,
+    "grid_width": 0.5,
+    "grid_color": "lines.table_grid",
+    "band_row_color": "surfaces.table_band_row",
+    "header_band_fill": "surfaces.table_header_band",
+    "header_band_outline": "surfaces.table_header_band_outline",
+    "header_band_radius": 0.17,
+    "header_band_outline_angle": 36,
+    "space_before": 6,
+    "space_after": 12
+  },
+  "callout": {
+    "radius": 6,
+    "padding_x": 14,
+    "padding_y": 12,
+    "space_before": 6,
+    "space_after": 12,
+    "highlight": {"fill": "surfaces.card_highlight", "text": "text.dark_background.heading"},
+    "light": {"fill": "surfaces.card_light", "text": "text.light_background.heading", "outline": "lines.divider_light", "outline_width": 1}
+  },
+  "chart": {"space_after": 10},
+  "cover": {
+    "title_bottom": 0.58,
+    "title_right_inset": 30,
+    "rule_gap": 10,
+    "rule_width": 0.75,
+    "rule_color": "lines.title_slide_rule",
+    "subtitle_gap": 24,
+    "subtitle_clearance": 42,
+    "min_scale": 0.6
+  },
+  "closing": {
+    "top": 0.70,
+    "rule_gap": 8,
+    "rule_width": 0.75,
+    "rule_color": "lines.title_slide_rule",
+    "explore_gap": 30,
+    "contacts_gap": 52
+  }
+}

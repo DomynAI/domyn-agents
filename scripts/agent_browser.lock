@@ -1,0 +1,8 @@
+# The agent-browser binary that goes into the standalone build, and its checksums.
+# Read by scripts/build_standalone.sh; refresh with scripts/update_agent_browser.py.
+# The binary is downloaded from the release of the same version on GitHub
+# (vercel-labs/agent-browser) and refused when its sha256 differs.
+AGENT_BROWSER_VERSION=0.39.4
+AGENT_BROWSER_SHA256_aarch64_apple_darwin=0317ce35172905c775c25b393914bc259701a464877aab9753ec8896f6e38bf7
+AGENT_BROWSER_SHA256_x86_64_unknown_linux_gnu=aa82c8ee81a38b8ad9ba61af02ced6dcbbb8af36dd8b2b479384177f8aa077a6
+AGENT_BROWSER_SHA256_aarch64_unknown_linux_gnu=922b60dbd9f5c8b5c0f39b453bfe8cbf61b83abd487344028a508e8c4dca7883

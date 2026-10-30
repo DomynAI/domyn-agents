@@ -1,0 +1,234 @@
+name: CI Tests
+
+on:
+  push:
+    branches:
+      - main  # Triggers on push to main only
+  # Every pull request, with no path filter: `test` is a required check, and a
+  # workflow a filter never starts leaves a required check waiting forever. The
+  # job `changes` decides instead, and a job it skips counts as passed.
+  pull_request:
+    branches:
+      - '**'  # Triggers on PRs to any branch
+  # From release.yml: a tag is tested on every version before anything is
+  # published.
+  workflow_call:
+
+# Named rather than ${{ github.workflow }}: called from release.yml that is
+# "Release" for every workflow it calls, and they would share one group.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Whether a pull request changes anything the tests read. Not a change
+  # confined to docs/ (built by docs.yml) or scripts/, except the files there
+  # that tests read: the pages and the sidebar, which the index of the
+  # domyn-docs skill is checked against, and the scripts with tests. The
+  # examples are code: linted, and loaded by examples/test_examples.py.
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      code: ${{ steps.files.outputs.code }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The merge commit and its first parent, the base branch.
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Changed files
+        id: files
+        run: |
+          code=false
+          while IFS= read -r file; do
+            case "$file" in
+              docs/docs/*|docs/sidebars.js) code=true ;;
+              scripts/publish_docs_version.py|scripts/release_notes.py|scripts/tag_release.py) code=true ;;
+              scripts/prune_alpha_releases.py|scripts/coverage_total.py) code=true ;;
+              docs/*|scripts/*) ;;
+              *) code=true ;;
+            esac
+            echo "$file"
+          done < <(git diff --name-only HEAD^1 HEAD)
+          echo "code=$code" | tee -a "$GITHUB_OUTPUT"
+
+  # Pull requests only: on main the job below runs the same tests on every
+  # supported version, the one in .python-version included. A required check,
+  # with the coverage of the change checked here too.
+  test:
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read  # the coverage-exempt label, read when the job runs
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # diff-cover compares with the base branch.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # uv runs on the version in .python-version, so install that one.
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: .python-version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          enable-cache: true
+          
+      - name: Install dependencies
+        # Bytecode for the package and the tests, compiled once here rather than
+        # by each worker as it imports: the run starts from a fresh checkout, so
+        # nothing is cached and every worker paid for the same 500 modules.
+        env:
+          UV_COMPILE_BYTECODE: 1
+        run: uv sync --all-extras
+
+      - name: Lint code
+        run: |
+          make lint
+
+      - name: Format Check code
+        run: |
+          make format-check
+
+      - name: Run tests
+        run: |
+          make test
+
+      # Read from the API, not the event: "Re-run jobs" replays the event as it
+      # was, so a label a maintainer adds afterwards would never be seen.
+      - name: Check for a coverage exemption
+        id: exempt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels" --jq '.[].name' | grep -qx coverage-exempt; then
+            echo "exempt=true" >> "$GITHUB_OUTPUT"
+            echo "⚪ Coverage not checked: the pull request is labelled \`coverage-exempt\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # The lines the pull request adds or changes, at least 80% of them run by
+      # a test. The uncovered ones are listed in the job summary.
+      - name: Coverage of the change
+        if: steps.exempt.outputs.exempt != 'true'
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          uv run diff-cover coverage.xml --compare-branch "origin/$BASE" \
+            --fail-under 80 --format "markdown:$RUNNER_TEMP/diff-cover.md" \
+            && status=0 || status=$?
+          cat "$RUNNER_TEMP/diff-cover.md" >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      # The total may not drop below main's (coverage-total.txt on the
+      # coverage-badge branch, written with the badge), save for noise.
+      - name: Total coverage against main
+        if: steps.exempt.outputs.exempt != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          baseline=$(gh api "repos/$GITHUB_REPOSITORY/contents/coverage-total.txt?ref=coverage-badge" \
+            --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+          if [ -z "$baseline" ]; then
+            echo "⚪ No total recorded on main yet: not compared." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python3 scripts/coverage_total.py compare coverage.xml --baseline "$baseline" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "${PIPESTATUS[0]}"
+
+  # Every Python version the package supports (pyproject.toml's classifiers,
+  # and the Python badge in the README). On main and on release tags (called
+  # from release.yml, where the event is the tag's push, or the dispatch of a
+  # nightly alpha): pull requests run the job above, on the version in
+  # .python-version.
+  test-python-versions:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Pushes the coverage badge to the coverage-badge branch (from main only).
+    permissions:
+      contents: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
+
+    env:
+      # Without it uv takes the version in .python-version over the one below.
+      UV_PYTHON: ${{ matrix.python-version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          # The coverage badge is pushed back to the repository at the end.
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          enable-cache: true
+          # Puts the version in the cache key. Without it every version but the
+          # one in .python-version got the same key, the first to finish saved
+          # its cache for all of them, and 3.15 rebuilt its source-only
+          # packages (zstandard, pydantic-core...) on every run.
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      # The coverage badge is measured on main, on the version in
+      # .python-version, the one pull requests are tested on.
+      - name: Check for the badge version
+        id: badge
+        run: echo "enabled=$([ "$GITHUB_REF" = refs/heads/main ] && [ "$(cat .python-version)" = "${{ matrix.python-version }}" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Run tests
+        if: steps.badge.outputs.enabled != 'true'
+        run: make test-no-cov
+
+      - name: Run tests with coverage
+        if: steps.badge.outputs.enabled == 'true'
+        run: make test
+
+      # The total beside it is the baseline pull requests are compared with.
+      - name: Generate coverage badge
+        if: steps.badge.outputs.enabled == 'true'
+        run: |
+          uv run genbadge coverage -i coverage.xml -o coverage-badge.svg
+          python3 scripts/coverage_total.py total coverage.xml > coverage-total.txt
+          cat coverage-total.txt
+
+      - name: Commit and push coverage badge
+        if: steps.badge.outputs.enabled == 'true'
+        uses: stefanzweifel/git-auto-commit-action@d0b01107b5db882071f96de5dd4b54961ea93f4c # v7.2.1
+        with:
+          commit_message: "ci: update coverage badge [skip ci]"
+          file_pattern: coverage-badge.svg coverage-total.txt
+          branch: coverage-badge
+          create_branch: true
+          push_options: "--force"

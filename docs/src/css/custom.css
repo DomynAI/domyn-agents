@@ -1,0 +1,533 @@
+/**
+ * Any CSS included here will be global. The classic template
+ * bundles Infima by default. Infima is a CSS framework designed to
+ * work well for content-centric websites.
+ */
+
+/* ==========================================================================
+   TOKENS / INFIMA OVERRIDES
+   Keep ONLY CSS variables here
+   ========================================================================== */
+
+:root {
+  /* Layout */
+  --doc-sidebar-width: 240px !important;
+
+  /* Containers */
+  --ifm-container-width-sm: 540px;
+  --ifm-container-width-md: 720px;
+  --ifm-container-width-lg: 960px;
+  --ifm-container-width-xl: 1200px;
+
+  /* Typography */
+  --ifm-h1-font-size: 2.0rem;
+  --ifm-h2-font-size: 1.6rem;
+  --ifm-h3-font-size: 1.3rem;
+  --ifm-h4-font-size: 1.1rem;
+  --ifm-h5-font-size: 1.0rem;
+  --ifm-h6-font-size: 0.9rem;
+
+  /* Brand */
+  --ifm-color-primary: #154aa0;
+  --ifm-color-primary-dark: #134390;
+  --ifm-color-primary-darker: #123f88;
+  --ifm-color-primary-darkest: #0f3470;
+  --ifm-color-primary-light: #1751b0;
+  --ifm-color-primary-lighter: #1855b8;
+  --ifm-color-primary-lightest: #1b60d0;
+
+  /* Surfaces */
+  --ifm-background-color: #f5f5f5;
+  --ifm-hr-background-color: #ededed;
+
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+
+  /* Menu text token */
+  --domyn-menu-color: #000;
+}
+
+html[data-theme='dark'] {
+  --ifm-color-primary: #8fbaff;
+  --ifm-color-primary-dark: #67a1ff;
+  --ifm-color-primary-darker: #5395ff;
+  --ifm-color-primary-darkest: #1870ff;
+  --ifm-color-primary-light: #b7d3ff;
+  --ifm-color-primary-lighter: #cbdfff;
+  --ifm-color-primary-lightest: #ffffff;
+
+  --ifm-background-color: #1e1e1e;
+  --ifm-hr-background-color: #303030;
+
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+
+  --domyn-menu-color: var(--ifm-color-primary-lightest);
+}
+
+/* ==========================================================================
+   GLOBAL ACCESSIBILITY / BASICS
+   ========================================================================== */
+
+:focus-visible {
+  outline: 2px solid var(--ifm-link-hover-color);
+  outline-offset: 2px;
+}
+
+*::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsla(0, 0%, 46%, 0.5) transparent;
+}
+
+/* ==========================================================================
+   NAVBAR / SIDEBAR / MAIN SURFACES
+   ========================================================================== */
+
+.navbar,
+aside {
+  background: var(--ifm-background-color);
+  border: none;
+  box-shadow: none;
+}
+
+aside nav {
+  margin-right: 1rem;
+}
+
+.main-wrapper {
+  --domyn-page-background: var(--ifm-background-color);
+  background: var(--domyn-page-background);
+}
+
+/* Flattened rules previously nested inside .main-wrapper */
+.main-wrapper aside {
+  border: none;
+}
+
+.main-wrapper main {
+  background-color: #fff;
+  border-color: #e0e0e0;
+}
+
+/* Keep navbar brand stable when layout reflows */
+.navbar__brand {
+  flex-shrink: 0;
+}
+
+/* Navbar logo base sizing (keep intrinsic width; do not force widths).
+   No `display` on the images: the page holds both the light and the dark logo
+   until React loads, and Docusaurus hides the other one with `display`; setting
+   it here showed both, the light one first. The flex container removes the
+   baseline gap that `display: block` was there for. */
+.navbar__logo {
+  display: flex;
+  align-items: center;
+}
+
+.navbar__logo img {
+  width: auto;
+  height: 24px;
+  margin-top: 0.5rem;
+}
+
+/* Navbar links (light theme) */
+.navbar__item,
+.navbar__link:hover {
+  color: var(--ifm-font-color-secondary);
+  font-weight: var(--ifm-font-weight-regular);
+}
+
+.navbar__link--active,
+.navbar__link--active:hover {
+  color: var(--domyn-menu-color);
+  text-shadow: 0 0 0 currentColor;
+}
+
+/* Navbar links (dark theme) */
+html[data-theme='dark'] .navbar__link {
+  color: rgba(255, 255, 255, 0.65);
+  transition: color 0.2s ease, box-shadow 0.2s ease;
+}
+
+html[data-theme='dark'] .navbar__link:hover {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+html[data-theme='dark'] .navbar__link--active,
+html[data-theme='dark'] .navbar__link--active:hover {
+  color: white;
+}
+
+/* Navbar and sidebar background (dark theme) */
+html[data-theme='dark'] .navbar,
+html[data-theme='dark'] aside {
+  background: #101010;
+}
+
+html[data-theme='dark'] .main-wrapper {
+  --domyn-page-background: #101010;
+  background: var(--domyn-page-background);
+}
+
+html[data-theme='dark'] .main-wrapper main {
+  background-color: #161616;
+  border-color: #161616;
+}
+
+/* ==========================================================================
+   SIDEBAR LINKS
+   ========================================================================== */
+
+.theme-doc-sidebar-item-link {
+  padding-inline: 0.5rem;
+}
+
+.theme-doc-sidebar-item-link .menu__link {
+  font-weight: 400;
+  padding-block: 0.5rem;
+  color: var(--ifm-font-color-secondary);
+}
+
+.theme-doc-sidebar-item-link .menu__link:hover {
+  border-radius: 0.5rem;
+}
+
+.theme-doc-sidebar-item-link .menu__link--active,
+.theme-doc-sidebar-item-link .menu__link--active:hover {
+  color: var(--domyn-menu-color);
+  border-radius: 0.5rem;
+}
+
+/* Sidebar links (dark theme) */
+html[data-theme='dark'] .menu__link {
+  color: var(--ifm-font-color-secondary);
+  opacity: 0.6;
+}
+
+html[data-theme='dark'] .menu__link--active,
+html[data-theme='dark'] .menu__link--active:hover {
+  color: white;
+  opacity: 1;
+}
+
+/* ==========================================================================
+   CONTENT / TYPOGRAPHY
+   ========================================================================== */
+
+.markdown {
+  max-width: 780px;
+}
+
+.markdown > h1:first-child {
+  font-size: 2.2rem;
+  margin-top: 0;
+  margin-bottom: 1rem;
+}
+
+.markdown > h1 { font-size: var(--ifm-h1-font-size); }
+.markdown > h2 { font-size: var(--ifm-h2-font-size); }
+.markdown > h3 { font-size: var(--ifm-h3-font-size); }
+.markdown > h4 { font-size: var(--ifm-h4-font-size); }
+.markdown > h5 { font-size: var(--ifm-h5-font-size); }
+.markdown > h6 { font-size: var(--ifm-h6-font-size); }
+
+article header:first-child {
+  margin-top: 2rem;
+}
+
+/* ==========================================================================
+   LAYOUT TWEAKS
+   ========================================================================== */
+
+/* The window must scroll, because Docusaurus scrolls the window on navigation.
+   main::before draws a frame that stays in the viewport. */
+main {
+  --domyn-frame-top: 4rem;
+  --domyn-frame-gap: 0.5rem;
+  --domyn-frame-height: calc(100vh - var(--domyn-frame-top) - var(--domyn-frame-gap));
+  min-height: var(--domyn-frame-height);
+  margin: calc(var(--domyn-frame-top) - var(--ifm-navbar-height)) var(--domyn-frame-gap)
+    var(--domyn-frame-gap) calc(-1 * var(--domyn-frame-gap));
+  border-radius: 0.5rem;
+}
+
+/* Keep the TOC at the same distance below the frame top. */
+main .theme-doc-toc-desktop {
+  top: calc(var(--domyn-frame-top) + var(--ifm-navbar-height) + 1rem);
+  max-height: calc(var(--domyn-frame-height) - var(--ifm-navbar-height) - 2rem);
+}
+
+main::before {
+  content: '';
+  display: block;
+  position: sticky;
+  top: var(--domyn-frame-top);
+  z-index: 1;
+  box-sizing: border-box;
+  height: var(--domyn-frame-height);
+  margin-bottom: calc(-1 * var(--domyn-frame-height));
+  /* Docusaurus makes the doc main a flex row. These rules overlay the frame on the content. */
+  flex: 0 0 100%;
+  margin-right: -100%;
+  align-self: flex-start;
+  border: 1px solid;
+  border-color: inherit;
+  border-radius: inherit;
+  /* The shadow paints the page background in the gaps and outside the rounded corners. */
+  box-shadow: 0 0 0 var(--domyn-frame-gap) var(--domyn-page-background);
+  pointer-events: none;
+}
+
+/* The doc container adds 2rem below this. */
+.pagination-nav {
+  padding-bottom: 1rem;
+}
+
+/* ==========================================================================
+   ADMONITIONS
+   ========================================================================== */
+
+.alert {
+  border-radius: 12px;
+  border: 1px solid var(--ifm-alert-border-color);
+  box-shadow: none;
+  border-left-width: 1px;
+}
+
+.alert--secondary,
+.alert--info,
+.alert--success,
+.alert--warning,
+.alert--danger {
+  background: var(--ifm-alert-background-color);
+}
+
+.alert__title {
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.alert__content {
+  color: var(--ifm-font-color-base);
+}
+
+/* Alert variants */
+.alert--secondary {
+  --ifm-alert-background-color: rgba(0, 0, 0, 0.04);
+  --ifm-alert-border-color: rgba(0, 0, 0, 0.10);
+  --ifm-alert-foreground-color: var(--ifm-font-color-base);
+}
+
+.alert--info {
+  --ifm-alert-background-color: #E8F1FF;
+  --ifm-alert-border-color: rgba(21, 74, 160, 0.25);
+  --ifm-alert-foreground-color: #0A3170;
+}
+
+.alert--success {
+  --ifm-alert-background-color: #E8FAEF;
+  --ifm-alert-border-color: rgba(16, 163, 127, 0.28);
+  --ifm-alert-foreground-color: #0A5A25;
+}
+
+.alert--warning {
+  --ifm-alert-background-color: #FFF3DE;
+  --ifm-alert-border-color: rgba(245, 158, 11, 0.35);
+  --ifm-alert-foreground-color: #6F4E0E;
+}
+
+.alert--danger {
+  --ifm-alert-background-color: #FEE9E9;
+  --ifm-alert-border-color: rgba(239, 68, 68, 0.30);
+  --ifm-alert-foreground-color: #690D0D;
+}
+
+/* Alert variants (dark theme) */
+html[data-theme='dark'] .alert--secondary {
+  --ifm-alert-background-color: rgba(255, 255, 255, 0.06);
+  --ifm-alert-border-color: rgba(255, 255, 255, 0.10);
+  --ifm-alert-foreground-color: var(--ifm-font-color-base);
+}
+
+html[data-theme='dark'] .alert--info {
+  --ifm-alert-background-color: rgba(143, 186, 255, 0.10);
+  --ifm-alert-border-color: rgba(143, 186, 255, 0.22);
+  --ifm-alert-foreground-color: var(--ifm-font-color-base);
+}
+
+html[data-theme='dark'] .alert--success {
+  --ifm-alert-background-color: rgba(16, 163, 127, 0.12);
+  --ifm-alert-border-color: rgba(16, 163, 127, 0.24);
+  --ifm-alert-foreground-color: var(--ifm-font-color-base);
+}
+
+html[data-theme='dark'] .alert--warning {
+  --ifm-alert-background-color: rgba(245, 158, 11, 0.14);
+  --ifm-alert-border-color: rgba(245, 158, 11, 0.26);
+  --ifm-alert-foreground-color: var(--ifm-font-color-base);
+}
+
+html[data-theme='dark'] .alert--danger {
+  --ifm-alert-background-color: rgba(239, 68, 68, 0.12);
+  --ifm-alert-border-color: rgba(239, 68, 68, 0.24);
+  --ifm-alert-foreground-color: var(--ifm-font-color-base);
+}
+
+.admonitionIcon {
+  margin-top: 2px;
+}
+
+.admonitionIcon svg {
+  width: 1.15em;
+  height: 1.15em;
+  opacity: 0.9;
+  stroke-width: 1.75;
+}
+
+.theme-admonition > div:first-child {
+  text-transform: none;
+}
+
+/* ==========================================================================
+   ROLE BADGE
+   ========================================================================== */
+
+.role-badge {
+  display: block;
+  text-align: left;
+  font-size: 0.78rem;
+  font-weight: 500;
+  font-style: normal;
+  letter-spacing: 0.01em;
+  margin-bottom: 1rem;
+}
+
+.role-badge span {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 6px;
+  background: var(--ifm-alert-background-color, #E8F1FF);
+  border: 1px solid var(--ifm-alert-border-color, rgba(21, 74, 160, 0.18));
+  color: var(--ifm-color-primary-dark);
+  white-space: nowrap;
+}
+
+.role-badge a {
+  color: inherit;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.role-badge a:hover {
+  text-decoration: underline;
+}
+
+html[data-theme='dark'] .role-badge {
+  background: rgba(143, 186, 255, 0.10);
+  border-color: rgba(143, 186, 255, 0.22);
+  color: var(--ifm-color-primary-light);
+}
+
+/* ==========================================================================
+   SIDEBAR SECTION TITLES
+   ========================================================================== */
+
+.sidebar-section-title {
+  margin-top: 1.75rem;
+  margin-bottom: 0.5rem;
+  opacity: 1;
+  padding-inline: 1.25rem;
+  font-weight: var(--ifm-font-weight-semibold);
+  color: var(--domyn-menu-color);
+  text-shadow: 0 0 0 currentColor;
+}
+
+/* Remove spacing above the first section title */
+.theme-doc-sidebar-menu.menu__list > .sidebar-section-title:first-child {
+  margin-top: 2rem;
+  padding-top: 0;
+  border-top: 0;
+}
+
+/* ==========================================================================
+   SIDEBAR LAYOUT WITH FOOTER
+   ========================================================================== */
+
+.sidebarWithFooter {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.sidebarMain {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 72px; /* prevents overlap with the floating toggle */
+}
+
+/* ==========================================================================
+   SIDEBAR TOGGLE (FLOATING)
+   ========================================================================== */
+
+.sidebarFooter {
+  position: fixed;
+  left: 1rem;
+  bottom: 1rem;
+  z-index: 2000;
+  border-radius: 10px;
+  padding: 0.25rem;
+}
+
+/* Button reset + sizing */
+.sidebarThemeToggleButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 40px;
+  height: 40px;
+
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--ifm-font-color-base);
+  border-radius: 8px;
+}
+
+/* Show only the correct icon based on data-theme */
+.sidebarThemeToggleIcon {
+  display: none;
+}
+
+html[data-theme='light'] .sidebarThemeToggleIconLight {
+  display: block;
+}
+
+html[data-theme='dark'] .sidebarThemeToggleIconDark {
+  display: block;
+}
+
+/* Focus style */
+.sidebarThemeToggleButton:focus-visible {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: 2px;
+}
+
+/* Version dropdown in the navbar */
+.version-dropdown {
+  background: transparent;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 6px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 0.15rem 0.4rem;
+}
+
+.version-dropdown:disabled {
+  cursor: default;
+  opacity: 0.7;
+}

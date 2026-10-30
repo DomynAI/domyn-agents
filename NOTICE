@@ -1,0 +1,21 @@
+Domyn Agents
+Copyright 2026 Domyn S.p.A. (https://www.domyn.com/)
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Local transcription (the optional `audio` extra) downloads, on first use, NVIDIA's
+Parakeet TDT 0.6B v3 model, licensed under the Creative Commons Attribution 4.0
+International License (CC-BY-4.0): https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3.
+It is run in the ONNX conversion published at
+https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx. The model is not
+distributed with this product.
+
+The DM Sans fonts distributed with this product, in
+domyn/agents/skills/builtin/resources/assets/fonts/, are Copyright 2014 The DM Sans
+Project Authors (https://github.com/googlefonts/dm-fonts), licensed under the SIL
+Open Font License, Version 1.1. The licence text is in that folder's
+OFL-LICENSE.txt.
+
+docs/vendor/braces/ is a patched copy of braces 3.0.3, Copyright (c) 2014-present
+Jon Schlinkert, licensed under the MIT License (see its LICENSE file). It is used
+to build the documentation site and is not distributed with this product.

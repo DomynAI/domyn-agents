@@ -1,0 +1,49 @@
+version: 2
+
+# Weekly, grouped by kind of update, so a week of bumps arrives as a few pull
+# requests rather than one per package. Security updates are not grouped or
+# delayed: they open as soon as an advisory is published.
+#
+# rebase-strategy: disabled on every entry: an open pull request is left as
+# it is when main moves, rather than rebased and re-resolved on each merge.
+# One that conflicts is refreshed with an "@dependabot rebase" comment.
+updates:
+  # The package and its dev tools (pyproject.toml, uv.lock).
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    rebase-strategy: disabled
+    groups:
+      python-minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Withdrawn from PyPI, yet still picked by Dependabot's resolver: a lock
+      # with it does not install. 0.4.8 is the latest release.
+      - dependency-name: langgraph-sdk
+        versions: ["0.4.9"]
+
+  # The documentation site (docs/package.json, docs/pnpm-lock.yaml).
+  - package-ecosystem: npm
+    directory: /docs
+    schedule:
+      interval: weekly
+    rebase-strategy: disabled
+    groups:
+      docusaurus:
+        patterns: ["@docusaurus/*"]
+      docs-minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # A patched copy in docs/vendor/braces (see its README): updated by hand.
+      - dependency-name: braces
+
+  # The actions in .github/workflows, pinned by commit SHA.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    rebase-strategy: disabled
+    groups:
+      actions:
+        patterns: ["*"]

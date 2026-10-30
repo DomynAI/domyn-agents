@@ -1,0 +1,57 @@
+# A support agent with two skills and a SOUL.md. See README.md to run it.
+
+version: "1.0"
+entrypoint: SupportAgent
+
+llm_providers:
+  - name: llm
+    type: open_router
+    model_name: nvidia/nemotron-3-ultra-550b-a55b:free
+    api_key: ${OPENROUTER_API_KEY}
+
+# Python functions in tools.py, loaded by `path` and name. Paths are relative to the folder
+# `domyn` runs in: this one.
+tools:
+  - name: get_user_id_from_name
+    type: function
+    path: tools.py
+  - name: get_customer_orders
+    type: function
+    path: tools.py
+  - name: get_order_info
+    type: function
+    path: tools.py
+  - name: get_payment_info
+    type: function
+    path: tools.py
+  - name: refund_payment
+    type: function
+    path: tools.py
+    approval_type: user_confirm
+    # Filled in by the loader, never shown to the model.
+    config_params:
+      - name: refund_time
+        value: 3-5 working days
+
+agents:
+  - name: SupportAgent
+    description: The support agent of an online coffee shop.
+    instruction: >-
+      You are the support agent of an online coffee shop. Find the customer by name, then
+      answer about their orders and payments from what the tools return. Read the
+      refund-policy skill before deciding any refund.
+    llm_provider: llm
+    tools:
+      [get_user_id_from_name, get_customer_orders, get_order_info, get_payment_info, refund_payment]
+    stream: true
+    # Every skill in skills/. The prompt lists them by name and description, and the agent
+    # reads one with `skill_view` when the task needs it.
+    skills:
+      source:
+        type: local_dir
+        paths: [skills]
+    # Added to the system prompt on every message.
+    standing_instructions:
+      source:
+        type: local_dir
+        paths: [SOUL.md]

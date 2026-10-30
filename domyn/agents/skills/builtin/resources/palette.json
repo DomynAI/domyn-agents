@@ -1,0 +1,89 @@
+{
+  "primary": "#0000FF",
+  "secondary": "#1A57FF",
+  "tertiary": "#33ADFF",
+  "quaternary": "#6038FF",
+  "quinary": "#FF4466",
+  "senary": "#220E70",
+  "text": {
+    "light_background": {
+      "title": "#000000",
+      "heading": "#141529",
+      "body": "#3A3D52",
+      "muted": "#6B6E80"
+    },
+    "dark_background": {
+      "heading": "#FFFFFF",
+      "body": "#E6ECFF",
+      "muted": "#D6DBF5"
+    }
+  },
+  "surfaces": {
+    "slide_plain": "#FFFFFF",
+    "card_light": "#FFFFFF",
+    "card_highlight": "#0000FF",
+    "card_dark_gradient": [
+      {"pos": 0.00, "color": "#000070", "alpha": 0.24},
+      {"pos": 0.61, "color": "#0033FF", "alpha": 0.28},
+      {"pos": 0.73, "color": "#0033FF", "alpha": 0.45},
+      {"pos": 1.00, "color": "#001C8A", "alpha": 0.26}
+    ],
+    "table_header_band": [
+      {"pos": 0.00, "color": "#000000", "alpha": 0.052},
+      {"pos": 0.64, "color": "#808080", "alpha": 0.007},
+      {"pos": 1.00, "color": "#000000", "alpha": 0.065}
+    ],
+    "table_header_band_outline": [
+      {"pos": 0.00, "color": "#DDDDDD", "alpha": 1.00},
+      {"pos": 1.00, "color": "#7B7B7B", "alpha": 0.30}
+    ],
+    "table_band_row": "#F5F5F5",
+    "shadow_light": {"color": "#1A2358", "alpha": 0.10},
+    "shadow_dark": {"color": "#000000", "alpha": 0.14}
+  },
+  "backgrounds": {
+    "white": "#FFFFFF",
+    "tint": {"gradient": "linear", "angle": 35, "stops": [
+      {"pos": 0.00, "color": "#FFFFFF"},
+      {"pos": 0.55, "color": "#FFFFFF"},
+      {"pos": 1.00, "color": "#E6ECFF"}
+    ]},
+    "blue": {"gradient": "linear", "angle": 35, "stops": [
+      {"pos": 0.00, "color": "#0033FF"},
+      {"pos": 0.50, "color": "#0000FF"},
+      {"pos": 1.00, "color": "#220E70"}
+    ]},
+    "navy": {"gradient": "radial", "stops": [
+      {"pos": 0.00, "color": "#001C8A"},
+      {"pos": 0.45, "color": "#220E70"},
+      {"pos": 1.00, "color": "#141529"}
+    ]},
+    "violet": {"gradient": "linear", "angle": 35, "stops": [
+      {"pos": 0.00, "color": "#6038FF"},
+      {"pos": 0.60, "color": "#0000FF"},
+      {"pos": 1.00, "color": "#220E70"}
+    ]}
+  },
+  "lines": {
+    "title_rule_light": "#0000FF",
+    "title_rule_dark": "#FAFAFA",
+    "title_slide_rule": "#33ADFF",
+    "divider_light": "#D5D9E8",
+    "divider_on_blue": "#4D6BFF",
+    "divider_dark": "#3D4BA8",
+    "table_grid": "#D9D9D9"
+  },
+  "charts": {
+    "categorical": ["#0000FF", "#FF4466", "#33ADFF", "#220E70", "#6038FF", "#1A57FF"],
+    "sequential": [
+      {"pos": 0.00, "color": "#E6ECFF"},
+      {"pos": 0.33, "color": "#33ADFF"},
+      {"pos": 0.66, "color": "#0000FF"},
+      {"pos": 1.00, "color": "#220E70"}
+    ],
+    "negative": "#FF4466",
+    "neutral": "#FAFAFA",
+    "positive": "#0000FF",
+    "grid": "#E6ECFF"
+  }
+}

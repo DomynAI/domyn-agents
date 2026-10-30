@@ -1,0 +1,41 @@
+{
+  "$comment": "The type of the house style, shared by every builtin skill as palette.json is: the font each style is drawn in, the type scale, and the style and size of every text role. Slides and documents (whatever their format) both read it, so a role changed here changes in every one. A style is a family as PowerPoint names it (the font's legacy family name, as 'DM Sans Light') plus a bold flag, and the file that draws it (in assets/fonts/; null when not shipped). The original design sets titles in DM Sans 14pt SemiBold with bold on (weight 800), which is not shipped; title uses DM Sans Bold (700), the nearest. Sizes in points. Elements only one medium has (a slide's 53pt presentation title, a document's cover title) keep their sizes in that medium's own spec.",
+  "styles": {
+    "title": {"family": "DM Sans", "bold": true, "file": "DMSans-Bold.ttf"},
+    "bold": {"family": "DM Sans", "bold": true, "file": "DMSans-Bold.ttf"},
+    "regular": {"family": "DM Sans", "bold": false, "file": "DMSans-Regular.ttf"},
+    "light": {"family": "DM Sans Light", "bold": false, "file": "DMSans-Light.ttf"},
+    "thin": {"family": "DM Sans Thin", "bold": false, "file": null},
+    "italic": {"family": "DM Sans", "bold": false, "italic": true, "file": "DMSans-Italic.ttf"},
+    "bold_italic": {"family": "DM Sans", "bold": true, "italic": true, "file": "DMSans-BoldItalic.ttf"}
+  },
+  "scale": {
+    "display_xxl": 53,
+    "display_xl": 23,
+    "display_lg": 21,
+    "heading_xl": 20,
+    "heading_lg": 18,
+    "heading_md": 17,
+    "heading_sm": 15,
+    "heading_xs": 14,
+    "body_xl": 13,
+    "body_lg": 12,
+    "body_md": 11,
+    "body_sm": 10,
+    "body_xs": 9
+  },
+  "roles": {
+    "title": {"style": "title", "size": 23, "use": "slide title; a document's section heading (h1)"},
+    "heading": {"style": "bold", "size": 15, "use": "a card's heading; a document's subsection heading (h2)"},
+    "intro": {"style": "regular", "size": 14, "use": "the line under a title that sets up what follows"},
+    "body": {"style": "regular", "size": 11, "use": "running text and bullets"},
+    "emphasis": {"style": "bold", "size": 11, "use": "a takeaway, a card's subtitle, bold words in body text"},
+    "caption": {"style": "regular", "size": 9, "use": "under a chart or picture"},
+    "table_header": {"style": "regular", "size": 12, "use": "a table's header row"},
+    "table_cell": {"style": "regular", "size": 10, "use": "a table's body cells"},
+    "page_number": {"style": "regular", "size": 8, "use": "slide or page number"},
+    "closing_title": {"style": "light", "size": 49, "use": "\"Thank you\" on the closing slide or page"},
+    "explore_more": {"style": "light", "size": 12, "use": "\"Explore more\" on the closing slide or page"},
+    "contact": {"style": "regular", "size": 12, "use": "the contact lines on the closing slide or page"}
+  }
+}
