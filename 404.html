@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Page not found</title>
+<script>
+(function () {
+  var base = "/domyn-agents/";
+  var path = location.pathname;
+  if (path.indexOf(base) !== 0) return;
+  var rest = path.slice(base.length);
+  // Inside a version the page really is missing; anything else is an old link.
+  if (/^v\d+\.\d+\.\d+/.test(rest)) return;
+  location.replace(base + "v0.1.0" + "/" + rest + location.search + location.hash);
+})();
+</script>
+</head>
+<body>
+<h1>Page not found</h1>
+<p><a href="/domyn-agents/v0.1.0/">Domyn Agents documentation, v0.1.0</a></p>
+</body>
+</html>
