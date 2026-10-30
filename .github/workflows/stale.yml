@@ -1,0 +1,45 @@
+name: Stale pull requests
+
+# A pull request with no activity for 30 days is labelled stale and told so;
+# with no activity for 7 more days it is closed, and its branch deleted. Both
+# can be undone from the pull request page (Reopen, Restore branch). Any
+# activity removes the label. Drafts and pull requests labelled keep-open are
+# left alone; issues are not touched.
+
+on:
+  schedule:
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Delete the branch of a closed pull request.
+      contents: write
+      pull-requests: write
+      # Labels live on the issue side of a pull request.
+      issues: write
+
+    steps:
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          days-before-issue-stale: -1
+          days-before-issue-close: -1
+          days-before-pr-stale: 30
+          days-before-pr-close: 7
+          stale-pr-label: stale
+          exempt-pr-labels: keep-open
+          exempt-draft-pr: true
+          delete-branch: true
+          stale-pr-message: >
+            No activity for 30 days. This pull request will be closed in 7 days
+            unless it is updated or commented on. Add the keep-open label to
+            keep it open regardless.
+          close-pr-message: >
+            Closed after 37 days without activity. Reopen it, and restore its
+            branch from this page, to pick it up again.

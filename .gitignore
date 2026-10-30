@@ -1,0 +1,28 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.env
+.coverage
+.coverage.*
+coverage.json
+coverage.xml
+
+# IDE files
+.idea/
+.vscode/
+.DS_Store
+
+*.local.json
+
+# Local domyn runtime state (config, conversations, approvals)
+.domyn/
+
+# Local guidance for coding agents: the shared one is AGENTS.md
+CLAUDE.md

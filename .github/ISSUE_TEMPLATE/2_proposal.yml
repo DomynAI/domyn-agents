@@ -1,0 +1,34 @@
+name: Proposal
+description: A feature or a change you would like, or would like to make. Needed, and accepted, before a pull request beyond a small fix.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search the [issues](https://github.com/domynai/domyn-agents/issues?q=is%3Aissue) first, and read [CONTRIBUTING.md](https://github.com/domynai/domyn-agents/blob/main/CONTRIBUTING.md#before-you-start): it may fit better as a skill, a tool or a plugin than in the core.
+        Keep it short: if it does not fit on one screen, it is too long. Write in your own words. A maintainer adds the `accepted` label when it can go ahead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What
+      description: What should change. An example of the code, YAML or command you would like to write helps.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: The problem it solves, and what you do today instead.
+    validations:
+      required: true
+  - type: textarea
+    id: how
+    attributes:
+      label: How (optional)
+      description: The approach you have in mind, if you have one.
+  - type: checkboxes
+    id: implement
+    attributes:
+      label: Implementing it
+      options:
+        - label: I would like to implement this myself.

@@ -1,0 +1,954 @@
+{
+  "$defs": {
+    "AgentAction": {
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        },
+        "observation": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parameters": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "thought": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "AgentAction",
+          "default": "AgentAction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "parameters"
+      ],
+      "type": "object"
+    },
+    "ApprovalType": {
+      "enum": [
+        "user_confirm",
+        "params_update"
+      ],
+      "type": "string"
+    },
+    "AuthenticationAction": {
+      "properties": {
+        "authentication_metadata": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        },
+        "observation": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parameters": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "success": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuthenticationResult"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "thought": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "AuthenticationAction",
+          "default": "AuthenticationAction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "parameters"
+      ],
+      "type": "object"
+    },
+    "AuthenticationResult": {
+      "enum": [
+        "success",
+        "failure",
+        "user_refused"
+      ],
+      "type": "string"
+    },
+    "BaseAction": {
+      "properties": {
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        },
+        "observation": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parameters": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thought": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "BaseAction",
+          "default": "BaseAction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "parameters"
+      ],
+      "type": "object"
+    },
+    "ExecutionEventType": {
+      "enum": [
+        "started",
+        "user_input",
+        "tool_start",
+        "tool_needs_feedback",
+        "tool_feedback",
+        "tool_error",
+        "tool_end",
+        "tool_update",
+        "hook_start",
+        "hook_update",
+        "hook_end",
+        "hook_error",
+        "agent_call",
+        "agent_start",
+        "agent_end",
+        "agent_needs_feedback",
+        "agent_feedback",
+        "llm_start",
+        "llm_end",
+        "response",
+        "response_token",
+        "llm_provider_error",
+        "context_compaction_start",
+        "context_compacted",
+        "decision_made",
+        "compaction_requested",
+        "error_occurred",
+        "end",
+        "external_part"
+      ],
+      "type": "string"
+    },
+    "FeedbackAction": {
+      "properties": {
+        "approval_type": {
+          "$ref": "#/$defs/ApprovalType"
+        },
+        "approve": {
+          "default": true,
+          "type": "boolean"
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        },
+        "observation": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parameters": {
+          "items": {
+            "$ref": "#/$defs/FeedbackParameters"
+          },
+          "type": "array"
+        },
+        "remember_pattern": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "remember_scope": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "thought": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "FeedbackAction",
+          "default": "FeedbackAction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "approval_type"
+      ],
+      "type": "object"
+    },
+    "FeedbackParameters": {
+      "properties": {
+        "is_required": {
+          "default": true,
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "value": {}
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "type": "object"
+    },
+    "File": {
+      "properties": {
+        "file_id": {
+          "type": "string"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "file_id"
+      ],
+      "type": "object"
+    },
+    "FileType": {
+      "enum": [
+        "image",
+        "audio",
+        "video",
+        "document"
+      ],
+      "type": "string"
+    },
+    "GuardrailResult": {
+      "properties": {
+        "error_occurred": {
+          "default": false,
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name",
+        "passed"
+      ],
+      "type": "object"
+    },
+    "LLMCallAction": {
+      "properties": {
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "messages": {
+          "items": {},
+          "type": "array"
+        },
+        "name": {
+          "default": "llm_call",
+          "type": "string"
+        },
+        "observation": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parameters": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "stream": {
+          "default": false,
+          "type": "boolean"
+        },
+        "thought": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "items": {},
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "LLMCallAction",
+          "default": "LLMCallAction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "messages"
+      ],
+      "type": "object"
+    },
+    "Link": {
+      "properties": {
+        "favicon_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "hostname": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "snippet": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
+    "Part": {
+      "properties": {
+        "chart": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "file": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/File"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "guardrail_result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GuardrailResult"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "html": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "link": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Link"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "rich_text": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "thought": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
+    "StopAction": {
+      "properties": {
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        },
+        "observation": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parameters": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thought": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "StopAction",
+          "default": "StopAction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "parameters"
+      ],
+      "type": "object"
+    },
+    "ToolAction": {
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        },
+        "observation": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parameters": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thought": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "ToolAction",
+          "default": "ToolAction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "parameters"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "action": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BaseAction"
+        },
+        {
+          "$ref": "#/$defs/ToolAction"
+        },
+        {
+          "$ref": "#/$defs/AgentAction"
+        },
+        {
+          "$ref": "#/$defs/StopAction"
+        },
+        {
+          "$ref": "#/$defs/FeedbackAction"
+        },
+        {
+          "$ref": "#/$defs/AuthenticationAction"
+        },
+        {
+          "$ref": "#/$defs/LLMCallAction"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "author": {
+      "type": "string"
+    },
+    "content": {
+      "items": {
+        "$ref": "#/$defs/Part"
+      },
+      "type": "array"
+    },
+    "conversation_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "error_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "error_message": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "event_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "event_type": {
+      "$ref": "#/$defs/ExecutionEventType"
+    },
+    "interaction_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "is_partial": {
+      "default": false,
+      "type": "boolean"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "need_feedback": {
+      "default": false,
+      "type": "boolean"
+    },
+    "timestamp": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "turn_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "event_type",
+    "author"
+  ],
+  "type": "object"
+}

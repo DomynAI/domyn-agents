@@ -1,0 +1,23 @@
+# pnpm 10+ reads its settings here: the "pnpm" field in package.json is ignored
+# from pnpm 11, and the build then refuses to run on a lockfile it disagrees with.
+overrides:
+  tinypool: ^2.1.2
+  serialize-javascript: ^7.0.6
+  sitemap: ^9.0.0
+  uuid: ^11.1.1
+  postcss-selector-parser: ^7.1.6
+  # CVE-2026-93687 has no patched release: a copy of 3.0.3 with a nesting limit.
+  braces: file:./vendor/braces
+  # AIKIDO-2026-54683: undici >=5.15.0 <=8.10.1 is vulnerable; cheerio@1.2.0 pins ^7.19.0 with no fix available upstream.
+  undici@7: 8.10.2
+
+# pnpm does not read the dependencies of a directory override.
+packageExtensions:
+  braces@*:
+    dependencies:
+      fill-range: ^7.1.1
+
+# core-js's postinstall only prints a funding banner; pnpm 11 fails the install
+# on a build script nobody decided about.
+allowBuilds:
+  core-js: false

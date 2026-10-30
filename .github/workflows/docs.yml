@@ -1,0 +1,176 @@
+name: Docs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
+  # A version tag, from release.yml once the tests have passed: every release
+  # is built and published.
+  workflow_call:
+  workflow_dispatch:
+
+# Named rather than ${{ github.workflow }}: called from release.yml that is
+# "Release" for every workflow it calls, and they would share one group.
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# main and pull requests only verify that the site builds. Every release tag is
+# built under its own address, <site>/<tag>/, and added to the gh-pages branch
+# that GitHub Pages serves (Settings > Pages > Deploy from a branch > gh-pages);
+# the root of the site goes to the latest release. The tree of the branch is
+# maintained by scripts/publish_docs_version.py.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # To read the address the site is served at.
+      pages: read
+    outputs:
+      base-path: ${{ steps.address.outputs.base-path }}
+    defaults:
+      run:
+        working-directory: docs
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The version comes from packageManager in docs/package.json.
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: docs/package.json
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The patched copy of braces in docs/vendor (see its README).
+      - name: Test patched braces
+        run: pnpm run test:braces
+
+      # The address GitHub Pages serves the site at: <owner>.github.io/<repo>/
+      # for a public repository, the root of a generated domain for a private
+      # one, or a custom domain. Read from the Pages settings rather than
+      # assumed; before Pages is enabled the public address stands in.
+      - name: Pages address
+        id: address
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          url=$(gh api "repos/$REPO/pages" --jq .html_url 2>/dev/null || true)
+          if [ -z "$url" ]; then
+            url="https://$OWNER.github.io/$REPO_NAME/"
+            echo "GitHub Pages is not enabled: building for $url"
+          fi
+          origin=$(echo "$url" | sed -E 's#^(https?://[^/]+).*#\1#')
+          path=$(echo "$url" | sed -E 's#^https?://[^/]+##; s#/*$#/#')
+          echo "site-url=$origin" >> "$GITHUB_OUTPUT"
+          echo "base-path=$path" >> "$GITHUB_OUTPUT"
+
+      # SITE_URL and BASE_URL make links and the sitemap point at the Pages
+      # address; a broken link fails the build (onBrokenLinks: 'throw').
+      # DOCS_VERSION and VERSIONS_URL feed the navbar's version dropdown.
+      - name: Build
+        env:
+          SITE_URL: ${{ steps.address.outputs.site-url }}
+          BASE_PATH: ${{ steps.address.outputs.base-path }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ "$IS_TAG" = "true" ]; then
+            export BASE_URL="$BASE_PATH$TAG/"
+            export DOCS_VERSION="$TAG"
+            export VERSIONS_URL="${BASE_PATH}versions.json"
+          else
+            export BASE_URL="$BASE_PATH"
+          fi
+          pnpm build
+
+      - name: Upload build
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docs-build
+          path: docs/build
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    # Two tags pushed together must not race on the branch.
+    concurrency:
+      group: docs-pages
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docs-build
+          path: build
+
+      - name: Publish to gh-pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE_PATH: ${{ needs.build.outputs.base-path }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git init --quiet site
+          cd site
+          git remote add origin "https://github.com/$REPO.git"
+          git config http.https://github.com/.extraheader \
+            "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null; then
+            git fetch --quiet --depth 1 origin gh-pages
+            git checkout --quiet -B gh-pages FETCH_HEAD
+          else
+            git checkout --quiet --orphan gh-pages
+          fi
+
+          python3 ../scripts/publish_docs_version.py . ../build "$TAG" --base "$BASE_PATH"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "gh-pages already up to date"
+          else
+            git commit --quiet -m "docs: $TAG"
+            git push origin HEAD:gh-pages
+          fi
