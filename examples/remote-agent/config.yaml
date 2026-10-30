@@ -1,0 +1,33 @@
+# A multi-agent system with a remote member. Roastery is a `delegate`: an agent that runs
+# in another process (remote_agent.py), reached through a relay. To the front desk it is a
+# sub-agent like any other; its turn runs remotely and its events come back through the
+# relay. See README.md to run it.
+
+version: "1.0"
+entrypoint: FrontDesk
+
+llm_providers:
+  - name: llm
+    type: open_router
+    model_name: nvidia/nemotron-3-ultra-550b-a55b:free
+    api_key: ${OPENROUTER_API_KEY}
+
+# A sub-agent is declared before the agent that names it.
+agents:
+  - name: Roastery
+    type: delegate
+    description: Knows the beans in stock and the roasting schedule.
+    transport:
+      type: websocket
+      url: ws://localhost:8765/relay/v1/ws
+      headers:
+        channel-id: roastery
+
+  - name: FrontDesk
+    description: The front desk of an online coffee shop.
+    instruction: >-
+      You are the front desk of an online coffee shop. For anything about beans in stock
+      or roasting dates, ask Roastery, and answer from what it found.
+    llm_provider: llm
+    sub_agents: [Roastery]
+    stream: true

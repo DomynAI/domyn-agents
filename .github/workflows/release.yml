@@ -1,0 +1,117 @@
+name: Release
+
+# A version tag (pushed by `make release-*`) is published only once the tests
+# pass on every supported Python version: the sdist and wheel to PyPI, the
+# standalone archives to the GitHub Release, the documentation to GitHub Pages (for a stable release only).
+# The tests on main are not enough on their own: nothing waits for them.
+#
+# Also dispatched on a tag by nightly.yml, whose alpha tag is pushed with the
+# workflow token, and a push by that token starts no workflow. A pre-release
+# (vX.Y.ZaN, bN, rcN) is published like any release except the documentation,
+# so the version menu of the site lists stable releases only.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    # Dispatched on a branch, there is no release to make.
+    if: github.ref_type == 'tag'
+    uses: ./.github/workflows/ci.yml
+    # What ci.yml's jobs ask for: a called workflow cannot be given less, and
+    # the check is static, made before any `if` is looked at. `test` asks for
+    # pull-requests: read and a tag never runs it, but it must be granted all
+    # the same. The coverage badge it pushes with it is skipped outside main.
+    permissions:
+      contents: write
+      pull-requests: read
+
+  standalone:
+    needs: tests
+    uses: ./.github/workflows/standalone.yml
+    permissions:
+      contents: write      # the GitHub Release
+      pull-requests: read  # the authors in its notes
+      id-token: write      # provenance attestation
+      attestations: write
+
+  docs:
+    needs: tests
+    # Stable releases only: a pre-release tag (vX.Y.ZaN, bN, rcN) has an `a`, a `b`
+    # or an `rc`, which vX.Y.Z does not.
+    if: ${{ !contains(github.ref_name, 'a') && !contains(github.ref_name, 'b') && !contains(github.ref_name, 'rc') }}
+    uses: ./.github/workflows/docs.yml
+    permissions:
+      contents: write  # the gh-pages branch
+      pages: read      # the address the site is served at
+
+  build:
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # hatch-vcs reads the version from the tag.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+
+      # The sdist, then the wheel built from it (see [tool.hatch.build.targets.sdist]).
+      - name: Build
+        run: uv build
+
+      # hatch-vcs takes the version from the tag. A build that reads anything
+      # else (no tags fetched, a commit after it) must not be published as it.
+      - name: Check the version is the tag's
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls dist
+          uv run --no-project --with packaging python -c '
+          import sys
+          from pathlib import Path
+          from packaging.version import Version
+          tag = Version(sys.argv[1].removeprefix("v"))
+          built = {Version(p.name.split("-")[1]) for p in Path("dist").glob("*.whl")}
+          print(f"tag {tag}, built {sorted(map(str, built))}")
+          sys.exit(built != {tag})
+          ' "$TAG"
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    # Trusted publishing: PyPI trusts this workflow file (release.yml) in the
+    # `pypi` environment, so no token is stored. It must run here, not in a
+    # called workflow, which PyPI does not accept as a trusted publisher.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/domyn/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+
+      # A tag run again (to retry the docs, say) finds its files already there.
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true

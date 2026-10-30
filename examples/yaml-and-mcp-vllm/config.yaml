@@ -1,0 +1,54 @@
+# An agent declared in YAML, with no Python: a code assistant that reads the files of the
+# folder it runs in and looks up any public GitHub repository through an MCP server.
+# It runs on a model you serve yourself, with vLLM or any OpenAI-compatible endpoint.
+# See README.md to run it.
+
+version: "1.0"
+entrypoint: CodeAssistant
+
+llm_providers:
+  - name: llm
+    type: vllm
+    # ${NAME} is replaced with the environment variable when the file is loaded, so no
+    # secret is written here. A variable that is not set stops the loading.
+    model_name: ${VLLM_MODEL}
+    # The full chat completions URL, e.g. http://localhost:8000/v1/chat/completions.
+    url: ${VLLM_URL}
+    api_key: ${VLLM_API_KEY}
+
+# The built-in file tools, confined to the folder the agent runs in: reading runs freely,
+# writing waits for your approval. Add `shell` to `bundles` for commands, which always ask.
+tool_bundles:
+  - name: workspace
+    bundles: [files]
+
+# Every tool the server offers is added to the agents that name it.
+mcp_servers:
+  # DeepWiki answers questions about public GitHub repositories. Public, no sign-in.
+  - name: deepwiki
+    url: https://mcp.deepwiki.com/mcp
+    timeout: 60.0
+
+  # A server behind OAuth opens a browser for consent on first use:
+  # - name: my_service
+  #   url: https://api.example.com/mcp
+  #   use_oauth: true
+
+  # A server that takes a token in a header. Reference an environment variable,
+  # never a literal token:
+  # - name: my_service
+  #   url: https://api.example.com/mcp
+  #   headers:
+  #     Authorization: "Bearer ${MY_SERVICE_TOKEN}"
+
+agents:
+  - name: CodeAssistant
+    description: Answers questions about the code in this folder and about open-source libraries.
+    instruction: >-
+      You help a developer with the code in the current folder. Read files before
+      answering about them. For questions about an open-source library, ask DeepWiki
+      about its GitHub repository (owner/name). Write a file only when asked to.
+    llm_provider: llm
+    tool_bundles: [workspace]
+    mcp_servers: [deepwiki]
+    stream: true

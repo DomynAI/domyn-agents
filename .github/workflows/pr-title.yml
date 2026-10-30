@@ -1,0 +1,49 @@
+name: Pull request title
+
+# Pull requests are squash-merged with their title as the commit message, and
+# scripts/release_notes.py lists every one by title in the release notes. A
+# Conventional Commit title (https://www.conventionalcommits.org/) says what
+# kind of change each is: `type: description`, `type(scope): description`,
+# with `!` after the type or scope for a breaking change. Three types of our own
+# beside the standard ones: `add` (a feature, as `feat`), `change` (as `chore`)
+# and `remove` (a feature or behaviour taken out).
+#
+# A required check (ruleset "main: pull requests only"), so a pull request with
+# another title cannot merge. That is why it runs on every push too, although a
+# push never changes the title: GitHub looks a required check up on the latest
+# commit, and a commit without a run would leave the pull request waiting. A
+# ruleset's commit message rule cannot do this job instead: it checks the commits
+# of the pull request, not the title its squash commit takes (tried).
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  title:
+    # Not skipped when only the description is edited: a skipped run counts as
+    # a pass, so a failing title followed by an edit of the description would
+    # let the pull request merge. Dependabot writes its own titles (`build(deps):
+    # ...`, already conventional); its skipped run passes.
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check the title
+        env:
+          # Through the environment, never interpolated into the script: a
+          # title is text anyone opening a pull request writes.
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          types='feat|add|fix|perf|remove|docs|refactor|change|test|build|ci|chore|revert'
+          if printf '%s' "$TITLE" | grep -Eq "^($types)(\([a-z0-9._/-]+\))?!?: [^ ]"; then
+            echo "ok: $TITLE"
+          else
+            echo "::error::'$TITLE' is not a Conventional Commit title. Use 'type: description' or 'type(scope): description', with type one of: ${types//|/, }. See CONTRIBUTING.md."
+            exit 1
+          fi

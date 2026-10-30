@@ -1,0 +1,177 @@
+name: Standalone builds
+
+# On a version tag, called by release.yml once the tests have passed; by hand,
+# to build the archives without releasing them.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Resolved once, so all three builds embed the same Python: the newest
+  # python-build-standalone release at the time of the run.
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      pbs_release: ${{ steps.pbs.outputs.release }}
+    steps:
+      - name: Latest python-build-standalone release
+        id: pbs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE="$(gh api repos/astral-sh/python-build-standalone/releases/latest --jq .tag_name)"
+          [ -n "$RELEASE" ]
+          echo "python-build-standalone $RELEASE"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: resolve
+    strategy:
+      fail-fast: false  # one broken platform does not stop the others
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          # The Linux archives need glibc 2.33+ (cryptography's wheels), whatever
+          # the runner: Ubuntu 22.04+, Debian 12+, RHEL 9+.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write      # provenance attestation
+      attestations: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # hatch-vcs reads the version from the tag.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+
+      - name: Build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PBS_RELEASE: ${{ needs.resolve.outputs.pbs_release }}
+        run: scripts/build_standalone.sh dist/standalone
+
+      - name: Smoke test
+        run: |
+          SMOKE_HOME="$RUNNER_TEMP/home"
+          mkdir -p "$SMOKE_HOME"
+          env -i HOME="$SMOKE_HOME" PATH=/usr/bin:/bin SHELL=/bin/bash \
+            sh dist/standalone/install.sh dist/standalone
+          GOT="$(env -i HOME="$SMOKE_HOME" PATH=/usr/bin:/bin "$SMOKE_HOME/.local/bin/domyn" --version | tail -1)"
+          echo "installed $GOT"
+          # The browser tools' program ships in the runtime; Chrome is downloaded on first use.
+          "$SMOKE_HOME/.local/share/domyn/python/bin/agent-browser" --version
+          # On a release, the tag's version: hatch-vcs read it while building.
+          # By hand there is no tag to compare with; it ran, which is the test.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            WANT="${GITHUB_REF_NAME#v}"
+            echo "expected $WANT"
+            # Compared as versions, not strings: a v1.6.3-rc1 tag is 1.6.3rc1
+            # to PEP 440, and the package may report either spelling.
+            "$SMOKE_HOME/.local/share/domyn/python/bin/python3" -c \
+              'import sys; from pip._vendor.packaging.version import Version; sys.exit(Version(sys.argv[1]) != Version(sys.argv[2]))' \
+              "$GOT" "$WANT"
+          fi
+
+      # Verifiable with `gh attestation verify <archive> --repo <owner>/<repo>`.
+      # Public repositories only on GitHub's plans, so skipped while private.
+      - name: Attest provenance
+        if: startsWith(github.ref, 'refs/tags/v') && !github.event.repository.private
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/standalone/domyn-${{ matrix.target }}.tar.gz
+
+      - name: Upload archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: domyn-${{ matrix.target }}
+          path: |
+            dist/standalone/domyn-${{ matrix.target }}.tar.gz
+            dist/standalone/domyn-${{ matrix.target }}.tar.gz.sha256
+            dist/standalone/install.sh
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      # The notes name each pull request's author (scripts/release_notes.py).
+      pull-requests: read
+
+    steps:
+      # The whole history and every tag: the notes list what was merged since
+      # the previous release.
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 scripts/release_notes.py "$TAG" --repo "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+      - name: Download archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          # Only the archives: called from release.yml, the run also holds the
+          # docs build, which would otherwise be attached to the release.
+          pattern: domyn-*
+          merge-multiple: true  # flat, as install.sh expects them side by side
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -l dist
+          # Anything after vX.Y.Z (-rc1, .dev0…) is a pre-release, which
+          # releases/latest never points at. A stable one is left to GitHub,
+          # which picks "latest" by version and date: a v1.4.27 backport cut
+          # after v1.5.0 must not become the latest.
+          PRE=""
+          echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || PRE="--prerelease"
+          # A nightly alpha (v1.6.4a1) says so in its title: `a1` alone is easy
+          # to read past in the list of releases.
+          TITLE="$TAG"
+          echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+a[0-9]+$' && TITLE="$TAG (alpha)"
+          NOTES="$RUNNER_TEMP/notes.md"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TITLE" --notes-file "$NOTES"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag ${PRE:+"$PRE"} \
+              --title "$TITLE" --notes-file "$NOTES"
+          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber dist/*
+
+      # The last five alphas keep a release page, and a stable release removes
+      # the pages of the alphas before it. Tags and packages stay.
+      - name: Prune alpha releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: python3 scripts/prune_alpha_releases.py "$TAG" --repo "$GITHUB_REPOSITORY"

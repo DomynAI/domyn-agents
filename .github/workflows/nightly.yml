@@ -1,0 +1,52 @@
+name: Nightly alpha
+
+# Every night, an alpha of what was merged since the last tag: vX.Y.ZaN, the next
+# patch after the latest stable release (scripts/tag_release.py alpha). Nothing
+# when main carries a tag already: a night without merges, or right after a
+# release. The tag goes through release.yml like any other: tests on every
+# supported Python version, then the package and the GitHub Release, both marked
+# pre-release, without the documentation.
+on:
+  schedule:
+    # 02:00 in Italy in winter (UTC+1), 03:00 in summer: cron is UTC.
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  alpha:
+    # From main only: a dispatch on a branch would tag unmerged code.
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write  # the tag
+      actions: write   # starting release.yml
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          # The tag is pushed with it.
+          persist-credentials: true
+
+      - name: Tag the alpha
+        id: tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python3 scripts/tag_release.py alpha --yes --github-output
+
+      # A tag pushed with the workflow token starts no workflow; a dispatch does.
+      - name: Release it
+        if: steps.tag.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"

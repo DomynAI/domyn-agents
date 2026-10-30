@@ -1,0 +1,4 @@
+# The maintainers: every pull request needs the approval of one of them, other
+# than its author, to merge (the "main: pull requests only" ruleset requires
+# it). Only they have write access, so only they can merge. See CONTRIBUTING.md.
+*  @carbonaroa-igenius @CastFX @eliaguerra @gabrielecaldara @GabrieleSgroiGenius @n-resmini @PaoloAlbano @TiagoContini @vvisco

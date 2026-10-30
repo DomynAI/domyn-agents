@@ -1,0 +1,67 @@
+name: Bug
+description: Something does not work as the documentation says it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search the [issues](https://github.com/domynai/domyn-agents/issues?q=is%3Aissue) first, and read [CONTRIBUTING.md](https://github.com/domynai/domyn-agents/blob/main/CONTRIBUTING.md#issues).
+        Keep it short: if it does not fit on one screen, it is too long. Write in your own words, and remove API keys and anything private.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Paste error messages as text.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The smallest agent, YAML file or `domyn` command that shows the problem.
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Where
+      options:
+        - Terminal agent (domyn run, setup, slash commands)
+        - Python library (Agent, Runner, hooks)
+        - YAML configuration and loader
+        - LLM provider
+        - Tools, MCP, browser
+        - Approvals
+        - Skills, SOUL.md, AGENTS.md
+        - Channels, plugins, serve, expose
+        - Documentation
+        - Other or not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `domyn --version`, or the commit you installed from.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Python version, and the LLM provider and model.
+      placeholder: macOS 15, Python 3.12, vLLM serving Qwen3-32B
+    validations:
+      required: true
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Logs, what you already tried, or where you think the cause is.
+  - type: checkboxes
+    id: fix
+    attributes:
+      label: Fixing it
+      options:
+        - label: I would like to fix this myself.

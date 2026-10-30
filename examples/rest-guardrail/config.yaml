@@ -1,0 +1,44 @@
+# A support agent behind a guardrail served over HTTP (guardrail.py). See README.md to run it.
+
+version: "1.0"
+entrypoint: SupportAgent
+
+llm_providers:
+  - name: llm
+    type: open_router
+    model_name: nvidia/nemotron-3-ultra-550b-a55b:free
+    api_key: ${OPENROUTER_API_KEY}
+
+tools:
+  - name: get_customer
+    type: function
+    path: tools.py
+
+# Hooks served over HTTP instead of loaded from a Python file. An `on_agent_event` hook runs
+# on the events of the agents that name it, here only those in `on_event_triggers`. It is
+# sent the fields in `input_fields` as a JSON body, and answers with the event to use instead.
+hooks:
+  - name: input_guardrail
+    type: updater
+    trigger: on_agent_event
+    on_event_triggers: [user_input]
+    url: http://localhost:8766/input-guardrail
+    input_fields: [current_event]
+  - name: output_guardrail
+    type: updater
+    trigger: on_agent_event
+    on_event_triggers: [response]
+    url: http://localhost:8766/output-guardrail
+    input_fields: [current_event]
+
+agents:
+  - name: SupportAgent
+    description: The support agent of an online coffee shop.
+    instruction: >-
+      You are the support agent of an online coffee shop. Look customers up by name and
+      answer from what the tool returns.
+    llm_provider: llm
+    tools: [get_customer]
+    hooks: [input_guardrail, output_guardrail]
+    # Not streamed: the output guardrail checks the whole reply before you see any of it.
+    stream: false
