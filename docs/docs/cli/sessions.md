@@ -94,8 +94,14 @@ Type `/help` in a session for this list. Commands complete with Tab.
 | **Approvals** | |
 | `/approvals` | Lists the approvals in force: for this conversation, this project and always. `/approvals revoke <n>` removes the ones you name by number, `/approvals clear` removes them all. |
 | `/auto` | Turns automatic approval on or off, as Shift+Tab does. While on, every tool call runs without asking, and the prompt says so, until you turn it off. Remembered for the next session |
+| **Memory** | |
+| `/memory [list [n]]` | Lists what the agent remembers about you, newest first, 20 to a page; `/memory list 2` is the second page. The first column is the id. It is the memory of the configuration in use: the global one, or the project's own. Empty unless [memory](configuration.md#memory) is on. |
+| `/memory add <text>` | Stores a fact yourself. |
+| `/memory forget <id>` | Removes one, by the id `/memory` shows. |
+| `/memory clear` | Removes everything it remembers about you, after asking. A bullet written into the file by hand belongs to no one, so it stays, and the command says how many did. |
+| `/memory clear all` | Empties the memory file, after asking: hand-written bullets and other users' memories included. Only for a memory kept in a file. |
 | **Context** | |
-| `/context` | Shows how much of the model's context window the last request used, and what used it. Empty until the first request. |
+| `/context` | Shows how much of the model's context window the last request used, and what used it: the conversation, the memories recalled (with how many), and the tool definitions. Empty until the first request. |
 | `/compact` | Shortens the conversation now. The shorter version is used from the next request. |
 | **Background commands** | |
 | `/ps` | Lists the commands this conversation started that are still running in the background |

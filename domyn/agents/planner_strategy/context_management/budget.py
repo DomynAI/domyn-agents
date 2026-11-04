@@ -151,6 +151,18 @@ class ContextUsage(BaseModel):
 
     message_tokens: int = Field(ge=0)
     tool_definition_tokens: int = Field(default=0, ge=0)
+    memory_tokens: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Of `message_tokens`, what the recalled memories take: the total is the same "
+            "with or without this, it only says where part of it went. Compaction does "
+            "not touch it, like the tool definitions."
+        ),
+    )
+    memory_entries: int = Field(
+        default=0, ge=0, description="How many memories the recalled block holds."
+    )
     context_window: int | None = Field(
         default=None, description="`None` when the provider does not declare it."
     )
@@ -213,12 +225,16 @@ def measure(
     threshold_tokens: int | None = None,
     strategy: str | None = None,
     correction_tokens: int = 0,
+    memory_tokens: int = 0,
+    memory_entries: int = 0,
 ) -> ContextUsage:
     """Measure a request. Changes nothing: it reads and counts."""
     estimator = estimator or HeuristicEstimator()
     return ContextUsage(
         message_tokens=estimator.estimate_messages(messages),
         tool_definition_tokens=estimator.estimate_tool_definitions(tool_defs or []),
+        memory_tokens=memory_tokens,
+        memory_entries=memory_entries,
         context_window=context_window,
         threshold_tokens=threshold_tokens,
         strategy=strategy,

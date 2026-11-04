@@ -4,6 +4,7 @@ from domyn.agents.memory.managers.base import (
     BaseMemoryManager,
     Memory,
     MemoryExecutionMode,
+    MemoryPage,
 )
 from domyn.agents.memory.managers.local import FilesystemMemoryManager
 from domyn.agents.memory.managers.remote import RemoteMemoryManager
@@ -13,5 +14,6 @@ __all__ = [
     "FilesystemMemoryManager",
     "Memory",
     "MemoryExecutionMode",
+    "MemoryPage",
     "RemoteMemoryManager",
 ]

@@ -4,28 +4,44 @@ The point of the helper is that no planner can silently miss a source of injecte
 context. These tests assert the contract every planner relies on.
 """
 
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from pydantic import Field
 
 from domyn.agents import BaseEvent, ExecutionEventType, Part
 from domyn.agents.core import InteractionContext
 from domyn.agents.llm import LLMMessage
+from domyn.agents.memory.managers.base import BaseMemoryManager, Memory
 from domyn.agents.planner_strategy.context_injection import inject_turn_context
 
 
-class _Memory:
-    """Minimal memory manager stand-in."""
+class _Memory(BaseMemoryManager):
+    """A real manager over a fixed list, recording how it is asked."""
 
-    recency_limit = 5
+    type: str = "injection-test"
+    texts: list[str] = Field(default_factory=list)
+    calls: list[dict[str, Any]] = Field(default_factory=list)
 
     def __init__(self, memories: list[str]) -> None:
-        self._memories = memories
-        self.calls: list[dict[str, Any]] = []
+        super().__init__(texts=memories, calls=[])
 
-    async def recall_memories(self, **kwargs: Any) -> list[Any]:
-        self.calls.append(kwargs)
-        return [type("M", (), {"memory": text})() for text in self._memories]
+    async def recall_memories(self, user_id, agent=None, recency_limit=5, question="", **kwargs):
+        self.calls.append({"user_id": user_id, "question": question, **kwargs})
+        stamp = datetime(2026, 1, 1, tzinfo=UTC)
+        return [Memory(id=f"m{i}", memory=t, timestamp=stamp) for i, t in enumerate(self.texts)]
+
+    async def write_single_memory(self, user_id, agent, memory_content, **kwargs): ...
+
+    async def get_memory(self, memory_id): ...
+
+    async def delete_memory(self, memory_id):
+        return False
+
+    async def reset_memory(self, user_id, agent_name=None): ...
+
+    async def complete_reset(self): ...
 
 
 class _Agent:

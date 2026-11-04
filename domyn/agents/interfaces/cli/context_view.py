@@ -108,10 +108,14 @@ def render(
     console.print()
     console.print("  context of the last request", style=theme.style("accent_bold"))
 
-    rows = [
-        ("conversation", usage.message_tokens),
-        ("tool definitions", usage.tool_definition_tokens),
-    ]
+    # The memories are part of the messages: shown apart so that what compaction can
+    # shorten (the conversation) and what it cannot (these, and the tools) read as two.
+    remembered = min(usage.memory_tokens, usage.message_tokens)
+    rows = [("conversation", usage.message_tokens - remembered)]
+    if remembered:
+        count = f" ({usage.memory_entries})" if usage.memory_entries else ""
+        rows.append((f"memory{count}", remembered))
+    rows.append(("tool definitions", usage.tool_definition_tokens))
     # Shares of the estimate: with a measured correction the total is no longer
     # the sum of these two rows, and a share of it would read past 100%.
     estimated = usage.message_tokens + usage.tool_definition_tokens

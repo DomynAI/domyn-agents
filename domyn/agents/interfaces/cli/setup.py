@@ -47,10 +47,12 @@ from domyn.agents.interfaces.cli.config import (
     DEFAULT_DECISION_MODEL,
     DEFAULT_DECISION_URL,
     LOCAL_SKILLS_DIRS,
+    MEMORY_SCOPE_BLURB,
     PROVIDER_HINTS,
     REQUIRES_URL,
     AgentConfig,
     DecisionsChoice,
+    MemoryChoice,
     ProviderConfig,
     _scrub_url,
     active_project,
@@ -58,6 +60,7 @@ from domyn.agents.interfaces.cli.config import (
     configuration_v1_dict_from,
     credentials_path,
     current_decisions_from,
+    current_memory_from,
     current_settings_from,
     describe_configuration_v1,
     describe_project,
@@ -217,6 +220,7 @@ class _Draft:
     max_tokens: int = 0
     context_window: int | None = None
     decisions: DecisionsChoice | None = None
+    memory: MemoryChoice | None = None
     discard: list[Path] = field(default_factory=list)
     """Instruction files an import brought and the user did not keep, deleted once saved."""
 
@@ -369,6 +373,29 @@ def _ask_decision_key(
         highlight=False,
     )
     return name, secret
+
+
+def _ask_memory(console: Console, theme: Theme, current: MemoryChoice) -> MemoryChoice:
+    """Offer long-term memory, and say where it is kept.
+
+    Off unless chosen: what the agent writes down about the user stays on this
+    machine, in a file you can read and edit, but it is still something to opt into.
+    The project's own memory is offered only inside a project. The answer is the
+    configuration's one memory: a project that picks its own does not also read the
+    global one, and one that picks none has none (`MEMORY_SCOPE_BLURB`).
+    """
+    scopes = ["no", "global"] + (["project"] if active_project() is not None else [])
+    chosen = _select(
+        console,
+        theme,
+        "long-term memory",
+        scopes,
+        current=current.scope if current.scope in scopes else "no",
+        descriptions=MEMORY_SCOPE_BLURB,
+    )
+    if chosen is None:
+        raise KeyboardInterrupt
+    return MemoryChoice(scope=chosen)
 
 
 def _ask_decisions(console: Console, theme: Theme, current: DecisionsChoice) -> DecisionsChoice:
@@ -1769,6 +1796,9 @@ def run_setup(
     def ask_decisions(d: _Draft) -> None:
         d.decisions = _ask_decisions(console, theme, current_decisions)
 
+    def ask_memory(d: _Draft) -> None:
+        d.memory = _ask_memory(console, theme, current_memory_from(existing))
+
     def asks_model(d: _Draft) -> bool:
         return not d.keep_model
 
@@ -1824,6 +1854,7 @@ def run_setup(
         # Kept, `draft.decisions` stays `None`, which leaves the file's decision model
         # exactly as written, hand-tuned thresholds included (`_apply_decisions`).
         _Step("decisions", ask_decisions, lambda d: not d.keep_decisions),
+        _Step("memory", ask_memory),
     ]
     steps = model_steps if provider_only else [*model_steps, *section_steps]
 
@@ -1897,9 +1928,9 @@ def run_setup(
             update={"max_tokens": draft.max_tokens, "context_window": draft.context_window}
         )
     # `None` unless the wizard actually asked, so a `provider_only` run leaves
-    # whatever the file says about decisions exactly where it found it.
+    # whatever the file says about decisions and memory exactly where it found it.
     config_dict = configuration_v1_dict_from(
-        new_provider, agent, compaction, existing, draft.decisions
+        new_provider, agent, compaction, existing, draft.decisions, draft.memory
     )
 
     target = path or config_path()
