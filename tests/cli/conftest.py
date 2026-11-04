@@ -204,12 +204,19 @@ def _approvals_off_the_real_home(
 
 
 @pytest.fixture(autouse=True)
-def no_decision_prompt(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The wizard's decision-model step keeps its default, so the scripted answers of
-    the other setup tests stay about what they test. test_setup_decisions.py covers it."""
-    if request.module.__name__.endswith("test_setup_decisions"):
-        return
+def no_decision_or_memory_prompt(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wizard's decision-model and memory steps keep their default, so the scripted
+    answers of the other setup tests stay about what they test. test_setup_decisions.py
+    and test_setup_memory.py cover them."""
     from domyn.agents.interfaces.cli import setup
-    from domyn.agents.interfaces.cli.config import DecisionsChoice
+    from domyn.agents.interfaces.cli.config import DecisionsChoice, MemoryChoice
 
-    monkeypatch.setattr(setup, "_ask_decisions", lambda console, theme, current: DecisionsChoice())
+    module = request.module.__name__
+    if not module.endswith("test_setup_decisions"):
+        monkeypatch.setattr(
+            setup, "_ask_decisions", lambda console, theme, current: DecisionsChoice()
+        )
+    if not module.endswith("test_setup_memory"):
+        monkeypatch.setattr(setup, "_ask_memory", lambda console, theme, current: MemoryChoice())

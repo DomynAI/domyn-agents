@@ -104,10 +104,13 @@ from domyn.agents.interfaces.cli import config as cli_config
 from domyn.agents.interfaces.cli.config import (
     BUILTIN_SKILLS_DIRNAME,
     CONFIG_FILENAME,
+    GLOBAL_MEMORY_REF,
+    MEMORY_FILENAME,
     PROJECT_DIR_VAR,
     PROVIDER_HINTS,
     PrivateFiles,
     ProjectError,
+    is_global_memory,
     is_skill_autodiscovery,
     project_dir,
     projects_dir,
@@ -788,6 +791,38 @@ class _Exporter:
                     self.report.warnings.extend(import_warnings(path, places[path]))
                 entry["path"] = _in_project(places[path])
 
+    def _export_memory(self) -> None:
+        """Keep every agent's ``memory_manager``, never what it remembers.
+
+        The setting travels, so a project whose memory was on still has it on, and
+        the import's wizard opens on the same choice. The memories do not: they are
+        what the agent learned about its user, and stay with them like the
+        conversation history (no memory file is copied, `is_private`). A memory in
+        the project keeps its ``${DOMYN_PROJECT_DIR}/…`` path, and starts empty where
+        the export is used; any other is the global memory, written
+        ``~/.domyn/memory.md``, the one of whoever runs the project. A hand-written
+        path elsewhere is read as global by the wizard, so it is exported as global,
+        with a warning.
+        """
+        for agent in self.config.get("agents") or []:
+            memory = agent.get("memory_manager") if isinstance(agent, dict) else None
+            if not isinstance(memory, dict):
+                continue
+            name = agent.get("name")
+            self.report.dropped.append(
+                f"agent {name!r} memories (the memory setting is exported, what it "
+                "remembers is not)"
+            )
+            written = memory.get("file_path")
+            if not isinstance(written, str) or not written or _inside_project(written):
+                continue
+            if not is_global_memory(written):
+                self.report.warnings.append(
+                    f"agent {name!r} memory_manager: {written} is exported as the global "
+                    f"memory, {GLOBAL_MEMORY_REF}"
+                )
+            memory["file_path"] = GLOBAL_MEMORY_REF
+
     def _refuse_paths_outside(self) -> None:
         """Refuse the export when the config it would write still names a file or
         folder outside the exported folder.
@@ -819,6 +854,7 @@ class _Exporter:
         self._export_skills()
         self._export_instructions()
         self._export_code()
+        self._export_memory()
         self._scrub_secrets()
         self._refuse_paths_outside()
         text = yaml.safe_dump(self.config, sort_keys=False)
@@ -983,13 +1019,21 @@ def config_paths(config: dict[str, Any]) -> list[tuple[str, Any]]:
 
     The places the loader reads a path from: the ``local_dir`` skills and instructions
     of every agent, the code of ``tools`` and ``hooks``, a tool bundle's workspace and
-    browser, an OAuth provider's token store. A browser ``binary`` without a ``/`` is
-    a program looked up on ``PATH``, not a path.
+    browser, an OAuth provider's token store, a memory file other than the global
+    memory (`is_global_memory`: the user's own, wherever the project runs). A browser
+    ``binary`` without a ``/`` is a program looked up on ``PATH``, not a path.
     """
     found: list[tuple[str, Any]] = []
     for agent in config.get("agents") or []:
         if not isinstance(agent, dict):
             continue
+        memory = agent.get("memory_manager")
+        if (
+            isinstance(memory, dict)
+            and memory.get("file_path")
+            and not is_global_memory(memory["file_path"])
+        ):
+            found.append((f"agent {agent.get('name')!r} memory_manager", memory["file_path"]))
         for key in ("skills", "standing_instructions"):
             spec = agent.get(key)
             source = spec.get("source") if isinstance(spec, dict) else None
@@ -1074,7 +1118,7 @@ def is_private(path: Path, places: PrivatePlaces) -> bool:
     """Whether ``path`` is one of the files a domyn home keeps for its owner alone:
     the credentials, the approvals, the state file (what the CLI remembers
     between sessions), the conversation history (with SQLite's side
-    files), matched by name wherever it is, so no layout of skills can carry one out;
+    files), the long-term memory, matched by name wherever it is, so no layout of skills can carry one out;
     and anything in the session's working state (`StateFolders`: the
     conversations' environments and output, the commands' logs, the browser's files)
     of one of ``places``. Those folders are matched by place, not by name: a skill
@@ -1085,6 +1129,7 @@ def is_private(path: Path, places: PrivatePlaces) -> bool:
         PrivateFiles.CREDENTIALS,
         PrivateFiles.APPROVALS,
         PrivateFiles.STATE,
+        MEMORY_FILENAME,
     ) or name.startswith(PrivateFiles.CONVERSATIONS):
         return True
     try:

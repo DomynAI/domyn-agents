@@ -144,7 +144,7 @@ An export also holds a hidden `.info` file saying what made it: the version of d
 
 When you choose not to keep the exported skills during an import, the wizard lists them, ticked, and below them, unticked, the built-in skills the export does not include, so you can add any of them. The built-ins you tick are installed into the project's `builtin-skills` folder; the exported ones stay as they came, edits included. To replace them with this version's, run `domyn setup --project <name>` afterwards.
 
-A project reads nothing from `~/.domyn` except API keys: a key is read from the project's own `credentials` file first, then from `~/.domyn/credentials`, so a key saved once serves every project, and a project can use a different one by setting its own. Its conversations and approvals are its own. An export names nothing outside its own folder: the files the configuration reads (skills, instruction files, the code of tools and hooks) are copied in, and a path that cannot be, such as a tool bundle's workspace, refuses the export, saying which. `domyn setup --import` refuses an export that names anything outside itself, so an edited export cannot make your machine read a file of yours. A project used by its path (`--project ./folder`) is checked every time: if it names files outside its folder, domyn lists them and asks before using it, and `domyn run` also shows the code of its tools and hooks, with what each imports, and asks before running it. Without a terminal to ask on, such a project is refused. A project used by name (`--project <name>`, a folder under `~/.domyn/projects` that setup made or imported) is trusted and used as it is. An export never includes API keys, approvals or conversation history: when the configuration needs a key, the export says which environment variable to set.
+A project reads nothing from `~/.domyn` except API keys: a key is read from the project's own `credentials` file first, then from `~/.domyn/credentials`, so a key saved once serves every project, and a project can use a different one by setting its own. Its conversations and approvals are its own. An export names nothing outside its own folder: the files the configuration reads (skills, instruction files, the code of tools and hooks) are copied in, and a path that cannot be, such as a tool bundle's workspace, refuses the export, saying which. `domyn setup --import` refuses an export that names anything outside itself, so an edited export cannot make your machine read a file of yours. A project used by its path (`--project ./folder`) is checked every time: if it names files outside its folder, domyn lists them and asks before using it, and `domyn run` also shows the code of its tools and hooks, with what each imports, and asks before running it. Without a terminal to ask on, such a project is refused. A project used by name (`--project <name>`, a folder under `~/.domyn/projects` that setup made or imported) is trusted and used as it is. An export never includes API keys, approvals, conversation history or what the agent remembers. The [memory](#memory) setting is kept: a project whose memory was on still has it on after `domyn setup --import`, which shows the exported choice and lets you change it. A project memory starts empty there, and a `global` one is the global memory of whoever imports it (`~/.domyn/memory.md`). When the configuration needs a key, the export says which environment variable to set.
 
 ## Voice
 
@@ -170,6 +170,29 @@ voice:
 
 The setting is read when voice is turned on, so a change takes effect at the next `/voice` in a new session.
 
+## Memory
+
+The agent can remember facts about you between conversations: your name, how you like things done, what you are working on. It is off until you turn it on in `domyn setup`, which asks where to keep it:
+
+- **`global`**: `~/.domyn/memory.md`. One file, shared by every configuration that picks `global`: your default configuration, and any project whose setup picked it too.
+- **`project`**: a `memory.md` in the project's own folder, read by that project alone. Offered only when setting up a [project](#projects).
+- **`no`**: no memory.
+
+Each configuration has one memory or none, and nothing falls back from one to the other: a project that keeps its own memory does not read the global one, and a project set to `no` remembers nothing, even when your default configuration has a global memory. To share what the agent learns between a project and your default configuration, pick `global` in both.
+
+The memory is a markdown file you can open and edit; one bullet is one fact. The agent decides what to keep, and says so as it does (`remembered: …`). It reads the memory at the start of each conversation, and can look back through it page by page. See [Conversations and memory](../guides/conversations-and-memory.md) for how it works, and `/memory` under [Commands](sessions.md#commands) to see or change it.
+
+In `config.yaml`, memory is a `memory_manager` on the agent:
+
+```yaml
+agents:
+  - name: Assistant
+    memory_manager:
+      type: filesystem
+      file_path: /Users/you/.domyn/memory.md
+      execution_mode: agentic
+```
+
 ## What lives in `~/.domyn`
 
 | Path | What it holds |
@@ -180,6 +203,7 @@ The setting is read when voice is turned on, so a change takes effect at the nex
 | `conversations/` | One folder per conversation that ran a command, with its Python environment and `output/` files |
 | `processes/` | The output of commands left running in the background, one folder per command |
 | `browser/` | Text of long pages the [browser tools](#the-browser) saved to read in parts |
+| `memory.md` | What the agent remembers about you, for every configuration whose [memory](#memory) is `global` |
 | `approvals.yaml` | Approvals that last "always" |
 | `state.yaml` | Settings the CLI remembers between sessions: [`/verbose`](sessions.md#commands) and [`/auto`](tools-and-approvals.md). A project has its own, so a setting in one does not reach another. Not exported |
 | `projects/` | Your [projects](#projects), and approvals that last for one project |

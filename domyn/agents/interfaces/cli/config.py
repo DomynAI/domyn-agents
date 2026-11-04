@@ -790,12 +790,117 @@ def _env_reference(value: Any) -> str | None:
     return match.group(1) if match else None
 
 
+MEMORY_FILENAME = "memory.md"
+
+#: Shown beside each choice of the wizard's memory question. A configuration has one
+#: memory or none: nothing falls back from a project to the global one, or is merged.
+MEMORY_SCOPE_BLURB: dict[str, str] = {
+    "no": "the agent remembers nothing between conversations",
+    "global": "~/.domyn/memory.md, shared with every configuration that picks global",
+    "project": "a memory.md in this project's folder, for this project alone",
+}
+
+
+class MemoryChoice(BaseModel):
+    """The wizard's working state for long-term memory.
+
+    `scope` is ``"no"``, ``"global"`` or ``"project"``. There is nothing else to
+    choose for now: the memory is always a file you can read and edit.
+
+    A configuration has one memory or none. ``global`` is ``~/.domyn/memory.md``,
+    shared by every configuration that chose it (the default one, and any project
+    that chose it); ``project`` is the project's own file, which nothing else reads;
+    ``no`` is no memory, never a fallback to the global one.
+    """
+
+    scope: str = "no"
+
+    @property
+    def enabled(self) -> bool:
+        return self.scope != "no"
+
+
+def _memory_manager_of(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    agent_dict, _ = _entrypoint_agent_and_provider(raw)
+    declared = agent_dict.get("memory_manager")
+    return declared if isinstance(declared, dict) else None
+
+
+def current_memory_from(raw: dict[str, Any] | None) -> MemoryChoice:
+    """What the file already says about memory, as the wizard's own state.
+
+    A memory manager written by hand is read back as the closest choice: the
+    project's own folder is ``project``, anything else is ``global``.
+    """
+    declared = _memory_manager_of(raw)
+    if declared is None:
+        return MemoryChoice()
+    if str(declared.get("file_path", "")).startswith(f"${{{PROJECT_DIR_VAR}}}"):
+        return MemoryChoice(scope="project")
+    return MemoryChoice(scope="global")
+
+
+#: The global memory as an export writes it: whoever runs the project, in their home.
+GLOBAL_MEMORY_REF = f"~/.domyn/{MEMORY_FILENAME}"
+
+
+def is_global_memory(file_path: Any) -> bool:
+    """Whether ``file_path`` names the global memory: ``~/.domyn/memory.md`` as written
+    by an export, or the path setup writes for ``global`` on this machine.
+
+    It is the user's own file, not a place an export's author chose, so it is not
+    one of the paths outside a project (`export.config_paths`)."""
+    if not isinstance(file_path, str) or not file_path:
+        return False
+    if file_path == GLOBAL_MEMORY_REF:
+        return True
+    return Path(os.path.expandvars(file_path)).expanduser() == GLOBAL_DIR / MEMORY_FILENAME
+
+
+def memory_file_path(scope: str) -> str:
+    """Where a memory of ``scope`` is kept: the project's own folder, written the way
+    a project names its own files, or ``~/.domyn``."""
+    if scope == "project":
+        return f"${{{PROJECT_DIR_VAR}}}/{MEMORY_FILENAME}"
+    return str(GLOBAL_DIR / MEMORY_FILENAME)
+
+
+def _apply_memory(
+    config: dict[str, Any], memory: MemoryChoice | None, existing: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Write the memory the wizard was told about, or leave it alone.
+
+    ``None`` means the wizard never asked (a ``provider_only`` run, which is what
+    ``/model`` is), and nothing is touched. When it did ask, the answer is
+    authoritative in both directions, except that a memory manager that already
+    says the same thing is kept as written, so tuning done by hand (a page size, a
+    longer recall) survives a re-run of the wizard.
+    """
+    if memory is None:
+        return config
+    agent_dict = config["agents"][0]
+    if not memory.enabled:
+        agent_dict.pop("memory_manager", None)
+        return config
+    if current_memory_from(existing).scope == memory.scope and "memory_manager" in agent_dict:
+        return config
+    agent_dict["memory_manager"] = {
+        "type": "filesystem",
+        "file_path": memory_file_path(memory.scope),
+        "execution_mode": "agentic",
+    }
+    return config
+
+
 def configuration_v1_dict_from(
     provider: ProviderConfig,
     agent: AgentConfig,
     compaction: CompactionConfig,
     existing: dict[str, Any] | None = None,
     decisions: DecisionsChoice | None = None,
+    memory: MemoryChoice | None = None,
 ) -> dict[str, Any]:
     """Project the CLI's prompted fields onto a ConfigurationV1-shaped dict.
 
@@ -889,7 +994,7 @@ def configuration_v1_dict_from(
         agent_dict["tool_bundles"] = [CLI_DEFAULT_TOOL_BUNDLE_NAME]
 
     kept = _keep_unowned(config, existing)
-    return _apply_decisions(kept, decisions)
+    return _apply_memory(_apply_decisions(kept, decisions), memory, existing)
 
 
 def _apply_decisions(config: dict[str, Any], decisions: DecisionsChoice | None) -> dict[str, Any]:
@@ -1473,6 +1578,24 @@ def _decision_items(raw: dict[str, Any]) -> list[ConfigItem]:
     return items
 
 
+def _memory_items(raw: dict[str, Any]) -> list[ConfigItem]:
+    """The agents that remember between conversations, and where."""
+    items: list[ConfigItem] = []
+    for agent in raw.get("agents") or []:
+        declared = agent.get("memory_manager") if isinstance(agent, dict) else None
+        if not isinstance(declared, dict):
+            continue
+        scope = current_memory_from({"entrypoint": agent.get("name"), "agents": [agent]}).scope
+        fields = [
+            ("type", str(declared.get("type", "?"))),
+            ("mode", str(declared.get("execution_mode", "automatic"))),
+            ("scope", scope),
+            ("file", str(declared.get("file_path", "(default)"))),
+        ]
+        items.append(ConfigItem(name=str(agent.get("name", "?")), fields=fields))
+    return items
+
+
 def _tool_bundle_items(raw: dict[str, Any]) -> list[ConfigItem]:
     items: list[ConfigItem] = []
     for b in raw.get("tool_bundles") or []:
@@ -1563,6 +1686,7 @@ def describe_configuration_v1(
         ConfigSection("Tool Bundles", _tool_bundle_items(raw)),
         ConfigSection("Context Managers", _context_manager_items(raw)),
         ConfigSection("Decision Models", _decision_items(raw)),
+        ConfigSection("Memory", _memory_items(raw)),
         ConfigSection("Metadata", _metadata_items(raw)),
     ]
     return ConfigDescription(path=path or config_path(), sections=[s for s in sections if s.items])

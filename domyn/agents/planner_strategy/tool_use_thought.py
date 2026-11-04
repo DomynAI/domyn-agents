@@ -187,7 +187,7 @@ class ToolUseWithThoughtPlannerStrategy(ToolUsePlannerStrategy):
             # The context measurement for LLM_START metadata: a front-end has no
             # other way to know it without rebuilding the context itself.
             usage_metadata = self.compactor.usage_metadata(
-                messages, tool_defs, agent, interaction_context.state
+                messages, tool_defs, agent, interaction_context.state, turn_context
             )
 
             # ── LLM invocation ────────────────────────────────────────────────

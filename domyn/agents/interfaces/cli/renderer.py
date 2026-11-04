@@ -169,6 +169,8 @@ class EventRenderer:
         self._shown_thoughts: set[str] = set()
         self._streamed = ""
         self._wrote_work = False
+        # What `remember` was asked to keep, by call, to say what was kept when it ends.
+        self._remembering: dict[str, str] = {}
         # Messages this front-end has already put on screen itself, waiting to be
         # matched against the USER_INPUT the runner echoes back when it absorbs
         # them. A list, not a set: two identical steers are two lines, and the
@@ -796,6 +798,8 @@ class EventRenderer:
         params = getattr(action, "parameters", None) or {}
         sym = self._theme.symbols
         self._wrote_work = True
+        if str(action.name) == "remember" and isinstance(params, Mapping):
+            self._remembering[str(action.call_id)] = str(params.get("memory_content") or "")
         # Two spans, not a base style: the arguments would inherit the name's bold.
         line = Text()
         line.append(f"{_WORK}{sym.tool_call} {action.name}", style=self._theme.style("tool_name"))
@@ -812,6 +816,16 @@ class EventRenderer:
         sym = self._theme.symbols
         action: Any = event.action
         observation = getattr(action, "observation", None) if action else None
+        if action is not None and str(action.name) == "remember":
+            kept = self._remembering.pop(str(action.call_id), "")
+            result = str(observation or " ".join(p.text for p in event.content if p.text))
+            if result.startswith("Memory stored.") and kept:
+                self._work(
+                    f"{sym.tool_result} remembered: {as_written(self._truncate(kept))}",
+                    "tool_result",
+                    detail=True,
+                )
+                return
         if observation:
             self._work(
                 f"{sym.tool_result} {self._truncate(str(observation))}", "tool_result", detail=True

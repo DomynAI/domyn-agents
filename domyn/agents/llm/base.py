@@ -66,6 +66,16 @@ class LLMMessage(BaseModel):
             "renderer that does not set it simply cannot be cut precisely."
         ),
     )
+    part: str | None = Field(
+        default=None,
+        exclude=True,
+        description=(
+            "Which part of the turn's injected context this message is, when it is one "
+            "(`memory`): what lets a measurement count it apart from the conversation it "
+            "sits in. Excluded from serialization, like `source_event_id`: our "
+            "bookkeeping, not part of the wire protocol. `None` on every other message."
+        ),
+    )
     read_back: str | None = Field(
         default=None,
         exclude=True,

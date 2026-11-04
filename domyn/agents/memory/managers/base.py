@@ -1,15 +1,25 @@
+import asyncio
 import re
 import uuid
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from datetime import datetime
 from enum import Enum
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from domyn.agents.core import BaseAgent, ExecutionEventType, InteractionContext
 from domyn.agents.llm import LLMMessage
 from domyn.agents.logger import get_logger
+from domyn.agents.memory.render import MAX_ENTRY_CHARS, entry_line, render_block, words
+
+# What a manager is asked for when it has no pages of its own: everything it has.
+_READ_AT_MOST = 100_000
+# Room in a page for its heading and its closing line.
+_FRAME_CHARS = 400
+# Turns whose recall is remembered, so the next request of a turn reuses it.
+_CACHED_TURNS = 64
 
 
 class MemoryExecutionMode(Enum):
@@ -30,6 +40,16 @@ class Memory(BaseModel):
     memory: str
     agent_name: str | None = None
     user_id: str | None = None
+
+
+class MemoryPage(BaseModel):
+    """One page of memories, and where the next one starts."""
+
+    items: list[Memory] = Field(default_factory=list)
+    next_cursor: str | None = None
+    """Opaque: only the manager that issued it reads it. ``None``: there is no more."""
+    total: int | None = None
+    """How many there are in all, when the manager knows."""
 
 
 class BaseMemoryManager(BaseModel, ABC):
@@ -72,7 +92,27 @@ class BaseMemoryManager(BaseModel, ABC):
         description="Token prefix for the memory content (e.g. 'MemoryContent')",
     )
     recency_limit: int = Field(
-        default=5, description="Maximum number of memories to recall per interaction"
+        default=5,
+        description="Maximum number of memories a direct call to recall_memories returns",
+    )
+    page_size: int = Field(
+        default=20,
+        gt=0,
+        description="Memories per page, in the recall given to the model and in `recall`",
+    )
+    max_chars: int = Field(
+        default=8000,
+        gt=0,
+        description="Characters of memories given to the model at the start of a turn",
+    )
+    recall_timeout_s: float = Field(
+        default=2.0,
+        gt=0,
+        description="How long the recall at the start of a turn may take before it is skipped",
+    )
+
+    _turns: OrderedDict[tuple[str | None, str | None, str], str] = PrivateAttr(
+        default_factory=OrderedDict
     )
 
     # auto-register sub types
@@ -115,13 +155,36 @@ class BaseMemoryManager(BaseModel, ABC):
         if not user_id:
             logger.warning("remember called without user_id in run_config — memory not stored")
             return "Memory not stored: no user_id available."
+        fact = " ".join(memory_content.split())
+        if not fact:
+            return "Nothing to remember: the text is empty."
+        if len(fact) > MAX_ENTRY_CHARS:
+            return (
+                f"Too long to remember ({len(fact)} characters, at most {MAX_ENTRY_CHARS}): "
+                "write one short, self-contained fact."
+            )
+        if await self._is_remembered(user_id, agent, fact):
+            return "Already remembered."
         await self.write_single_memory(
             user_id=user_id,
             agent=agent,
-            memory_content=memory_content,
+            memory_content=fact,
             run_config=run_config,
         )
         return "Memory stored."
+
+    async def _is_remembered(self, user_id: str, agent: BaseAgent, fact: str) -> bool:
+        """Whether the same fact, give or take case and punctuation, is already there."""
+
+        def normalized(text: str) -> str:
+            return re.sub(r"[\W_]+$", "", " ".join(text.split()).casefold())
+
+        try:
+            page = await self.recall_page(user_id, agent, limit=100)
+        except Exception as exc:
+            get_logger().debug(f"memory: could not check for a repeat: {type(exc).__name__}")
+            return False
+        return normalized(fact) in {normalized(m.memory) for m in page.items}
 
     @abstractmethod
     async def write_single_memory(
@@ -218,6 +281,181 @@ class BaseMemoryManager(BaseModel, ABC):
                       Subclasses extract what they need.
         """
         ...
+
+    async def recall_page(
+        self,
+        user_id: str,
+        agent: BaseAgent | None = None,
+        *,
+        query: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        **kwargs: Any,
+    ) -> MemoryPage:
+        """One page of memories, the most recent first or the best match for ``query``.
+
+        The default is built on :meth:`recall_memories`, so every manager has pages
+        and a search without changes: it reads what the manager has and cuts it. A
+        backend with pages of its own (a server) overrides this, and its ``cursor``
+        is whatever it likes.
+        """
+        memories = await self.recall_memories(
+            user_id=user_id,
+            agent=agent,
+            recency_limit=_READ_AT_MOST,
+            question=query or "",
+            **kwargs,
+        )
+        wanted = words(query or "")
+        if wanted:
+            scored = [(len(wanted & words(m.memory)), -i, m) for i, m in enumerate(memories)]
+            memories = [m for hit, _, m in sorted(scored, key=lambda t: (-t[0], -t[1])) if hit]
+        return self.cut_page(memories, limit or self.page_size, cursor)
+
+    @staticmethod
+    def cut_page(memories: list[Memory], limit: int, cursor: str | None) -> MemoryPage:
+        """A page of an offset cursor over a list already in order."""
+        try:
+            start = int(cursor) if cursor else 0
+        except ValueError as exc:
+            raise ValueError("not a cursor of this memory") from exc
+        if start < 0:
+            raise ValueError("not a cursor of this memory")
+        window = memories[start : start + limit]
+        more = start + len(window) < len(memories)
+        return MemoryPage(
+            items=window,
+            next_cursor=str(start + len(window)) if more else None,
+            total=len(memories),
+        )
+
+    async def _fitting_page(
+        self,
+        user_id: str,
+        agent: BaseAgent | None,
+        *,
+        query: str | None,
+        cursor: str | None,
+        budget: int,
+        **kwargs: Any,
+    ) -> MemoryPage:
+        """A page that fits in ``budget`` characters, with a cursor that follows it.
+
+        When the page is too long the entries that fit are asked for again with that
+        many as the limit, so the cursor of the second answer starts after the last
+        one shown and not after the last one fetched.
+        """
+        page = await self.recall_page(user_id, agent, query=query, cursor=cursor, **kwargs)
+        room = budget - _FRAME_CHARS
+        used = 0
+        fit = 0
+        for memory in page.items:
+            used += len(entry_line(memory)) + 1
+            if used > room and fit > 0:
+                break
+            fit += 1
+        if 0 < fit < len(page.items):
+            return await self.recall_page(
+                user_id, agent, query=query, limit=fit, cursor=cursor, **kwargs
+            )
+        return page
+
+    async def recall_block(self, agent: BaseAgent, context: "InteractionContext") -> str:
+        """The markdown the model is given at the start of the turn; empty for none.
+
+        Asked once per turn, under a timeout: a second request of the same turn gets
+        the same text, and a manager that is slow or fails means no memory this time,
+        never a failed turn.
+        """
+        key = (
+            getattr(context, "conversation_id", None),
+            getattr(context, "turn_id", None) or getattr(context, "interaction_id", None),
+            agent.name,
+        )
+        cacheable = key[1] is not None
+        if cacheable and key in self._turns:
+            self._turns.move_to_end(key)
+            return self._turns[key]
+
+        question = ""
+        agent_input = getattr(context, "agent_input", None)
+        if agent_input is not None and getattr(agent_input, "content", None):
+            question = (agent_input.content[0].text or "").strip()
+        block = ""
+        try:
+            async with asyncio.timeout(self.recall_timeout_s):
+                # Passed on: a manager may filter on what the caller configured.
+                extra = {"run_config": context.run_config}
+                page = await self._fitting_page(
+                    context.user_id,
+                    agent,
+                    query=question or None,
+                    cursor=None,
+                    budget=self.max_chars,
+                    **extra,
+                )
+                if question and not page.items:
+                    page = await self._fitting_page(
+                        context.user_id,
+                        agent,
+                        query=None,
+                        cursor=None,
+                        budget=self.max_chars,
+                        **extra,
+                    )
+            block = render_block(
+                page.items, total=page.total, next_cursor=page.next_cursor, query=question or None
+            )
+        except Exception as exc:
+            get_logger().warning(f"memory: recall skipped: {type(exc).__name__}")
+            get_logger().debug(f"memory: recall failure detail: {exc}")
+        if cacheable:
+            self._turns[key] = block
+            while len(self._turns) > _CACHED_TURNS:
+                self._turns.popitem(last=False)
+        return block
+
+    async def recall(
+        self,
+        agent: BaseAgent,
+        query: str = "",
+        cursor: str = "",
+        run_config: dict[str, Any] | None = None,
+    ) -> str:
+        """Read what is remembered about the user, a page at a time.
+
+        Without arguments: the most recent. With a ``query``: the best matches. With
+        the ``cursor`` of a previous answer: the next page.
+        """
+        user_id = run_config.get("user_id") if run_config else None
+        if not user_id:
+            return "Memory is not available: no user_id."
+        asked = query.strip() or None
+        try:
+            page = await self._fitting_page(
+                user_id, agent, query=asked, cursor=cursor or None, budget=20_000
+            )
+        except Exception as exc:
+            get_logger().warning(f"memory: recall failed: {type(exc).__name__}")
+            get_logger().debug(f"memory: recall failure detail: {exc}")
+            return "Memory is not available right now."
+        if not page.items:
+            return f'No memory matches "{asked}".' if asked else "Nothing is remembered yet."
+        return render_block(page.items, total=page.total, next_cursor=page.next_cursor, query=asked)
+
+    async def forget(
+        self, agent: BaseAgent, memory_id: str, run_config: dict[str, Any] | None = None
+    ) -> str:
+        """Remove one remembered fact, by the id shown with it."""
+        if not (run_config or {}).get("user_id"):
+            return "Memory is not available: no user_id."
+        try:
+            done = await self.delete_memory(memory_id.strip())
+        except Exception as exc:
+            get_logger().warning(f"memory: forget failed: {type(exc).__name__}")
+            get_logger().debug(f"memory: forget failure detail: {exc}")
+            return "Memory is not available right now: nothing was forgotten."
+        return "Forgotten." if done else f"No memory has the id {memory_id!r}."
 
     @abstractmethod
     async def get_memory(self, memory_id: str) -> Memory | None:
