@@ -12,7 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from domyn.agents.core import BaseAgent, ExecutionEventType, InteractionContext
 from domyn.agents.llm import LLMMessage
 from domyn.agents.logger import get_logger
-from domyn.agents.memory.render import MAX_ENTRY_CHARS, entry_line, render_block, words
+from domyn.agents.memory.render import MAX_ENTRY_CHARS, entry_line, render_block
+from domyn.agents.memory.search import MemorySearch
 
 # What a manager is asked for when it has no pages of its own: everything it has.
 _READ_AT_MOST = 100_000
@@ -104,6 +105,10 @@ class BaseMemoryManager(BaseModel, ABC):
         default=8000,
         gt=0,
         description="Characters of memories given to the model at the start of a turn",
+    )
+    search: MemorySearch = Field(
+        default_factory=MemorySearch,
+        description="How a query is matched against the memories (see memory/search.py)",
     )
     recall_timeout_s: float = Field(
         default=2.0,
@@ -295,7 +300,8 @@ class BaseMemoryManager(BaseModel, ABC):
         """One page of memories, the most recent first or the best match for ``query``.
 
         The default is built on :meth:`recall_memories`, so every manager has pages
-        and a search without changes: it reads what the manager has and cuts it. A
+        and a search without changes: it reads what the manager has, ranks it with
+        :attr:`search` and cuts it. A
         backend with pages of its own (a server) overrides this, and its ``cursor``
         is whatever it likes.
         """
@@ -306,10 +312,9 @@ class BaseMemoryManager(BaseModel, ABC):
             question=query or "",
             **kwargs,
         )
-        wanted = words(query or "")
-        if wanted:
-            scored = [(len(wanted & words(m.memory)), -i, m) for i, m in enumerate(memories)]
-            memories = [m for hit, _, m in sorted(scored, key=lambda t: (-t[0], -t[1])) if hit]
+        if query:
+            # Off the event loop: on a large memory a search is CPU for a while.
+            memories = await asyncio.to_thread(self.search.search, memories, query)
         return self.cut_page(memories, limit or self.page_size, cursor)
 
     @staticmethod

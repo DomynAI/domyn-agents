@@ -758,7 +758,27 @@ Every manager pages what it holds (`recall_page` → `MemoryPage`, built on
 page at the start of a turn as a labelled markdown block (`recall_block`,
 `memory/render.py`): at most `max_chars`, picked by the user's words when they
 match, remembered for the turn so its later requests reuse it, and skipped — never
-a failed turn — when the manager is slower than `recall_timeout_s` or fails.
+a failed turn — when the manager is slower than `recall_timeout_s` or fails. The
+runner asks for that page in `_load_turn_resources`, beside skills and instructions
+(`_prefetch_memory`, the agent the turn starts with only), so the planner's own
+call finds it remembered.
+
+**Search** (`memory/search.py`, `MemorySearch.search`; the manager's `search` field,
+so its settings are configurable under `memory_manager: search:`) is BM25 over
+character trigrams, computed at every search, with **no index**: each memory is
+folded once (case, accents, every script kept) and only the query's trigrams are
+counted in it (`str.count`) — measured 8 ms for 100 memories, 0.47 s for 10 000 of
+30 words, file reading included, so a stored index was not worth keeping in sync (it
+cannot go in `context.state`, which is JSON written after every event and per
+conversation, while memories are per user). It runs in a thread
+(`asyncio.to_thread`), never on the event loop. There are **no stopword lists**:
+BM25 gives a trigram found in most memories next to no weight. Trigrams make
+unrelated words share something (`running` and "every morning" share `nin`, `ing`,
+`ng_`), so the scores are **cut at the low end** (`above_cutoff`): a memory scoring
+more than `cutoff_std` (1.0) standard deviations below the mean of the memories that
+scored is dropped, high scores always kept; with one or two scores every one stays.
+The cut is relative to the query's own scores, since BM25 scores of two queries
+cannot be compared. Ties keep the most recent first.
 `FilesystemMemoryManager` writes markdown, one bullet per entry with its id, date,
 user and author in a trailing comment, so the file can be edited by hand; a bullet
 added by hand belongs to nobody and is seen by everyone. Files of one JSON object

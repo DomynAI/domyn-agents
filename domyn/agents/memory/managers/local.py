@@ -39,7 +39,6 @@ from pydantic import Field, PrivateAttr
 
 from domyn.agents.core import BaseAgent
 from domyn.agents.memory.managers.base import BaseMemoryManager, Memory, MemoryPage
-from domyn.agents.memory.render import words
 
 _HEADING = "# Memory"
 _LINE = re.compile(r"^- (?P<text>.*?)(?: <!-- (?P<meta>.*?) -->)?\s*$")
@@ -175,13 +174,18 @@ class FilesystemMemoryManager(BaseMemoryManager):
         cursor: str | None = None,
         **kwargs: Any,
     ) -> MemoryPage:
+        """A page of what the user and agent see, the most recent first or the best
+        match for ``query``.
+
+        The file is read on every call and searched as it is (no index is kept), so
+        an edit by hand is seen at once. The search runs in a thread, outside the
+        lock: it only reads what was read.
+        """
         async with self._lock:
             entries = await asyncio.to_thread(self._read)
         seen = list(reversed(self._seen_by(entries, user_id, agent)))
-        wanted = words(query or "")
-        if wanted:
-            scored = [(len(wanted & words(m.memory)), -i, m) for i, m in enumerate(seen)]
-            seen = [m for hit, _, m in sorted(scored, key=lambda t: (-t[0], -t[1])) if hit]
+        if query:
+            seen = await asyncio.to_thread(self.search.search, seen, query)
         return self.cut_page(seen, limit or self.page_size, cursor)
 
     async def get_memory(self, memory_id: str) -> Memory | None:
