@@ -131,6 +131,18 @@ USE_CASES: dict[str, UseCase] = {
         default_threshold=0.9,
         why="Same as the ladder: it may only ever hide, and only when sure.",
     ),
+    "memory": UseCase(
+        name="memory",
+        requires=Provenance.STATED,
+        default_threshold=0.5,
+        why=(
+            "It replaces a yes/no the LLM already gives without any probability, "
+            "so a stated number is no worse than what it stands in for. Either "
+            "answer is recoverable: a missed fact can be said again, a wrong one "
+            "is listed by /memory and forgotten. 0.5 lets every known answer "
+            "decide; raise it to send the uncertain ones back to the LLM."
+        ),
+    ),
 }
 
 

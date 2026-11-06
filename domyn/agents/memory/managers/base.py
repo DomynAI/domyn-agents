@@ -10,6 +10,8 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from domyn.agents.core import BaseAgent, ExecutionEventType, InteractionContext
+from domyn.agents.decisions import runtime_of
+from domyn.agents.decisions.memory import Verdict, decide, last_exchange
 from domyn.agents.llm import LLMMessage
 from domyn.agents.logger import get_logger
 from domyn.agents.memory.render import MAX_ENTRY_CHARS, entry_line, render_block
@@ -80,6 +82,21 @@ class BaseMemoryManager(BaseModel, ABC):
             "structure:\nStoreMemory: <yes/no>\n MemoryContent: <summary>"
         ),
         description="System prompt for memory extraction. Must produce output matching the parsing tokens.",
+    )
+    memory_writing_prompt: str = Field(
+        default=(
+            "You write memories about a user from a conversation. It has already been "
+            "decided that the latest exchange reveals something about the user worth "
+            "remembering in future conversations: who they are, a lasting preference, "
+            "their situation or an ongoing goal. Write it as a concise, self-contained "
+            "fact about the user (e.g. 'The user lives in Milan', not 'Milan'), in "
+            "English regardless of the conversation language. Reply with the fact only, "
+            "no preamble. If there is nothing worth remembering after all, reply NONE."
+        ),
+        description=(
+            "System prompt used when a decision model has already said yes: the LLM "
+            "only writes the memory."
+        ),
     )
     memory_store_token: str = Field(
         default="StoreMemory",
@@ -250,10 +267,68 @@ class BaseMemoryManager(BaseModel, ABC):
             return None
         return content_match.group(1).strip() or None
 
+    async def write_memory_content(
+        self,
+        agent: BaseAgent,
+        context: InteractionContext,
+        exchange: tuple[str, str],
+    ) -> str | None:
+        """Have the LLM write the memory a decision model said the turn holds.
+
+        Unlike :meth:`build_memory_content` it is not asked whether to store: that
+        was decided. It may still answer ``NONE``, which stores nothing.
+        """
+        conversation = "\n".join(
+            part.text or ""
+            for e in context.conversation_history
+            for part in e.content
+            if e.event_type in [ExecutionEventType.USER_INPUT, ExecutionEventType.RESPONSE]
+        )
+        user, assistant = exchange
+        llm_response = await agent.llm_provider.generate(
+            messages=[
+                LLMMessage(role="system", content=self.memory_writing_prompt),
+                LLMMessage(
+                    role="user",
+                    content=(
+                        f"Conversation:\n{conversation}\n\n"
+                        f"Latest exchange:\nUser: {user}\nAssistant: {assistant}"
+                    ),
+                ),
+            ],
+            temperature=0.3,
+            max_tokens=500,
+        )
+        content = (llm_response.content or "").strip()
+        content = re.sub(rf"^{re.escape(self.memory_content_token)}:\s*", "", content, flags=re.I)
+        if not content or content.rstrip(".").upper() == "NONE":
+            return None
+        return content
+
+    async def _extract_memory_from_turn(
+        self, agent: BaseAgent, context: InteractionContext
+    ) -> str | None:
+        """The memory to store for this turn, or ``None``.
+
+        With a decision model whose ``memory`` use case is active, the model says
+        whether and the LLM only writes; without one, or when its answer is not
+        confident either way, the LLM decides and writes in one call as before.
+        """
+        runtime = runtime_of(agent)
+        if runtime is None:
+            return await self.build_memory_content(agent, context)
+        exchange = last_exchange(context)
+        verdict = await decide(runtime, user=exchange[0], assistant=exchange[1])
+        if verdict is Verdict.SKIP:
+            return None
+        if verdict is Verdict.SAVE:
+            return await self.write_memory_content(agent, context, exchange)
+        return await self.build_memory_content(agent, context)
+
     async def update_memory(self, agent: BaseAgent, context: InteractionContext) -> None:
         """Update/store a memory. Errors are logged, never propagated."""
         try:
-            memory_content = await self.build_memory_content(agent, context)
+            memory_content = await self._extract_memory_from_turn(agent, context)
             if memory_content:
                 await self.write_single_memory(
                     user_id=context.user_id,
