@@ -197,7 +197,8 @@ def to_half_blocks(img: Image.Image, width: int) -> str:
     w, h = img.size
     rows = max(1, round(width * (h / w) / CHAR_ASPECT))
     px = img.resize((width, rows * 2), Image.LANCZOS).load()
-    assert px is not None
+    if px is None:
+        raise RuntimeError("Failed to load image pixels")
 
     lines = []
     for row in range(rows):
