@@ -354,6 +354,7 @@ A grant is the exact subject or an `fnmatch` pattern proposed by the tool's `app
 | `tools` | `decisions/tools.py` | hide tools the turn does not need | hide |
 | `context_ladder` | `decisions/context.py` | mark old tool outputs compaction should drop first | mark for dropping |
 | `sensitivity` | `decisions/sensitivity.py` | rate the data a turn handles | refuse a turn |
+| `memory` | `decisions/memory.py` | say whether a turn holds a fact worth remembering, in `AUTOMATIC` memory (`BaseMemoryManager._extract_memory_from_turn`) | skip the LLM on a confident no; on a confident yes the LLM only writes (`memory_writing_prompt`) |
 
 Three of these turn on **`Answer.is_false`, not `not is_true`**, and the distinction is the whole safety argument: between "confidently yes" and "confidently no" sits *it does not know*, and that case has to keep the user's instruction, keep the tool, keep the output. Reading a 0.45 as "not yes" would delete a line someone wrote on the strength of a coin flip.
 
@@ -391,6 +392,7 @@ agents:
       approvals: {mode: shadow, min_confidence: 0.8}
       skills: {mode: active}
       instructions: {mode: active}
+      memory: {mode: active}
       tools: {mode: off}
       context_ladder: {mode: off}
       sensitivity: {mode: active, on_unknown: block}
@@ -400,7 +402,7 @@ A use-case name that is not in the registry is refused at load time, and a
 runtime built in code with one is OFF with an unreachable threshold — a typo
 must not quietly run an unreviewed use case on a number nobody chose.
 
-**`domyn setup` asks for one**, so the block above does not have to be written by hand. It offers four levels (`DECISION_LEVELS`, `interfaces/cli/config.py`), in order of consequence: `no`, `shadow` (ask and record, change nothing), `active` (skills and instructions act; the gate still only records) and `active, approvals too`. The approval gate is a level of its own because everywhere else a wrong answer changes what the model is *shown* and the turn carries on, while at the gate allowing removes a human confirmation — that is chosen on its own line, not bundled. The wizard writes `system_one` only, and never switches on `tools`, `context_ladder` or `sensitivity`: those stay a deliberate edit. The endpoint is probed with a real `POST /v1/systemone` rather than a socket connect, because the two silent mistakes here — an endpoint that is not up and a model name the server does not expose — look identical to a connect and different to a request; a failure warns and saves anyway.
+**`domyn setup` asks for one**, so the block above does not have to be written by hand. It offers four levels (`DECISION_LEVELS`, `interfaces/cli/config.py`), in order of consequence: `no`, `shadow` (ask and record, change nothing), `active` (skills, instructions and memory act; the gate still only records) and `active, approvals too`. The approval gate is a level of its own because everywhere else a wrong answer changes what the model is *shown* and the turn carries on, while at the gate allowing removes a human confirmation — that is chosen on its own line, not bundled. The wizard writes `system_one` only, and never switches on `tools`, `context_ladder` or `sensitivity`: those stay a deliberate edit. The endpoint is probed with a real `POST /v1/systemone` rather than a socket connect, because the two silent mistakes here — an endpoint that is not up and a model name the server does not expose — look identical to a connect and different to a request; a failure warns and saves anyway.
 
 `/model` runs the wizard `provider_only`, so it never asks and passes `decisions=None`, which `_apply_decisions` treats as "leave it". That is load-bearing: `decision_providers` is otherwise carried across by `_keep_unowned` *because* the wizard does not own it, and owning it unconditionally would hand `/model` back the silent deletion that function exists to prevent.
 

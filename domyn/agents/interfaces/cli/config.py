@@ -699,16 +699,19 @@ DECISION_LEVELS: dict[str, dict[str, Any]] = {
         "approvals": {"mode": "shadow"},
         "skills": {"mode": "shadow"},
         "instructions": {"mode": "shadow"},
+        "memory": {"mode": "shadow"},
     },
     "active": {
         "approvals": {"mode": "shadow"},
         "skills": {"mode": "active"},
         "instructions": {"mode": "active"},
+        "memory": {"mode": "active"},
     },
     "active, approvals too": {
         "approvals": {"mode": "active"},
         "skills": {"mode": "active"},
         "instructions": {"mode": "active"},
+        "memory": {"mode": "active"},
     },
 }
 
@@ -716,7 +719,7 @@ DECISION_LEVELS: dict[str, dict[str, Any]] = {
 DECISION_LEVEL_BLURB: dict[str, str] = {
     "no": "no decision model",
     "shadow": "ask and record, change nothing",
-    "active": "pick skills and instructions; the approval gate only records",
+    "active": "pick skills and instructions, decide what to remember; the approval gate only records",
     "active, approvals too": "also let it allow or deny a tool call",
 }
 
