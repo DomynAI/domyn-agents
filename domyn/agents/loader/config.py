@@ -1073,8 +1073,3 @@ class ConfigurationV1(BaseModel):
         config_dict = load_from_file(file_path)
         return cls.from_dict(config_dict)
 
-    def to_yaml(self, file_path: str) -> None:
-        """Save Configuration to a YAML file."""
-        config_dict = self.to_dict()
-        with open(file_path, "w", encoding="utf-8") as f:
-            yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
