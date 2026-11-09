@@ -178,6 +178,7 @@ The setting is read when voice is turned on, so a change takes effect at the nex
 | `credentials` | API keys pasted into the wizard, readable only by you |
 | `conversations.db` | Every saved conversation |
 | `approvals.yaml` | Approvals that last "always" |
+| `state.yaml` | Settings the CLI remembers between sessions: [`/verbose`](sessions.md#commands) and [`/auto`](tools-and-approvals.md). A project has its own, so a setting in one does not reach another. Not exported |
 | `projects/` | Your [projects](#projects), and approvals that last for one project |
 | `builtin-skills/` | The built-in [skills](../guides/skills.md) you chose in `domyn setup`, copied from the package. Every `domyn setup` deletes and rewrites it, so keep your own skills elsewhere, such as `./.domyn/skills` |
 | `models/` | The speech model [`/voice`](sessions.md#talking-instead-of-typing) downloads the first time |

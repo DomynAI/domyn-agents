@@ -27,7 +27,7 @@ Other options:
 |---|---|
 | `--expand-skills` | Gives the model every [skill](../guides/skills.md) in full up front, instead of an index it reads from on demand. Uses more of the context window. |
 | `--skill-sections` | Lists each skill's sections in the index. Uses more of the context window. |
-| `--verbose`, `-v` | Shows the internal events: model calls, hooks, agent handoffs. |
+| `--verbose`, `-v` | Shows the internal events: model calls, hooks, agent handoffs. Turns [`/verbose`](#commands) on, and like `/verbose` it is remembered: later sessions start with it on until you turn it off with `/verbose`. |
 | `--no-banner` | Skips the startup banner. |
 
 Which skills and [standing instructions](../guides/standing-instructions.md) a session reads is not an option: it is in the configuration, and `domyn setup` asks about it (see [Configuring the CLI](configuration.md)).
@@ -81,7 +81,7 @@ Type `/help` in a session for this list. Commands complete with Tab.
 | `/exit` | Ends the session. Also `/quit` and `/q`. |
 | `/clear` | Starts a new conversation and clears the screen, scrollback included. The previous one stays saved, and `/resume` brings it back. |
 | `/resume [conversation_id]` | Continues a past conversation, redrawing it on a cleared screen. Without an id, shows the recent ones to pick from. |
-| `/verbose` | Turns on or off the display of internal events and library logs |
+| `/verbose` | Turns on or off the display of internal events and library logs. Remembered for the next session |
 | `/voice` | Turns push-to-talk on or off: hold the space bar to speak, let go to send. See [Talking instead of typing](#talking-instead-of-typing). |
 | **Agent and model** | |
 | `/agent` | Shows the active agent, its tools, its sub-agents, the conversation id and the conversation's working directory |
@@ -93,7 +93,7 @@ Type `/help` in a session for this list. Commands complete with Tab.
 | `/export <folder>` | Saves this session's configuration, with the skills and instruction files it uses, into a new folder: a [project](configuration.md#projects) you can share or run elsewhere. Never includes API keys, approvals or history. |
 | **Approvals** | |
 | `/approvals` | Lists the approvals in force: for this conversation, this project and always. `/approvals revoke <n>` removes the ones you name by number, `/approvals clear` removes them all. |
-| `/auto` | Turns automatic approval on or off, as Shift+Tab does. While on, every tool call runs without asking, and the prompt says so, until you turn it off or the session ends. |
+| `/auto` | Turns automatic approval on or off, as Shift+Tab does. While on, every tool call runs without asking, and the prompt says so, until you turn it off. Remembered for the next session |
 | **Context** | |
 | `/context` | Shows how much of the model's context window the last request used, and what used it. Empty until the first request. |
 | `/compact` | Shortens the conversation now. The shorter version is used from the next request. |
