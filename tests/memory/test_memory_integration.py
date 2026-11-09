@@ -262,6 +262,40 @@ class TestUpdateMemoryFlow:
         assert "John" in memories[0].memory
 
     @pytest.mark.asyncio
+    async def test_the_turn_that_just_ended_is_read(self, memory_manager):
+        # When the post-agent hook runs, the turn is in `interaction_history` and a
+        # first turn's `conversation_history` is empty: the LLM must still see it.
+        user_event = BaseEvent(
+            event_type=ExecutionEventType.USER_INPUT,
+            author="user",
+            content=[Part(text="I am Pippo, a comedian in Castelfranco Veneto")],
+        )
+        context = InteractionContext(
+            conversation_id="conv-1",
+            user_id="u1",
+            agent_input=user_event,
+            conversation_history=[],
+            interaction_history=[user_event],
+        )
+        agent = self._make_agent_mock("StoreMemory: no")
+
+        await memory_manager.update_memory(agent, context)
+
+        sent = agent.llm_provider.generate.call_args.kwargs["messages"][1].content
+        assert "Castelfranco Veneto" in sent
+
+    @pytest.mark.asyncio
+    async def test_an_event_in_both_histories_is_sent_once(self, memory_manager):
+        context = self._make_context()
+        context.interaction_history = list(context.conversation_history)
+        agent = self._make_agent_mock("StoreMemory: no")
+
+        await memory_manager.update_memory(agent, context)
+
+        sent = agent.llm_provider.generate.call_args.kwargs["messages"][1].content
+        assert sent.count("My name is John") == 1
+
+    @pytest.mark.asyncio
     async def test_update_memory_skips_when_no(self, memory_manager):
         agent = self._make_agent_mock("StoreMemory: no\nMemoryContent: nothing relevant")
         context = self._make_context()

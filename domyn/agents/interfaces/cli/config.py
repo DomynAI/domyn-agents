@@ -803,6 +803,26 @@ MEMORY_SCOPE_BLURB: dict[str, str] = {
     "project": "a memory.md in this project's folder, for this project alone",
 }
 
+#: Who decides what goes into the memory, asked only when a decision model is set up.
+#: Each answer is an ``execution_mode`` of the memory manager (`MEMORY_DECIDER_MODES`).
+MEMORY_DECIDER_AGENT = "the agent"
+MEMORY_DECIDER_MODEL = "the decision model"
+
+MEMORY_DECIDER_MODES: dict[str, str] = {
+    MEMORY_DECIDER_AGENT: "agentic",
+    MEMORY_DECIDER_MODEL: "automatic",
+}
+
+MEMORY_DECIDER_BLURB: dict[str, str] = {
+    MEMORY_DECIDER_AGENT: (
+        "the agent's model saves facts itself with a remember tool, while it answers"
+    ),
+    MEMORY_DECIDER_MODEL: (
+        "after each reply the decision model judges whether it said something worth "
+        "keeping; the agent's model only writes it down, and decides when it is unsure"
+    ),
+}
+
 
 class MemoryChoice(BaseModel):
     """The wizard's working state for long-term memory.
@@ -817,6 +837,10 @@ class MemoryChoice(BaseModel):
     """
 
     scope: str = "no"
+    decided_by: str | None = None
+    """`MEMORY_DECIDER_AGENT` or `MEMORY_DECIDER_MODEL`; ``None`` when the wizard did
+    not ask (no decision model), which keeps the mode the file has, or ``agentic``
+    for a memory it writes anew."""
 
     @property
     def enabled(self) -> bool:
@@ -840,9 +864,11 @@ def current_memory_from(raw: dict[str, Any] | None) -> MemoryChoice:
     declared = _memory_manager_of(raw)
     if declared is None:
         return MemoryChoice()
+    automatic = str(declared.get("execution_mode", "")).lower() == "automatic"
+    decided_by = MEMORY_DECIDER_MODEL if automatic else MEMORY_DECIDER_AGENT
     if str(declared.get("file_path", "")).startswith(f"${{{PROJECT_DIR_VAR}}}"):
-        return MemoryChoice(scope="project")
-    return MemoryChoice(scope="global")
+        return MemoryChoice(scope="project", decided_by=decided_by)
+    return MemoryChoice(scope="global", decided_by=decided_by)
 
 
 #: The global memory as an export writes it: whoever runs the project, in their home.
@@ -879,7 +905,8 @@ def _apply_memory(
     ``/model`` is), and nothing is touched. When it did ask, the answer is
     authoritative in both directions, except that a memory manager that already
     says the same thing is kept as written, so tuning done by hand (a page size, a
-    longer recall) survives a re-run of the wizard.
+    longer recall) survives a re-run of the wizard. Who decides what to remember,
+    when the wizard asked it, sets ``execution_mode`` either way.
     """
     if memory is None:
         return config
@@ -887,12 +914,15 @@ def _apply_memory(
     if not memory.enabled:
         agent_dict.pop("memory_manager", None)
         return config
+    mode = MEMORY_DECIDER_MODES.get(memory.decided_by or "")
     if current_memory_from(existing).scope == memory.scope and "memory_manager" in agent_dict:
+        if mode is not None:
+            agent_dict["memory_manager"] = {**agent_dict["memory_manager"], "execution_mode": mode}
         return config
     agent_dict["memory_manager"] = {
         "type": "filesystem",
         "file_path": memory_file_path(memory.scope),
-        "execution_mode": "agentic",
+        "execution_mode": mode or "agentic",
     }
     return config
 

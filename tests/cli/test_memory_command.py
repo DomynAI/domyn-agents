@@ -187,6 +187,8 @@ class TestClearing:
         with patch("builtins.input", side_effect=["yes"]):
             await repl._handle_memory("clear")
         assert "Memory cleared." in buffer.getvalue()
+        # The file is emptied, the conversation is not: the user is told so.
+        assert "This conversation still holds what was said in it" in buffer.getvalue()
         assert (await manager.recall_page(USER_ID)).total == 0
 
     @pytest.mark.asyncio

@@ -105,6 +105,12 @@ if TYPE_CHECKING:
 
 _T = TypeVar("_T")
 
+#: Said after every /memory clear: the file is emptied, the conversation is not,
+#: so what was said in it (and the memories recalled into it) still reaches the model.
+_CONVERSATION_STILL_HOLDS = (
+    " This conversation still holds what was said in it: /clear starts a new one."
+)
+
 APPLICATION_NAME = "domyn-cli"
 USER_ID = "local-user"
 
@@ -1420,7 +1426,7 @@ class Repl:
                 return
             if everything:
                 await manager.complete_reset()
-                self._say("Memory cleared, every entry in the file.")
+                self._say("Memory cleared, every entry in the file." + _CONVERSATION_STILL_HOLDS)
                 return
             await manager.reset_memory(USER_ID)
             self._say(await self._after_clearing(manager))
@@ -1438,11 +1444,11 @@ class Repl:
             get_logger().debug(f"memory count detail: {exc}")
             kept = 0
         if not kept:
-            return "Memory cleared."
+            return "Memory cleared." + _CONVERSATION_STILL_HOLDS
         entries, belong = ("entry", "belongs") if kept == 1 else ("entries", "belong")
         return (
             f"Memory cleared, except {kept} {entries} written by hand, which {belong} to no one: "
-            "`/memory clear all` removes them too."
+            "`/memory clear all` removes them too." + _CONVERSATION_STILL_HOLDS
         )
 
     async def _show_config_file(self) -> None:

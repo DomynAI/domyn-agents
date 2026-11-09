@@ -47,6 +47,9 @@ from domyn.agents.interfaces.cli.config import (
     DEFAULT_DECISION_MODEL,
     DEFAULT_DECISION_URL,
     LOCAL_SKILLS_DIRS,
+    MEMORY_DECIDER_BLURB,
+    MEMORY_DECIDER_MODEL,
+    MEMORY_DECIDER_MODES,
     MEMORY_SCOPE_BLURB,
     PROVIDER_HINTS,
     REQUIRES_URL,
@@ -396,6 +399,35 @@ def _ask_memory(console: Console, theme: Theme, current: MemoryChoice) -> Memory
     if chosen is None:
         raise KeyboardInterrupt
     return MemoryChoice(scope=chosen)
+
+
+def _ask_memory_decider(
+    console: Console, theme: Theme, current: str | None, decisions: DecisionsChoice
+) -> str:
+    """Ask who decides what the memory keeps: the agent, or the decision model.
+
+    Asked only when a memory and a decision model were both chosen. The answer is
+    the memory manager's ``execution_mode`` (`MEMORY_DECIDER_MODES`). Opens on what
+    the file says, and on the decision model for a memory that is new.
+    """
+    options = list(MEMORY_DECIDER_MODES)
+    descriptions = dict(MEMORY_DECIDER_BLURB)
+    if DECISION_LEVELS.get(decisions.level, {}).get("memory", {}).get("mode") == "shadow":
+        descriptions[MEMORY_DECIDER_MODEL] = (
+            "after each reply the decision model is asked and its answer recorded, but "
+            "at the shadow level the agent's model still decides what is kept"
+        )
+    chosen = _select(
+        console,
+        theme,
+        "who decides what to remember",
+        options,
+        current=current if current in options else MEMORY_DECIDER_MODEL,
+        descriptions=descriptions,
+    )
+    if chosen is None:
+        raise KeyboardInterrupt
+    return chosen
 
 
 def _ask_decisions(console: Console, theme: Theme, current: DecisionsChoice) -> DecisionsChoice:
@@ -1799,6 +1831,16 @@ def run_setup(
     def ask_memory(d: _Draft) -> None:
         d.memory = _ask_memory(console, theme, current_memory_from(existing))
 
+    def ask_memory_decider(d: _Draft) -> None:
+        assert d.memory is not None and d.decisions is not None
+        decided_by = _ask_memory_decider(
+            console, theme, current_memory_from(existing).decided_by, d.decisions
+        )
+        d.memory = d.memory.model_copy(update={"decided_by": decided_by})
+
+    def asks_memory_decider(d: _Draft) -> bool:
+        return bool(d.memory and d.memory.enabled and d.decisions and d.decisions.enabled)
+
     def asks_model(d: _Draft) -> bool:
         return not d.keep_model
 
@@ -1855,6 +1897,7 @@ def run_setup(
         # exactly as written, hand-tuned thresholds included (`_apply_decisions`).
         _Step("decisions", ask_decisions, lambda d: not d.keep_decisions),
         _Step("memory", ask_memory),
+        _Step("memory decider", ask_memory_decider, asks_memory_decider),
     ]
     steps = model_steps if provider_only else [*model_steps, *section_steps]
 
