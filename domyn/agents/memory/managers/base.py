@@ -237,12 +237,20 @@ class BaseMemoryManager(BaseModel, ABC):
         The extraction prompt and parsing tokens are configurable via class
         attributes (memory_extraction_prompt, memory_store_token, etc.).
         """
-        conversation_parts = "\n".join(
-            part.text or ""
-            for e in context.conversation_history
-            for part in e.content
-            if e.event_type in [ExecutionEventType.USER_INPUT, ExecutionEventType.RESPONSE]
-        )
+        # The turn that just ended is in `interaction_history` when the post-agent
+        # hook runs, not yet in `conversation_history`: reading only the latter gave
+        # the LLM an empty conversation on a first turn, and it stored nothing.
+        seen: set[str] = set()
+        texts: list[str] = []
+        for e in [*context.conversation_history, *context.interaction_history]:
+            if e.event_type not in (ExecutionEventType.USER_INPUT, ExecutionEventType.RESPONSE):
+                continue
+            if e.event_id is not None:
+                if e.event_id in seen:
+                    continue
+                seen.add(e.event_id)
+            texts.extend(part.text or "" for part in e.content)
+        conversation_parts = "\n".join(texts)
 
         llm_response = await agent.llm_provider.generate(
             messages=[

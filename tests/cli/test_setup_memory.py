@@ -18,7 +18,10 @@ from domyn.agents.interfaces.cli import config as cfg
 from domyn.agents.interfaces.cli import select as select_mod
 from domyn.agents.interfaces.cli import setup
 from domyn.agents.interfaces.cli.config import (
+    MEMORY_DECIDER_AGENT,
+    MEMORY_DECIDER_MODEL,
     PROJECT_DIR_VAR,
+    DecisionsChoice,
     MemoryChoice,
     configuration_v1_dict_from,
     current_memory_from,
@@ -281,3 +284,99 @@ class TestInTheWizard:
 
         assert result["llm_providers"][0]["context_window"] == 64000
         assert manager_of(result)["file_path"].endswith("memory.md")
+
+
+class TestWhoDecidesWhatToRemember:
+    """Asked only with a decision model: the answer is the memory's execution_mode."""
+
+    def test_the_decision_model_writes_automatic(self):
+        choice = MemoryChoice(scope="global", decided_by=MEMORY_DECIDER_MODEL)
+        assert manager_of(written(base(), choice))["execution_mode"] == "automatic"
+
+    def test_the_agent_writes_agentic(self):
+        choice = MemoryChoice(scope="global", decided_by=MEMORY_DECIDER_AGENT)
+        assert manager_of(written(base(), choice))["execution_mode"] == "agentic"
+
+    def test_changing_it_keeps_what_was_tuned_by_hand(self):
+        raw = written(base(), MemoryChoice(scope="global"))
+        raw["agents"][0]["memory_manager"]["page_size"] = 7
+        again = written(raw, MemoryChoice(scope="global", decided_by=MEMORY_DECIDER_MODEL))
+        assert manager_of(again)["execution_mode"] == "automatic"
+        assert manager_of(again)["page_size"] == 7
+
+    def test_not_asked_keeps_the_mode_the_file_has(self):
+        raw = written(base(), MemoryChoice(scope="global", decided_by=MEMORY_DECIDER_MODEL))
+        again = written(raw, MemoryChoice(scope="global"))
+        assert manager_of(again)["execution_mode"] == "automatic"
+
+    @pytest.mark.parametrize("decider", [MEMORY_DECIDER_AGENT, MEMORY_DECIDER_MODEL])
+    def test_what_it_writes_is_what_it_reads(self, decider):
+        raw = written(base(), MemoryChoice(scope="global", decided_by=decider))
+        assert current_memory_from(raw).decided_by == decider
+
+    def ask(self, current, answer, level="active"):
+        buffer = io.StringIO()
+        console = Console(file=buffer, width=200, force_terminal=False)
+        with patch("builtins.input", side_effect=[answer]):
+            chosen = setup._ask_memory_decider(
+                console,
+                Theme.build(allow_animation=False),
+                current,
+                DecisionsChoice(level=level),
+            )
+        return chosen, buffer.getvalue()
+
+    @pytest.fixture
+    def numbered(self, monkeypatch):
+        monkeypatch.setattr(select_mod, "_interactive", lambda theme: False)
+
+    def test_enter_keeps_what_the_file_says(self, numbered):
+        assert self.ask(MEMORY_DECIDER_AGENT, "")[0] == MEMORY_DECIDER_AGENT
+
+    def test_a_new_memory_opens_on_the_decision_model(self, numbered):
+        assert self.ask(None, "")[0] == MEMORY_DECIDER_MODEL
+
+    def test_at_the_shadow_level_it_says_the_agent_still_decides(self, numbered):
+        _, shown = self.ask(None, "", level="shadow")
+        assert "the agent's model still decides" in shown
+
+    def test_in_the_wizard_it_follows_the_memory_question(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(select_mod, "_interactive", lambda theme: False)
+        monkeypatch.setattr(
+            setup, "_choose_builtin_skills", lambda console, theme, current: current
+        )
+        monkeypatch.setattr(
+            setup,
+            "_ask_decisions",
+            lambda console, theme, current: DecisionsChoice(level="active"),
+        )
+        for name in ("OPENAI_API_KEY", "VLLM_API_KEY", "LLM_API_KEY"):
+            monkeypatch.delenv(name, raising=False)
+        console = Console(file=io.StringIO(), width=100, force_terminal=False)
+        # provider, model, url, api key, max tokens, context window, memory, who decides
+        answers = ["openai", "m", "", "", "", "", "global", MEMORY_DECIDER_MODEL]
+        with patch("builtins.input", side_effect=answers):
+            result = setup.run_setup(
+                console, Theme.build(allow_animation=False), path=tmp_path / "config.yaml"
+            )
+        assert manager_of(result)["execution_mode"] == "automatic"
+
+    def test_without_a_memory_it_is_not_asked(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(select_mod, "_interactive", lambda theme: False)
+        monkeypatch.setattr(
+            setup, "_choose_builtin_skills", lambda console, theme, current: current
+        )
+        monkeypatch.setattr(
+            setup,
+            "_ask_decisions",
+            lambda console, theme, current: DecisionsChoice(level="active"),
+        )
+        for name in ("OPENAI_API_KEY", "VLLM_API_KEY", "LLM_API_KEY"):
+            monkeypatch.delenv(name, raising=False)
+        console = Console(file=io.StringIO(), width=100, force_terminal=False)
+        # A further answer would be left over: input() raises StopIteration if asked.
+        with patch("builtins.input", side_effect=["openai", "m", "", "", "", "", "no"]):
+            result = setup.run_setup(
+                console, Theme.build(allow_animation=False), path=tmp_path / "config.yaml"
+            )
+        assert manager_of(result) is None
