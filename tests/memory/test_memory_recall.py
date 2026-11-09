@@ -142,9 +142,7 @@ class TestTheRecallAtTheStartOfATurn:
     async def test_a_page_over_the_budget_is_narrowed_and_its_cursor_follows_the_last_one_shown(
         self, tmp_path
     ):
-        manager = FilesystemMemoryManager(
-            file_path=str(tmp_path / "m.md"), max_chars=1000, page_size=20
-        )
+        manager = FilesystemMemoryManager(file_path=str(tmp_path / "m.md"), max_chars=1000)
         await fill(manager, [f"fact {i:02d} " + "x" * 80 for i in range(20)])
         block = await manager.recall_block(_A(), context())
         shown = [line for line in block.splitlines() if line.startswith("- ")]
@@ -155,10 +153,17 @@ class TestTheRecallAtTheStartOfATurn:
         assert f"fact {19 - len(shown):02d}" in text
 
     @pytest.mark.asyncio
+    async def test_only_the_characters_bound_a_page(self, tmp_path):
+        """No count: short memories fill the budget, however many there are."""
+        manager = FilesystemMemoryManager(file_path=str(tmp_path / "m.md"), max_chars=8000)
+        await fill(manager, [f"fact {i:02d}" for i in range(50)])
+        block = await manager.recall_block(_A(), context())
+        assert len([line for line in block.splitlines() if line.startswith("- ")]) == 50
+        assert 'cursor="' not in block
+
+    @pytest.mark.asyncio
     async def test_reading_every_page_shows_every_entry_once(self, tmp_path):
-        manager = FilesystemMemoryManager(
-            file_path=str(tmp_path / "m.md"), max_chars=800, page_size=15
-        )
+        manager = FilesystemMemoryManager(file_path=str(tmp_path / "m.md"), max_chars=800)
         await fill(manager, [f"fact {i:02d} " + "x" * 80 for i in range(15)])
         seen, cursor = [], ""
         for _ in range(30):

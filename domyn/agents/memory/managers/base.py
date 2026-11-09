@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from domyn.agents.core import BaseAgent, ExecutionEventType, InteractionContext
 from domyn.agents.decisions import runtime_of
-from domyn.agents.decisions.memory import MAX_KNOWN_CHARS, Verdict, decide, last_exchange
+from domyn.agents.decisions.memory import Verdict, decide, last_exchange
 from domyn.agents.llm import LLMMessage
 from domyn.agents.logger import get_logger
 from domyn.agents.memory.render import MAX_ENTRY_CHARS, entry_line, render_block
@@ -22,6 +22,9 @@ from domyn.agents.memory.search import MemorySearch
 _READ_AT_MOST = 100_000
 # Room in a page for its heading and its closing line.
 _FRAME_CHARS = 400
+# A page of the `recall` tool: the model asked for it, so it may be longer than
+# the recall every turn starts with (`max_chars`).
+RECALL_TOOL_CHARS = 20_000
 # Turns whose recall is remembered, so the next request of a turn reuses it.
 _CACHED_TURNS = 64
 
@@ -127,15 +130,14 @@ class BaseMemoryManager(BaseModel, ABC):
         default=5,
         description="Maximum number of memories a direct call to recall_memories returns",
     )
-    page_size: int = Field(
-        default=20,
-        gt=0,
-        description="Memories per page, in the recall given to the model and in `recall`",
-    )
     max_chars: int = Field(
-        default=8000,
+        default=10_000,
         gt=0,
-        description="Characters of memories given to the model at the start of a turn",
+        description=(
+            "The most characters of memories read at once: the recall at the start of a "
+            "turn, and what is already remembered when the automatic mode decides whether "
+            "to store. A page of the `recall` tool has its own, RECALL_TOOL_CHARS"
+        ),
     )
     search: MemorySearch = Field(
         default_factory=MemorySearch,
@@ -216,7 +218,7 @@ class BaseMemoryManager(BaseModel, ABC):
             return re.sub(r"[\W_]+$", "", " ".join(text.split()).casefold())
 
         try:
-            page = await self.recall_page(user_id, agent, limit=100)
+            page = await self.recall_page(user_id, agent)
         except Exception as exc:
             get_logger().debug(f"memory: could not check for a repeat: {type(exc).__name__}")
             return False
@@ -370,7 +372,7 @@ class BaseMemoryManager(BaseModel, ABC):
         """What is already remembered that the turn is about, for the store decision.
 
         The best matches for the user's message, else the most recent, within
-        ``MAX_KNOWN_CHARS``; the same recall the turn starts with. Slow or failing,
+        ``max_chars``; the same recall the turn starts with. Slow or failing,
         it is empty: the decision is then taken as before, never skipped.
         """
         extra = {"run_config": context.run_config}
@@ -381,7 +383,7 @@ class BaseMemoryManager(BaseModel, ABC):
                     agent,
                     query=query.strip() or None,
                     cursor=None,
-                    budget=MAX_KNOWN_CHARS + _FRAME_CHARS,
+                    budget=self.max_chars,
                     **extra,
                 )
                 if query.strip() and not page.items:
@@ -390,7 +392,7 @@ class BaseMemoryManager(BaseModel, ABC):
                         agent,
                         query=None,
                         cursor=None,
-                        budget=MAX_KNOWN_CHARS + _FRAME_CHARS,
+                        budget=self.max_chars,
                         **extra,
                     )
         except Exception as exc:
@@ -456,13 +458,15 @@ class BaseMemoryManager(BaseModel, ABC):
         cursor: str | None = None,
         **kwargs: Any,
     ) -> MemoryPage:
-        """One page of memories, the most recent first or the best match for ``query``.
+        """Memories from ``cursor`` on, the most recent first or the best match for ``query``.
 
-        The default is built on :meth:`recall_memories`, so every manager has pages
-        and a search without changes: it reads what the manager has, ranks it with
-        :attr:`search` and cuts it. A
-        backend with pages of its own (a server) overrides this, and its ``cursor``
-        is whatever it likes.
+        ``limit`` caps how many; without one, every memory from ``cursor`` on is
+        returned, since what reaches a model is bounded in characters, not in
+        memories (:meth:`_fitting_page`). The default is built on
+        :meth:`recall_memories`, so every manager has pages and a search without
+        changes: it reads what the manager has, ranks it with :attr:`search` and cuts
+        it. A backend with pages of its own (a server) overrides this, and its
+        ``cursor`` is whatever it likes.
         """
         memories = await self.recall_memories(
             user_id=user_id,
@@ -474,18 +478,18 @@ class BaseMemoryManager(BaseModel, ABC):
         if query:
             # Off the event loop: on a large memory a search is CPU for a while.
             memories = await asyncio.to_thread(self.search.search, memories, query)
-        return self.cut_page(memories, limit or self.page_size, cursor)
+        return self.cut_page(memories, limit, cursor)
 
     @staticmethod
-    def cut_page(memories: list[Memory], limit: int, cursor: str | None) -> MemoryPage:
-        """A page of an offset cursor over a list already in order."""
+    def cut_page(memories: list[Memory], limit: int | None, cursor: str | None) -> MemoryPage:
+        """A page of an offset cursor over a list already in order; ``None``: the rest."""
         try:
             start = int(cursor) if cursor else 0
         except ValueError as exc:
             raise ValueError("not a cursor of this memory") from exc
         if start < 0:
             raise ValueError("not a cursor of this memory")
-        window = memories[start : start + limit]
+        window = memories[start:] if limit is None else memories[start : start + limit]
         more = start + len(window) < len(memories)
         return MemoryPage(
             items=window,
@@ -503,11 +507,12 @@ class BaseMemoryManager(BaseModel, ABC):
         budget: int,
         **kwargs: Any,
     ) -> MemoryPage:
-        """A page that fits in ``budget`` characters, with a cursor that follows it.
+        """As many memories as fit in ``budget`` characters, with a cursor that follows them.
 
-        When the page is too long the entries that fit are asked for again with that
-        many as the limit, so the cursor of the second answer starts after the last
-        one shown and not after the last one fetched.
+        The characters are the only bound. The entries that fit are asked for again
+        with that many as the limit, so the cursor of the second answer starts after
+        the last one shown and not after the last one fetched (a server's cursor is
+        its own, and cannot be computed here).
         """
         page = await self.recall_page(user_id, agent, query=query, cursor=cursor, **kwargs)
         room = budget - _FRAME_CHARS
@@ -597,7 +602,7 @@ class BaseMemoryManager(BaseModel, ABC):
         asked = query.strip() or None
         try:
             page = await self._fitting_page(
-                user_id, agent, query=asked, cursor=cursor or None, budget=20_000
+                user_id, agent, query=asked, cursor=cursor or None, budget=RECALL_TOOL_CHARS
             )
         except Exception as exc:
             get_logger().warning(f"memory: recall failed: {type(exc).__name__}")

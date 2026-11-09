@@ -102,9 +102,9 @@ class TestWhatTheWizardWrites:
 
     def test_a_memory_tuned_by_hand_survives_when_the_choice_is_the_same(self):
         raw = written(base(), MemoryChoice(scope="global"))
-        raw["agents"][0]["memory_manager"]["page_size"] = 7
+        raw["agents"][0]["memory_manager"]["recency_limit"] = 7
         again = written(raw, MemoryChoice(scope="global"))
-        assert manager_of(again)["page_size"] == 7
+        assert manager_of(again)["recency_limit"] == 7
 
     def test_changing_the_scope_writes_the_new_path(self):
         raw = written(base(), MemoryChoice(scope="global"))
@@ -339,10 +339,10 @@ class TestWhoDecidesWhatToRemember:
 
     def test_changing_it_keeps_what_was_tuned_by_hand(self):
         raw = written(base(), MemoryChoice(scope="global"))
-        raw["agents"][0]["memory_manager"]["page_size"] = 7
+        raw["agents"][0]["memory_manager"]["recency_limit"] = 7
         again = written(raw, MemoryChoice(scope="global", decided_by=MEMORY_DECIDER_MODEL))
         assert manager_of(again)["execution_mode"] == "automatic"
-        assert manager_of(again)["page_size"] == 7
+        assert manager_of(again)["recency_limit"] == 7
 
     def test_not_asked_keeps_the_mode_the_file_has(self):
         raw = written(base(), MemoryChoice(scope="global", decided_by=MEMORY_DECIDER_MODEL))
