@@ -21,7 +21,11 @@ from domyn.agents.hooks import FunctionHook, HookFactory, HookPhase, HookType
 from domyn.agents.instructions import AgentInstructions, InstructionRuntime
 from domyn.agents.llm import BaseLLMProvider, LLMProviderFactory
 from domyn.agents.logger import get_logger
-from domyn.agents.memory.managers import BaseMemoryManager, MemoryExecutionMode
+from domyn.agents.memory.managers import (
+    MEMORY_HOOK_NAME,
+    BaseMemoryManager,
+    MemoryExecutionMode,
+)
 from domyn.agents.planner_strategy import BasePlannerStrategy, PlannerStrategyFactory
 from domyn.agents.skills import LoadedSkills, SkillRequiredError, SkillsRuntime
 from domyn.agents.skills.integration import skill_tools
@@ -184,8 +188,9 @@ class Agent(BaseAgent):
                 self.tools.append(memory_tool)
                 self.tools.extend(self._memory_reading_tools())
             elif self.memory_manager.execution_mode == MemoryExecutionMode.AUTOMATIC:
+                # Its HOOK_END carries the fact it stored, for an interface to show.
                 memory_post_hook = FunctionHook(
-                    name="update_memory",
+                    name=MEMORY_HOOK_NAME,
                     fun=self.memory_manager.update_memory,  # type: ignore
                     trigger=HookPhase.POST_AGENT_CALL,
                     type=HookType.LISTENER,

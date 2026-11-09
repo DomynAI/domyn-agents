@@ -66,6 +66,7 @@ from rich.text import Text
 from domyn.agents.core import BaseEvent, ExecutionEventType
 from domyn.agents.interfaces.cli.calls import as_written, summary
 from domyn.agents.interfaces.cli.markdown import MarkdownStream, render_markdown
+from domyn.agents.memory.managers.base import MEMORY_HOOK_NAME
 
 if TYPE_CHECKING:
     from rich.console import Console
@@ -293,6 +294,8 @@ class EventRenderer:
             pass
         elif kind is ExecutionEventType.TOOL_UPDATE and self._progress_of(event):
             self._render_progress(event)
+        elif kind is ExecutionEventType.HOOK_END and self._remembered_by_hook(event):
+            self._render_remembered(event)
         elif kind in _VERBOSE_ONLY:
             self._render_lifecycle(event)
         elif self._verbose:
@@ -810,6 +813,31 @@ class EventRenderer:
             line.append(f" {shown}", style=self._theme.style("tool_call"))
         # One line whatever the call: cropped at the edge, never wrapped. A Text,
         # so `[/]` is not markup and `:a:` no emoji.
+        self._console.print(line, no_wrap=True, overflow="ellipsis")
+
+    @staticmethod
+    def _remembered_by_hook(event: BaseEvent) -> str:
+        """The fact the automatic memory stored after the agent, if this event is that."""
+        if (event.metadata or {}).get("hook_name") != MEMORY_HOOK_NAME:
+            return ""
+        return " ".join(" ".join(p.text for p in event.content or [] if p.text).split())
+
+    def _render_remembered(self, event: BaseEvent) -> None:
+        """A fact the automatic memory stored, drawn like the call of a tool.
+
+        The same yellow as ``remember`` called by the agent, since it is the same
+        thing done for it, with its own label: nothing was called.
+        """
+        self._wrote_work = True
+        line = Text()
+        line.append(
+            f"{_WORK}{self._theme.symbols.tool_call} remembered",
+            style=self._theme.style("tool_name"),
+        )
+        line.append(
+            f" {as_written(self._remembered_by_hook(event))}",
+            style=self._theme.style("tool_call"),
+        )
         self._console.print(line, no_wrap=True, overflow="ellipsis")
 
     def _render_tool_end(self, event: BaseEvent) -> None:

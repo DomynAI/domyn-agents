@@ -241,6 +241,46 @@ class TestTheRemeberedLine:
         assert "remembered: likes tea" not in self.text(buffer)
         assert "Already remembered." in self.text(buffer)
 
+    def hook_end(self, text, name="update_memory"):
+        return BaseEvent(
+            event_type=ExecutionEventType.HOOK_END,
+            author="a",
+            metadata={"hook_name": name},
+            content=[Part(text=text)] if text else [],
+        )
+
+    def test_the_automatic_memory_is_shown_like_a_call(self):
+        renderer, buffer = self.renderer()
+        renderer.render(self.hook_end("The user likes tea"))
+        assert "remembered The user likes tea" in self.text(buffer)
+
+    def test_it_is_drawn_in_the_tool_calls_yellow(self, monkeypatch):
+        """The same two styles as the agent's own `remember` call."""
+        renderer, _ = self.renderer()
+        printed = []
+        renderer._console.print = lambda line, **kw: printed.append(line)
+        # The role, whatever the terminal's colours.
+        monkeypatch.setattr(Theme, "style", lambda self, name: name)
+        renderer.render(self.start("c1", memory_content="likes tea"))
+        renderer.render(self.hook_end("The user likes tea"))
+        call, automatic = printed
+
+        def styles(line):
+            return [str(span.style) for span in line.spans]
+
+        assert styles(automatic) == styles(call)
+        assert styles(call) == ["tool_name", "tool_call"]
+
+    def test_nothing_stored_says_nothing(self):
+        renderer, buffer = self.renderer()
+        renderer.render(self.hook_end(""))
+        assert self.text(buffer).strip() == ""
+
+    def test_another_hook_stays_quiet(self):
+        renderer, buffer = self.renderer()
+        renderer.render(self.hook_end("The user likes tea", name="other"))
+        assert "remembered" not in self.text(buffer)
+
     def test_the_line_cannot_carry_an_escape_sequence(self):
         renderer, buffer = self.renderer()
         renderer.render(self.start("c1", memory_content="red \x1b[31mtext"))
@@ -348,7 +388,9 @@ class TestWhoDecidesWhatToRemember:
         monkeypatch.setattr(
             setup,
             "_ask_decisions",
-            lambda console, theme, current: DecisionsChoice(level="active"),
+            lambda console, theme, current, suggested_url=None: DecisionsChoice(
+                level="active", base_url="http://d:1", model="m"
+            ),
         )
         for name in ("OPENAI_API_KEY", "VLLM_API_KEY", "LLM_API_KEY"):
             monkeypatch.delenv(name, raising=False)
@@ -369,7 +411,9 @@ class TestWhoDecidesWhatToRemember:
         monkeypatch.setattr(
             setup,
             "_ask_decisions",
-            lambda console, theme, current: DecisionsChoice(level="active"),
+            lambda console, theme, current, suggested_url=None: DecisionsChoice(
+                level="active", base_url="http://d:1", model="m"
+            ),
         )
         for name in ("OPENAI_API_KEY", "VLLM_API_KEY", "LLM_API_KEY"):
             monkeypatch.delenv(name, raising=False)
@@ -380,3 +424,68 @@ class TestWhoDecidesWhatToRemember:
                 console, Theme.build(allow_animation=False), path=tmp_path / "config.yaml"
             )
         assert manager_of(result) is None
+
+
+class TestAddingAndRemovingTheDecisionModel:
+    """The decider follows the decision model across runs of the wizard."""
+
+    @pytest.fixture(autouse=True)
+    def wizard(self, monkeypatch):
+        monkeypatch.setattr(select_mod, "_interactive", lambda theme: False)
+        monkeypatch.setattr(
+            setup, "_choose_builtin_skills", lambda console, theme, current: current
+        )
+        for name in ("OPENAI_API_KEY", "VLLM_API_KEY", "LLM_API_KEY"):
+            monkeypatch.delenv(name, raising=False)
+
+    def run(self, monkeypatch, path, decisions: DecisionsChoice, answers: list[str]):
+        monkeypatch.setattr(
+            setup,
+            "_ask_decisions",
+            lambda console, theme, current, suggested_url=None: decisions,
+        )
+        buffer = io.StringIO()
+        console = Console(file=buffer, width=200, force_terminal=False)
+        # provider, model, url, api key, max tokens, context window, then `answers`
+        with patch("builtins.input", side_effect=["openai", "m", "", "", "", "", *answers]):
+            result = setup.run_setup(
+                console,
+                Theme.build(allow_animation=False),
+                existing=yaml.safe_load(path.read_text()) if path.exists() else None,
+                path=path,
+            )
+        return result, buffer.getvalue()
+
+    ON = DecisionsChoice(level="active", base_url="http://d:1", model="m")
+    OFF = DecisionsChoice(level="no")
+
+    def test_removing_it_makes_the_memory_agentic(self, tmp_path, monkeypatch):
+        path = tmp_path / "config.yaml"
+        first, _ = self.run(monkeypatch, path, self.ON, ["global", MEMORY_DECIDER_MODEL])
+        assert manager_of(first)["execution_mode"] == "automatic"
+
+        # No decider question: input() would run out of answers.
+        second, shown = self.run(monkeypatch, path, self.OFF, ["global"])
+        assert "decision_providers" not in second
+        assert manager_of(second)["execution_mode"] == "agentic"
+        assert "the agent saves memories itself" in shown
+
+    def test_adding_it_to_an_agentic_memory_asks_who_decides(self, tmp_path, monkeypatch):
+        path = tmp_path / "config.yaml"
+        first, _ = self.run(monkeypatch, path, self.OFF, ["global"])
+        assert manager_of(first)["execution_mode"] == "agentic"
+
+        second, shown = self.run(monkeypatch, path, self.ON, ["global", MEMORY_DECIDER_MODEL])
+        assert "who decides what to remember" in shown
+        assert manager_of(second)["execution_mode"] == "automatic"
+
+    def test_a_hand_written_automatic_without_a_decision_model_is_kept(self):
+        raw = written(base(), MemoryChoice(scope="global", decided_by=MEMORY_DECIDER_MODEL))
+        assert "decision_providers" not in raw
+        again = configuration_v1_dict_from(
+            *current_settings_from(raw),
+            raw,
+            DecisionsChoice(level="no"),
+            MemoryChoice(scope="global"),
+        )
+        assert manager_of(again)["execution_mode"] == "automatic"

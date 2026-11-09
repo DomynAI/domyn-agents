@@ -44,8 +44,6 @@ from domyn.agents.interfaces.cli.config import (
     DECISION_LEVEL_BLURB,
     DECISION_LEVELS,
     DEFAULT_DECISION_KEY_ENV,
-    DEFAULT_DECISION_MODEL,
-    DEFAULT_DECISION_URL,
     LOCAL_SKILLS_DIRS,
     MEMORY_DECIDER_BLURB,
     MEMORY_DECIDER_MODEL,
@@ -65,6 +63,7 @@ from domyn.agents.interfaces.cli.config import (
     current_decisions_from,
     current_memory_from,
     current_settings_from,
+    decision_url_default,
     describe_configuration_v1,
     describe_project,
     expand_project_dir,
@@ -74,6 +73,7 @@ from domyn.agents.interfaces.cli.config import (
     is_instruction_autodiscovery,
     is_skill_autodiscovery,
     load_credentials_into_environment,
+    memory_loses_its_decider,
     print_config_description,
     read_credentials,
     resolve_api_key,
@@ -430,13 +430,50 @@ def _ask_memory_decider(
     return chosen
 
 
-def _ask_decisions(console: Console, theme: Theme, current: DecisionsChoice) -> DecisionsChoice:
+def _ask_decision_url(console: Console, theme: Theme, current: str, suggested: str | None) -> str:
+    """The decision endpoint: what the file says, else ``suggested``; never invented."""
+    label = f"decision endpoint (empty = {suggested})" if suggested else "decision endpoint"
+    while True:
+        url = _ask(console, theme, label, current or suggested or "", default=suggested or "")
+        if url:
+            return url
+        console.print(
+            "  a decision model needs an endpoint (Ctrl-B goes back to choose no)",
+            style=theme.style("warning"),
+            highlight=False,
+        )
+
+
+def _ask_decision_model(console: Console, theme: Theme, current: str) -> str:
+    """The decision model's name, as the server exposes it: what the file says, never invented."""
+    while True:
+        model = _ask(console, theme, "decision model name", current, default="")
+        if model:
+            return model
+        console.print(
+            "  a decision model needs a model name (Ctrl-B goes back to choose no)",
+            style=theme.style("warning"),
+            highlight=False,
+        )
+
+
+def _ask_decisions(
+    console: Console,
+    theme: Theme,
+    current: DecisionsChoice,
+    suggested_url: str | None = None,
+) -> DecisionsChoice:
     """Offer a decision model, and say on screen what each level hands over.
 
     Four levels rather than yes/no because the interesting question is not
     whether a model is configured but where it is allowed to matter, and the
     step that lets it answer at the approval gate is the one worth choosing
     deliberately. See ``DECISION_LEVELS``.
+
+    The endpoint has no default: only ``suggested_url`` (the main model's vLLM
+    server, `decision_url_default`) is offered, pre-filled when the file names none
+    and taken back by an erased field. Without one an endpoint must be typed. The
+    model name has none at all: an erased one is asked again.
 
     Ctrl-B on the endpoint, the model name or the key goes back to the level.
     """
@@ -461,25 +498,13 @@ def _ask_decisions(console: Console, theme: Theme, current: DecisionsChoice) -> 
             highlight=False,
         )
         try:
-            base_url = _ask(
-                console,
-                theme,
-                f"decision endpoint (empty = {DEFAULT_DECISION_URL})",
-                current.base_url,
-                default=DEFAULT_DECISION_URL,
-            )
+            base_url = _ask_decision_url(console, theme, current.base_url, suggested_url)
             console.print(
                 "  the model name the SERVER exposes, which is not always the short one",
                 style=theme.style("meta"),
                 highlight=False,
             )
-            model = _ask(
-                console,
-                theme,
-                f"decision model name (empty = {DEFAULT_DECISION_MODEL})",
-                current.model,
-                default=DEFAULT_DECISION_MODEL,
-            )
+            model = _ask_decision_model(console, theme, current.model)
             key_env, api_key = _ask_decision_key(console, theme, current.api_key_env)
         except GoBack:
             _back_to(mark)
@@ -1826,10 +1851,25 @@ def run_setup(
         )
 
     def ask_decisions(d: _Draft) -> None:
-        d.decisions = _ask_decisions(console, theme, current_decisions)
+        main_type, main_url = (
+            (d.provider.type, d.provider.url) if d.keep_model else (d.provider_type, d.url)
+        )
+        d.decisions = _ask_decisions(
+            console,
+            theme,
+            current_decisions,
+            decision_url_default(main_type, main_url),
+        )
 
     def ask_memory(d: _Draft) -> None:
         d.memory = _ask_memory(console, theme, current_memory_from(existing))
+        if memory_loses_its_decider(existing, d.decisions, d.memory):
+            console.print(
+                "  without a decision model the agent saves memories itself, "
+                "with its remember tool",
+                style=theme.style("meta"),
+                highlight=False,
+            )
 
     def ask_memory_decider(d: _Draft) -> None:
         assert d.memory is not None and d.decisions is not None

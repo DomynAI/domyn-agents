@@ -723,8 +723,6 @@ DECISION_LEVEL_BLURB: dict[str, str] = {
     "active, approvals too": "also let it allow or deny a tool call",
 }
 
-DEFAULT_DECISION_URL = "http://localhost:28080"
-DEFAULT_DECISION_MODEL = "Cloudflare/clef"
 DEFAULT_DECISION_KEY_ENV = "DECISIONS_API_KEY"
 
 
@@ -736,8 +734,12 @@ class DecisionsChoice(BaseModel):
     """
 
     level: str = "no"
-    base_url: str = DEFAULT_DECISION_URL
-    model: str = DEFAULT_DECISION_MODEL
+    #: No default: a decision endpoint is somewhere only the user knows, except
+    #: that a vLLM deployment of the main model is offered (`decision_url_default`).
+    base_url: str = ""
+    #: No default either: it is the name the server exposes, which only the user
+    #: (or the server's refusal, which the wizard's probe prints) can tell.
+    model: str = ""
     #: Name of the variable holding the endpoint's key; the key itself is never
     #: in the choice, nor in the YAML (which gets ``${NAME}``).
     api_key_env: str | None = None
@@ -745,6 +747,24 @@ class DecisionsChoice(BaseModel):
     @property
     def enabled(self) -> bool:
         return self.level != "no" and bool(self.base_url) and bool(self.model)
+
+
+def decision_url_default(provider_type: str, url: str | None) -> str | None:
+    """The decision endpoint the wizard offers: the main model's vLLM server, else none.
+
+    A decision model is often served beside the chat model, so for ``vllm`` the
+    server's base URL (``http://host:8000`` for ``http://host:8000/v1/chat/completions``)
+    is offered, to be changed when it lives elsewhere; any other provider's endpoint
+    says nothing about where a decision model is.
+    """
+    if provider_type != "vllm" or not url or not url.strip():
+        return None
+    parts = urlsplit(url.strip())
+    path = parts.path.rstrip("/")
+    for suffix in (_CHAT_COMPLETIONS, "/v1"):
+        if path.endswith(suffix):
+            path = path[: -len(suffix)]
+    return urlunsplit(parts._replace(path=path, query="", fragment="")).rstrip("/") or None
 
 
 def current_decisions_from(raw: dict[str, Any] | None) -> DecisionsChoice:
@@ -781,8 +801,8 @@ def current_decisions_from(raw: dict[str, Any] | None) -> DecisionsChoice:
 
     return DecisionsChoice(
         level=level,
-        base_url=str(entry.get("base_url") or DEFAULT_DECISION_URL),
-        model=str(entry.get("model") or DEFAULT_DECISION_MODEL),
+        base_url=str(entry.get("base_url") or ""),
+        model=str(entry.get("model") or ""),
         api_key_env=_env_reference(entry.get("api_key")),
     )
 
@@ -1027,7 +1047,33 @@ def configuration_v1_dict_from(
         agent_dict["tool_bundles"] = [CLI_DEFAULT_TOOL_BUNDLE_NAME]
 
     kept = _keep_unowned(config, existing)
+    if memory_loses_its_decider(existing, decisions, memory):
+        assert memory is not None
+        memory = memory.model_copy(update={"decided_by": MEMORY_DECIDER_AGENT})
     return _apply_memory(_apply_decisions(kept, decisions), memory, existing)
+
+
+def memory_loses_its_decider(
+    existing: dict[str, Any] | None,
+    decisions: DecisionsChoice | None,
+    memory: MemoryChoice | None,
+) -> bool:
+    """Whether this run removes the decision model that decides what to remember.
+
+    ``automatic`` memory without a decision model falls back to the agent's model
+    deciding after every turn: an extra call each turn, and a setting the wizard
+    cannot offer. So when the run that removes the decision model keeps a memory the
+    decision model decided for, the memory becomes ``agentic`` (the agent's
+    ``remember`` tool), as a memory set up without a decision model is. An
+    ``automatic`` written by hand into a file with no decision model is left alone:
+    nothing is being removed there.
+    """
+    if decisions is None or decisions.enabled or memory is None or not memory.enabled:
+        return False
+    if not (existing or {}).get("decision_providers"):
+        return False
+    decided_by = memory.decided_by or current_memory_from(existing).decided_by
+    return decided_by == MEMORY_DECIDER_MODEL
 
 
 def _apply_decisions(config: dict[str, Any], decisions: DecisionsChoice | None) -> dict[str, Any]:

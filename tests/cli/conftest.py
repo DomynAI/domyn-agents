@@ -216,7 +216,9 @@ def no_decision_or_memory_prompt(
     module = request.module.__name__
     if not module.endswith("test_setup_decisions"):
         monkeypatch.setattr(
-            setup, "_ask_decisions", lambda console, theme, current: DecisionsChoice()
+            setup,
+            "_ask_decisions",
+            lambda console, theme, current, suggested_url=None: DecisionsChoice(),
         )
     if not module.endswith("test_setup_memory"):
         monkeypatch.setattr(setup, "_ask_memory", lambda console, theme, current: MemoryChoice())
