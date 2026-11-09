@@ -12,6 +12,7 @@ row the cleaning removes has its decision recorded.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -110,6 +111,78 @@ class TestTheRunFolder:
         )
         table, _ = data_utils.load_table(tmp_path / "run")
         assert list(table["a"]) == [1.0]
+
+
+class TestLinksInTheFilesFolder:
+    """files/ is the scripts' own folder, and they write there by name: a link planted in
+    it (committed to a cloned repository, say) would have them overwrite the file it leads
+    to, and record_run would first copy that file's lines into run.sh. So a link there
+    stops the script before it reads or writes anything."""
+
+    SECRET = "token=do-not-copy\n"
+
+    @pytest.fixture
+    def source(self, tmp_path: Path) -> Path:
+        source = tmp_path / "data.csv"
+        source.write_text("a,b\n1,x\n2,y\n")
+        return source
+
+    @pytest.fixture
+    def outside(self, tmp_path: Path) -> Path:
+        outside = tmp_path / "outside" / "secret.txt"
+        outside.parent.mkdir()
+        outside.write_text(self.SECRET)
+        return outside
+
+    def prepare(self, source: Path, out: Path) -> subprocess.CompletedProcess[str]:
+        return run(DATA_SKILLS / "prepare_table.py", "--data", str(source), "--out", str(out))
+
+    def assert_refused(self, tmp_path: Path, outside: Path, source: Path, out: Path) -> None:
+        before = sorted(tmp_path.rglob("*"))
+        result = self.prepare(source, out)
+        assert result.returncode != 0
+        assert "use a new --out folder" in result.stderr.lower(), result.stderr
+        assert outside.read_text() == self.SECRET, "the file outside was written over"
+        assert sorted(tmp_path.rglob("*")) == before, "something was written"
+
+    @pytest.mark.parametrize("name", ["run.sh", "table.csv"])
+    def test_a_symlinked_file(self, tmp_path: Path, outside: Path, source: Path, name: str) -> None:
+        files = tmp_path / "analysis" / "files"
+        files.mkdir(parents=True)
+        (files / name).symlink_to(outside)
+        self.assert_refused(tmp_path, outside, source, tmp_path / "analysis")
+
+    def test_a_hard_linked_file(self, tmp_path: Path, outside: Path, source: Path) -> None:
+        files = tmp_path / "analysis" / "files"
+        files.mkdir(parents=True)
+        os.link(outside, files / "run.sh")
+        self.assert_refused(tmp_path, outside, source, tmp_path / "analysis")
+
+    @pytest.mark.parametrize("given", ["analysis", "analysis/files"])
+    def test_a_symlinked_files_folder(
+        self, tmp_path: Path, outside: Path, source: Path, given: str
+    ) -> None:
+        (tmp_path / "analysis").mkdir()
+        (tmp_path / "analysis" / "files").symlink_to(outside.parent)
+        self.assert_refused(tmp_path, outside, source, tmp_path / given)
+
+    def test_a_symlinked_fonts_folder(self, tmp_path: Path, outside: Path, source: Path) -> None:
+        files = tmp_path / "analysis" / "files"
+        files.mkdir(parents=True)
+        (files / "fonts").symlink_to(outside.parent)
+        self.assert_refused(tmp_path, outside, source, tmp_path / "analysis")
+
+    def test_a_link_in_the_fonts_folder(self, tmp_path: Path, outside: Path, source: Path) -> None:
+        fonts = tmp_path / "analysis" / "files" / "fonts"
+        fonts.mkdir(parents=True)
+        (fonts / "DMSans-Regular.ttf").symlink_to(outside)
+        self.assert_refused(tmp_path, outside, source, tmp_path / "analysis")
+
+    def test_a_rerun_over_its_own_files_is_not_refused(self, tmp_path: Path, source: Path) -> None:
+        out = tmp_path / "analysis"
+        assert self.prepare(source, out).returncode == 0
+        result = self.prepare(source, out)
+        assert result.returncode == 0, result.stderr
 
 
 class TestRunSh:
