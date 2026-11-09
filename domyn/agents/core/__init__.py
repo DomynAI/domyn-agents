@@ -314,6 +314,12 @@ METADATA_EXTERNAL_PART_AGENT_VISIBLE = "agent_visible"
 # message apart from the turn's own opening USER_INPUT, which carries the same
 # interaction_id and which sub-agents are meant to see.
 METADATA_STEERING = "steering"
+# Set on LLM_END by the tool-use planners: what the call cost, as the provider
+# counted it, normalized by ``TokenUsage`` (``llm/base.py``) — ``input_tokens``,
+# ``output_tokens``, ``total_tokens``, and ``cache_read_tokens``,
+# ``cache_write_tokens``, ``reasoning_tokens`` when reported, plus ``requests``
+# (retries within one LLM_END are summed). Absent when the provider reported none.
+TOKEN_USAGE_METADATA_KEY = "token_usage"
 # Generic agent-side failure surfaced through ERROR_OCCURRED events.
 AGENT_ERROR_CODE = "AGENT_ERROR"
 AGENT_ERROR_MESSAGE = "The agent encountered an error while responding."
