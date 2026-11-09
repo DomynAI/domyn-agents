@@ -110,6 +110,33 @@ class TestBuildingTheEnvironment:
         SessionEnvironment(tmp_path).prepare("c1")
         assert (conversations / ".gitignore").read_text() == "mine\n"
 
+    @pytest.mark.parametrize(
+        "linked", [".domyn", ".domyn/conversations", ".domyn/conversations/c1"]
+    )
+    def test_a_linked_folder_on_the_way_is_not_followed(self, tmp_path: Path, linked: str) -> None:
+        """A cloned repository can commit any of these as a link: following it
+        would build the venv, and write the ignore file, wherever it points."""
+        root = tmp_path / "project"
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        link = root / linked
+        link.parent.mkdir(parents=True)
+        link.symlink_to(elsewhere, target_is_directory=True)
+
+        assert SessionEnvironment(root).prepare("c1") is None
+        assert list(elsewhere.iterdir()) == []
+
+    def test_a_linked_ignore_file_is_not_written_through(self, tmp_path: Path) -> None:
+        root = tmp_path / "project"
+        conversations = root / ".domyn" / "conversations"
+        conversations.mkdir(parents=True)
+        target = tmp_path / "elsewhere" / "planted"
+        target.parent.mkdir()
+        (conversations / ".gitignore").symlink_to(target)
+
+        SessionEnvironment(root).prepare("c1")
+        assert not target.exists()
+
     def test_failure_degrades_instead_of_blocking(self, tmp_path: Path) -> None:
         """Losing the isolated environment means running in the ambient one,
         which is how things worked before. Refusing to run the command at all

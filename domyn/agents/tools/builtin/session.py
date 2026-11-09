@@ -117,6 +117,13 @@ class SessionEnvironment:
             return paths
 
         try:
+            # A cloned repository can commit `.domyn` or `.domyn/conversations` as a
+            # link; mkdir and open would follow it and build the venv wherever it points.
+            here = self._root
+            for part in paths.home.relative_to(self._root).parts:
+                here = here / part
+                if here.is_symlink():
+                    raise OSError(f"{here} is a link")
             paths.output.mkdir(parents=True, exist_ok=True)
             _ignore_from_version_control(paths.home.parent)
             if not paths.python.exists():
