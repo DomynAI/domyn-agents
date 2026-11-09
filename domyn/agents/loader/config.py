@@ -3,7 +3,6 @@ from collections.abc import Iterable
 from queue import Queue
 from typing import Any
 
-import yaml
 from pydantic import BaseModel, Field, field_validator
 
 from domyn.agents.agents import Agent, AgentFactory, DelegateAgent
@@ -1072,4 +1071,3 @@ class ConfigurationV1(BaseModel):
         """Load Configuration from a YAML file."""
         config_dict = load_from_file(file_path)
         return cls.from_dict(config_dict)
-
