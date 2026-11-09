@@ -33,7 +33,7 @@ from domyn.agents.interfaces.cli.config import (
     unique_paths,
 )
 from domyn.agents.interfaces.cli.prompt import interactive_terminal
-from domyn.agents.interfaces.cli.repl import Repl
+from domyn.agents.interfaces.cli.repl import APPLICATION_NAME, USER_ID, Repl
 from domyn.agents.interfaces.cli.setup import run_setup
 from domyn.agents.loader import load_application_from_file
 from domyn.agents.logger import get_logger
@@ -452,8 +452,6 @@ async def _resolve_resume(theme: Theme, resume: str) -> Any:
     Done before the REPL is built rather than inside it, so a bad id fails at
     the point the user typed it instead of one prompt later.
     """
-    from domyn.agents.interfaces.cli.repl import APPLICATION_NAME, USER_ID
-
     manager = conversations.build_manager()
     if resume:
         found = await conversations.find(manager, APPLICATION_NAME, USER_ID, resume)
@@ -467,6 +465,30 @@ async def _resolve_resume(theme: Theme, resume: str) -> Any:
     return conversations.pick(
         console, theme, await conversations.recent(manager, APPLICATION_NAME, USER_ID)
     )
+
+
+def _project_of_conversation(conversation_id: str, theme: Theme) -> str | None:
+    """The project holding ``conversation_id`` when the default history does not.
+
+    The global history is asked first; only when it has no such conversation are the
+    projects', in name order. Says which project is being used.
+    """
+
+    async def search() -> str | None:
+        manager = conversations.build_manager()
+        if await conversations.find(manager, APPLICATION_NAME, USER_ID, conversation_id):
+            return None
+        return await conversations.project_holding(APPLICATION_NAME, USER_ID, conversation_id)
+
+    name = asyncio.run(search())
+    if name is not None:
+        console.print(
+            f"  Conversation {conversation_id} is in project {name}: using it.",
+            style=theme.style("meta"),
+            highlight=False,
+            markup=False,
+        )
+    return name
 
 
 def _run_command_for(file: Path | None, agent_name: str | None) -> str:
@@ -666,6 +688,27 @@ def run_command(
     theme = Theme.build(allow_animation=not no_banner)
     config: dict[str, Any] | None = None
     config_file: Path | None = None
+    # `domyn run "some question"` is what a user naturally types once FILE is
+    # optional, and typer would bind that single argument to FILE. Treat a first
+    # argument that is not an agent file as the prompt instead of failing with a
+    # confusing "File not found".
+    if file is not None and prompt is None and not _looks_like_agent_file(file):
+        prompt, file = str(file), None
+
+    # `--resume` takes its id as the next word rather than as an option value.
+    # Typer builds `is_flag` itself and mis-parses an option declared to take an
+    # optional one: `--resume --no-banner` resolved the id to "--no-banner".
+    # Reading the positional is also what the command already does to tell an
+    # agent file from a prompt.
+    resume_id: str | None = None
+    if resume and prompt is not None:
+        resume_id, prompt = prompt, None
+
+    # An id kept in a project's history opens that project, whichever folder this
+    # runs in; with an agent file the history is the default one.
+    if project is None and resume_id is not None and file is None:
+        project = _project_of_conversation(resume_id, theme)
+
     # Before anything reads a path: the config, the history `--resume` opens and the
     # default instructions all come from the project's folder.
     select_project(project, console, theme, runs_code=True)
@@ -691,22 +734,6 @@ def run_command(
     # is read with input() and needs nothing.
     if interactive_terminal():
         install_cli_requirements_here()
-
-    # `domyn run "some question"` is what a user naturally types once FILE is
-    # optional, and typer would bind that single argument to FILE. Treat a first
-    # argument that is not an agent file as the prompt instead of failing with a
-    # confusing "File not found".
-    if file is not None and prompt is None and not _looks_like_agent_file(file):
-        prompt, file = str(file), None
-
-    # `--resume` takes its id as the next word rather than as an option value.
-    # Typer builds `is_flag` itself and mis-parses an option declared to take an
-    # optional one: `--resume --no-banner` resolved the id to "--no-banner".
-    # Reading the positional is also what the command already does to tell an
-    # agent file from a prompt.
-    resume_id: str | None = None
-    if resume and prompt is not None:
-        resume_id, prompt = prompt, None
 
     try:
         if file is None:

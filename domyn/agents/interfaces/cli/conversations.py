@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from domyn.agents.interfaces.cli.config import config_dir
+from domyn.agents.interfaces.cli.config import config_dir, list_projects, projects_dir
 from domyn.agents.logger import get_logger
 
 if TYPE_CHECKING:
@@ -44,10 +44,11 @@ def store_path() -> Path:
     return config_dir() / STORE_FILENAME
 
 
-def build_manager() -> BaseConversationManager:
+def build_manager(path: Path | None = None) -> BaseConversationManager:
+    """The store at ``path``, by default the one beside the active config."""
     from domyn.agents.conversation_manager import SqliteConversationManager
 
-    path = store_path()
+    path = path or store_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     return SqliteConversationManager(path=str(path))
 
@@ -271,3 +272,20 @@ async def find(
         get_logger().warning(f"could not read conversation: {type(exc).__name__}")
         get_logger().debug(f"conversation read detail: {exc}")
         return None
+
+
+async def project_holding(application_name: str, user_id: str, conversation_id: str) -> str | None:
+    """The name of the project whose history holds ``conversation_id``, or ``None``.
+
+    For `domyn run --resume <id>` with no ``--project``: ids are random, so the first
+    project that has the conversation is the one it belongs to, and no check for
+    duplicates across projects is made. Only the stores of projects under
+    ``~/.domyn/projects`` are read, and none is created.
+    """
+    for name in list_projects():
+        path = projects_dir() / name / STORE_FILENAME
+        if not path.is_file():
+            continue
+        if await find(build_manager(path), application_name, user_id, conversation_id) is not None:
+            return name
+    return None
