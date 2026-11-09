@@ -250,3 +250,79 @@ class TestCustomLLMProviderStreaming:
                 [LLMMessage(role="user", content="Hi")]
             ):
                 pass
+
+
+def _ok(captured: dict):
+    def capture(request):
+        captured["headers"] = dict(request.headers)
+        if b'"stream": true' in request.content or b'"stream":true' in request.content:
+            return httpx.Response(200, content=_sse(_delta("ok")))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    return capture
+
+
+class TestCustomLLMProviderApiKey:
+    """The CLI writes `api_key: ${LLM_API_KEY}`: it used to be dropped, and every request
+    went out without credentials (401)."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_the_key_from_a_config_is_sent_as_a_bearer(self):
+        from domyn.agents.llm import LLMProviderFactory
+
+        provider = LLMProviderFactory.from_config(
+            {"type": "custom", "model_name": "m", "url": ENDPOINT, "api_key": "k"}
+        )
+        captured: dict = {}
+        respx.post(ENDPOINT).mock(side_effect=_ok(captured))
+
+        await provider.generate([LLMMessage(role="user", content="Hi")])
+
+        assert captured["headers"]["authorization"] == "Bearer k"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_streaming_sends_the_key(self):
+        provider = CustomLLMProvider(model_name="m", url=ENDPOINT, api_key="k")
+        captured: dict = {}
+        respx.post(ENDPOINT).mock(side_effect=_ok(captured))
+
+        async for _ in provider.generate_streaming([LLMMessage(role="user", content="Hi")]):
+            pass
+
+        assert captured["headers"]["authorization"] == "Bearer k"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_no_key_no_header(self):
+        provider = CustomLLMProvider(model_name="m", url=ENDPOINT)
+        captured: dict = {}
+        respx.post(ENDPOINT).mock(side_effect=_ok(captured))
+
+        await provider.generate([LLMMessage(role="user", content="Hi")])
+
+        assert "authorization" not in captured["headers"]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_an_authorization_header_wins_over_the_key(self):
+        provider = CustomLLMProvider(
+            model_name="m", url=ENDPOINT, api_key="k", headers={"authorization": "Token own"}
+        )
+        captured: dict = {}
+        respx.post(ENDPOINT).mock(side_effect=_ok(captured))
+
+        await provider.generate([LLMMessage(role="user", content="Hi")])
+
+        assert captured["headers"]["authorization"] == "Token own"
+
+    def test_the_models_lookup_carries_the_key_and_the_headers(self):
+        provider = CustomLLMProvider(
+            model_name="m", url=ENDPOINT, api_key="k", headers={"X-Team": "a"}
+        )
+
+        assert provider._context_window_headers() == {
+            "Authorization": "Bearer k",
+            "X-Team": "a",
+        }

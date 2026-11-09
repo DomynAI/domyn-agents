@@ -926,6 +926,23 @@ class TestTheBrowserSettingsSurviveTheWizard:
         assert fields["browser allowed_domains"] == "(any public site)"
 
 
+@pytest.mark.parametrize(
+    ("typed", "endpoint"),
+    [
+        ("http://host:8000", "http://host:8000/v1/chat/completions"),
+        ("https://gw/v1", "https://gw/v1/chat/completions"),
+        ("https://gw/api/v2/", "https://gw/api/v2/chat/completions"),
+        ("https://gw/serve/chat/completions", "https://gw/serve/chat/completions"),
+        ("https://gw/vllm/qwen?key=1", "https://gw/vllm/qwen/v1/chat/completions?key=1"),
+        ("https://gw/v1beta", "https://gw/v1beta/v1/chat/completions"),
+    ],
+)
+def test_chat_completions_url(typed: str, endpoint: str) -> None:
+    from domyn.agents.interfaces.cli.config import chat_completions_url
+
+    assert chat_completions_url(typed) == endpoint
+
+
 class TestWhetherTheModelReadsImages:
     """`vision` is found by setup and written on the provider entry: what the wizard
     does not read back is lost on the next `domyn setup`, and what the loader does
