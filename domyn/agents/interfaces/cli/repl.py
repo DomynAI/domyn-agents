@@ -33,7 +33,13 @@ from rich.text import Text
 
 from domyn.agents.agents import Agent
 from domyn.agents.audio import Transcriber, TranscriptionError, resolve_transcriber
-from domyn.agents.core import ApprovalType, BaseEvent, ExecutionEventType, Part
+from domyn.agents.core import (
+    TOKEN_USAGE_METADATA_KEY,
+    ApprovalType,
+    BaseEvent,
+    ExecutionEventType,
+    Part,
+)
 from domyn.agents.decisions import attach_decisions, runtime_of
 from domyn.agents.instructions import (
     InstructionRuntime,
@@ -82,6 +88,7 @@ from domyn.agents.interfaces.cli.voice import (
     VoiceError,
     VoiceInput,
 )
+from domyn.agents.llm.base import TokenUsage
 from domyn.agents.loader import load_application_from_file
 from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.context_management.budget import (
@@ -107,6 +114,25 @@ def _duration(seconds: float) -> str:
         return f"{seconds:.1f}s"
     minutes, rest = divmod(int(seconds), 60)
     return f"{minutes}m {rest:02d}s"
+
+
+def _turn_tokens_text(usage: TokenUsage | None) -> str:
+    """What a turn cost, for the end of its ``Completed in`` line.
+
+    Every model call of the turn added together, sub-agents and approval resumes
+    included: each call sends the whole conversation again, so this is what the turn
+    cost, not how long the conversation is (``/context`` says that). Empty when the
+    provider reported no usage, so the line is then the time alone.
+    """
+    if usage is None or usage.total_tokens is None:
+        return ""
+    text = f" · {context_view.thousands(usage.total_tokens)} tokens"
+    if usage.input_tokens is not None and usage.output_tokens is not None:
+        text += (
+            f" ({context_view.thousands(usage.input_tokens)} in,"
+            f" {context_view.thousands(usage.output_tokens)} out)"
+        )
+    return text
 
 
 def _set_log_level(verbose: bool) -> None:
@@ -399,6 +425,8 @@ class Repl:
             ),
         )
         self._turn_started = 0.0
+        # What the current turn's model calls cost, summed from their LLM_END.
+        self._turn_tokens: TokenUsage | None = None
         # Built on the first /voice, not before: it reads the configuration and
         # may load a speech model, which a session that never talks should not pay.
         self._voice: VoiceInput | None = None
@@ -533,6 +561,7 @@ class Repl:
         self._state.turns += 1
         self._renderer.begin_turn()
         self._turn_started = time.monotonic()
+        self._turn_tokens = None
         if self._reader.enabled:
             # Stopped, not paused, and the spinner does not run at all: the
             # renderer resumes the spinner after every event it draws, so a pause
@@ -562,7 +591,8 @@ class Repl:
                 # Once, at the end: the spinner's clock only ever times one model
                 # call, so this is the only place the whole turn is measured.
                 self._console.print(
-                    f"  Completed in {_duration(time.monotonic() - self._turn_started)}",
+                    f"  Completed in {_duration(time.monotonic() - self._turn_started)}"
+                    f"{_turn_tokens_text(self._turn_tokens)}",
                     style=self._theme.style("meta"),
                     highlight=False,
                 )
@@ -1203,7 +1233,10 @@ class Repl:
         self._console.print(f"  {text}", style=self._theme.style(style_name), highlight=False)
 
     def _record_usage(self, event: BaseEvent) -> None:
-        """Collect the context measurement if the event carries one.
+        """Collect the context measurement, or a model call's cost, if the event carries one.
+
+        ``LLM_END`` carries what its call cost (``token_usage``), added to the turn's
+        total for its ``Completed in`` line.
 
         A manual compaction carries no measurement of its own, only what it
         saved: taken off the last one, so the indicator and ``/context`` do not
@@ -1221,6 +1254,9 @@ class Repl:
                     update={"message_tokens": max(0, usage.message_tokens - saved)}
                 )
             return
+        if event.event_type is ExecutionEventType.LLM_END:
+            self._add_turn_tokens(metadata.get(TOKEN_USAGE_METADATA_KEY))
+            return
         if event.event_type is not ExecutionEventType.LLM_START:
             return
         raw = metadata.get(CONTEXT_USAGE_METADATA_KEY)
@@ -1230,6 +1266,17 @@ class Repl:
             self._state.last_usage = ContextUsage.model_validate(raw)
         except Exception as exc:
             get_logger().debug(f"context usage metadata ignored: {type(exc).__name__}: {exc}")
+
+    def _add_turn_tokens(self, raw: Any) -> None:
+        """Add one model call's cost to the turn's; malformed metadata is ignored."""
+        if not isinstance(raw, dict):
+            return
+        try:
+            usage = TokenUsage.model_validate(raw)
+        except Exception as exc:
+            get_logger().debug(f"token usage metadata ignored: {type(exc).__name__}: {exc}")
+            return
+        self._turn_tokens = usage if self._turn_tokens is None else self._turn_tokens + usage
 
     # --- standing approvals ------------------------------------------------
 
