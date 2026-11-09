@@ -141,12 +141,15 @@ def _ignore_from_version_control(conversations: Path) -> None:
     them findable. It also puts a virtualenv one ``git add -A`` away from being
     committed, and nobody notices until the diff is forty thousand files.
     Written once, never overwritten — if someone edited it they meant to.
+
+    Created exclusively ("x", O_CREAT|O_EXCL), which refuses any existing name,
+    a link included even when it leads nowhere: the folder is in the project, so
+    a cloned repository can commit ``.gitignore`` as a link, and writing through
+    it would create a file wherever it points.
     """
     marker = conversations / ".gitignore"
-    if marker.exists():
-        return
-    with contextlib.suppress(OSError):
-        marker.write_text("# Created by domyn: per-conversation working state.\n*\n")
+    with contextlib.suppress(OSError), open(marker, "x", encoding="utf-8") as f:
+        f.write("# Created by domyn: per-conversation working state.\n*\n")
 
 
 def _create_venv(target: Path) -> None:
