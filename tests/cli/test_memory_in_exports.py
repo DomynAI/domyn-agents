@@ -99,11 +99,11 @@ class TestExportKeepsTheSetting:
         assert _memory_of(_written(dest))["file_path"] == f"{P}/memory.md"  # type: ignore[index]
 
     def test_settings_tuned_by_hand_travel_with_it(self, tmp_path: Path) -> None:
-        dest, _ = _export(tmp_path, _config(f"{P}/memory.md", page_size=7, max_chars=900))
+        dest, _ = _export(tmp_path, _config(f"{P}/memory.md", recency_limit=7, max_chars=900))
 
         memory = _memory_of(_written(dest))
         assert memory is not None
-        assert (memory["page_size"], memory["max_chars"], memory["execution_mode"]) == (
+        assert (memory["recency_limit"], memory["max_chars"], memory["execution_mode"]) == (
             7,
             900,
             "agentic",
@@ -232,13 +232,13 @@ class TestTheImportedProjectsSetup:
     def test_the_wizard_opens_on_the_exported_choice_and_enter_keeps_it(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scope: str
     ) -> None:
-        dest, _ = _export(tmp_path, _config(cfg.memory_file_path(scope), page_size=7))
+        dest, _ = _export(tmp_path, _config(cfg.memory_file_path(scope), recency_limit=7))
         seen = self._wizard(tmp_path, monkeypatch, dest, answer="")
 
         assert [choice.scope for choice in seen] == [scope]
         memory = _memory_of(self._saved(tmp_path))
         assert memory is not None and cfg.current_memory_from(self._saved(tmp_path)).scope == scope
-        assert memory["page_size"] == 7  # the same choice keeps what was tuned
+        assert memory["recency_limit"] == 7  # the same choice keeps what was tuned
 
     def test_the_choice_can_be_changed(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

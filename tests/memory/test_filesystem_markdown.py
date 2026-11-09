@@ -92,9 +92,9 @@ class TestWhichFileIsWhichMemory:
 
     def test_it_is_built_from_yaml_like_any_manager(self, tmp_path):
         built = BaseMemoryManager._registry["filesystem"].from_config(
-            {"type": "filesystem", "file_path": str(tmp_path / "m.md"), "page_size": 5}
+            {"type": "filesystem", "file_path": str(tmp_path / "m.md"), "max_chars": 500}
         )
-        assert isinstance(built, FilesystemMemoryManager) and built.page_size == 5
+        assert isinstance(built, FilesystemMemoryManager) and built.max_chars == 500
 
 
 class TestWhoseMemoryItIs:

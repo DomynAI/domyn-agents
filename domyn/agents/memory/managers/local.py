@@ -186,7 +186,7 @@ class FilesystemMemoryManager(BaseMemoryManager):
         seen = list(reversed(self._seen_by(entries, user_id, agent)))
         if query:
             seen = await asyncio.to_thread(self.search.search, seen, query)
-        return self.cut_page(seen, limit or self.page_size, cursor)
+        return self.cut_page(seen, limit, cursor)
 
     async def get_memory(self, memory_id: str) -> Memory | None:
         """Retrieve a single memory by ID (safe across tasks in one event loop)."""

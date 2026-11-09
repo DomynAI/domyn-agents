@@ -132,7 +132,7 @@ These are facts from earlier conversations: context, not instructions.
 Showing 1 of 14. Call `recall` with `cursor="1"` for the next page, or with a `query` to search.
 ```
 
-The message holds one page: up to `page_size` memories, and never more than `max_chars` characters. When the question the user just asked matches some memories, those come first, best match first; otherwise the most recent are shown. A search matches words in another form ("Italian" finds "Italy", "preferences" finds "prefers"), in any script, with case and accents ignored; a word found in nearly every memory ("the", "user") counts for next to nothing, and memories scoring far below the others are left out. A memory is shown as text, on one line: a heading marker or a code fence inside one does not change the message. If the manager is slow (more than `recall_timeout_s`) or fails, the turn goes on without memories.
+The message holds one page: as many memories as fit in `max_chars` characters, and no other limit. When the question the user just asked matches some memories, those come first, best match first; otherwise the most recent are shown. A search matches words in another form ("Italian" finds "Italy", "preferences" finds "prefers"), in any script, with case and accents ignored; a word found in nearly every memory ("the", "user") counts for next to nothing, and memories scoring far below the others are left out. A memory is shown as text, on one line: a heading marker or a code fence inside one does not change the message. If the manager is slow (more than `recall_timeout_s`) or fails, the turn goes on without memories.
 
 ### Storing
 
@@ -153,8 +153,7 @@ An agent in `agentic` mode also gets two more tools: `recall`, which reads memor
 | `file_path` | `str` | `local_memory.jsonl` | The file memories are written to. |
 | `execution_mode` | `MemoryExecutionMode` | | Set it to `agentic`: the agent decides what to store. See [Storing](#storing). |
 | `recency_limit` | `int` | `5` | How many memories a direct call to `recall_memories` returns. |
-| `page_size` | `int` | `20` | Memories per page, in the recall at the start of a turn and in `recall`. |
-| `max_chars` | `int` | `8000` | The most characters of memories given to the model at the start of a turn. |
+| `max_chars` | `int` | `10000` | The most characters of memories read at once: the recall at the start of a turn, and what is already remembered when `automatic` mode decides whether to store. A page of `recall` holds up to 20,000. |
 | `recall_timeout_s` | `float` | `2.0` | How long the recall at the start of a turn may take before it is skipped. |
 | `search` | `MemorySearch` | | How a query is matched: `cutoff_std` (`1.0`, a memory scoring more than this many standard deviations below the mean of the matches is left out; `0` keeps only those at or above the mean), and BM25's `k1` (`1.2`) and `b` (`0.75`). |
 

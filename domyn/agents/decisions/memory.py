@@ -38,11 +38,6 @@ USE_CASE = "memory"
 #: that pasted a file must not be refused for being over the model's window.
 MAX_SIDE_CHARS = 4_000
 
-#: The most of what is already remembered that is shown beside the exchange: the
-#: memories that match it best, so a fact stored on an earlier turn is not stored
-#: again on every turn that mentions it.
-MAX_KNOWN_CHARS = 4_000
-
 QUESTION = (
     "Below is one exchange between a user and an assistant, and what is already "
     "remembered about the user. Does the user reveal something new about "
