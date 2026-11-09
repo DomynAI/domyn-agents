@@ -105,7 +105,7 @@ if TYPE_CHECKING:
 
 _T = TypeVar("_T")
 
-#: Said after every /memory clear: the file is emptied, the conversation is not,
+#: Said after every /memory clear: the memories are removed, the conversation is not,
 #: so what was said in it (and the memories recalled into it) still reaches the model.
 _CONVERSATION_STILL_HOLDS = (
     " This conversation still holds what was said in it: /clear starts a new one."
@@ -1405,10 +1405,10 @@ class Repl:
             path = getattr(manager, "file_path", None)
             if everything and path is None:
                 # complete_reset on a shared store would remove every user's memories.
-                self._say("/memory clear all empties a memory file, and this memory is not one.")
+                self._say("/memory clear all is for a memory kept in a file, and this is not one.")
                 return
             question = (
-                f"Empty {path}, entries written by hand or by other users included?"
+                f"Remove every memory in {path}, those written by hand or by other users included?"
                 if everything
                 else "Forget everything the agent remembers about you?"
             )

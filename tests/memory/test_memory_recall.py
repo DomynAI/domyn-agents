@@ -95,6 +95,45 @@ class TestPagesForEveryManager:
         assert (await Old().recall_page("u")).items == []
 
 
+class TestAPageCutToItsBudget:
+    """What fits in the characters, read once, with a cursor right after it."""
+
+    @pytest.mark.asyncio
+    async def test_the_default_pages_are_read_once_and_cut(self, tmp_path):
+        class ReadCounting(FilesystemMemoryManager):
+            reads: int = 0
+
+            async def recall_memories(self, *args, **kwargs):
+                object.__setattr__(self, "reads", self.reads + 1)
+                return await super().recall_memories(*args, **kwargs)
+
+        manager = ReadCounting(file_path=str(tmp_path / "m.md"))
+        await fill(manager, [f"fact {i} " + "x" * 200 for i in range(10)])
+        page = await manager._fitting_page("u", _A(), query=None, cursor=None, budget=1_000)
+        assert manager.reads == 1
+        assert 0 < len(page.items) < 10 and page.total == 10
+        assert page.next_cursor == str(len(page.items))
+        rest = await manager.recall_page("u", cursor=page.next_cursor)
+        shown = [m.memory for m in page.items] + [m.memory for m in rest.items]
+        assert shown == [m.memory for m in (await manager.recall_page("u")).items]
+
+    @pytest.mark.asyncio
+    async def test_a_manager_with_pages_of_its_own_is_asked_for_its_cursor(self, tmp_path):
+        class OwnPages(FilesystemMemoryManager):
+            asked: ClassVar[list] = []
+
+            async def recall_page(self, user_id, agent=None, *, limit=None, cursor=None, **kw):
+                self.asked.append(limit)
+                page = await super().recall_page(user_id, agent, limit=limit, cursor=cursor, **kw)
+                return page.model_copy(update={"next_cursor": f"server-{page.next_cursor}"})
+
+        manager = OwnPages(file_path=str(tmp_path / "m.md"))
+        await fill(manager, [f"fact {i} " + "x" * 200 for i in range(10)])
+        page = await manager._fitting_page("u", _A(), query=None, cursor=None, budget=1_000)
+        assert manager.asked == [None, len(page.items)]
+        assert page.next_cursor == f"server-{len(page.items)}"
+
+
 class TestTheRecallAtTheStartOfATurn:
     @pytest.mark.asyncio
     async def test_it_is_markdown_with_a_heading_and_ids(self, md):

@@ -296,6 +296,30 @@ class TestUpdateMemoryFlow:
         assert sent.count("My name is John") == 1
 
     @pytest.mark.asyncio
+    async def test_the_writer_after_a_decision_reads_the_turn_too(self, memory_manager):
+        # Asked after a decision model's yes, it is shown the same conversation as
+        # the writer that decides itself: on a first turn, the interaction history.
+        user_event = BaseEvent(
+            event_type=ExecutionEventType.USER_INPUT,
+            author="user",
+            content=[Part(text="I am Pippo, a comedian in Castelfranco Veneto")],
+        )
+        context = InteractionContext(
+            conversation_id="conv-1",
+            user_id="u1",
+            agent_input=user_event,
+            conversation_history=[],
+            interaction_history=[user_event, user_event],
+        )
+        agent = self._make_agent_mock("NONE")
+
+        await memory_manager.write_memory_content(agent, context, ("Pippo", ""))
+
+        sent = agent.llm_provider.generate.call_args.kwargs["messages"][1].content
+        conversation = sent.split("Latest exchange:")[0]
+        assert conversation.count("Castelfranco Veneto") == 1
+
+    @pytest.mark.asyncio
     async def test_update_memory_skips_when_no(self, memory_manager):
         agent = self._make_agent_mock("StoreMemory: no\nMemoryContent: nothing relevant")
         context = self._make_context()

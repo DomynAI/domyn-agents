@@ -42,6 +42,7 @@ from domyn.agents.llm import BaseLLMProvider
 from domyn.agents.llm.context_window import resolve_context_window
 from domyn.agents.loader import interpolate_env_vars
 from domyn.agents.logger import get_logger
+from domyn.agents.memory.managers.base import MemoryExecutionMode
 from domyn.agents.planner_strategy.context_management.compaction import CompactionConfig
 from domyn.agents.skills import LocalDirSkillSource
 from domyn.agents.skills.catalog import BUILTIN_SKILLS_ROOT
@@ -823,21 +824,39 @@ MEMORY_SCOPE_BLURB: dict[str, str] = {
     "project": "a memory.md in this project's folder, for this project alone",
 }
 
-#: Who decides what goes into the memory, asked only when a decision model is set up.
-#: Each answer is an ``execution_mode`` of the memory manager (`MEMORY_DECIDER_MODES`).
-MEMORY_DECIDER_AGENT = "the agent"
-MEMORY_DECIDER_MODEL = "the decision model"
 
-MEMORY_DECIDER_MODES: dict[str, str] = {
-    MEMORY_DECIDER_AGENT: "agentic",
-    MEMORY_DECIDER_MODEL: "automatic",
-}
+class MemoryDecider(StrEnum):
+    """Who decides what goes into the memory, asked only when a decision model is set up.
+
+    The value is the answer as the wizard shows it; `mode` is the memory manager's
+    ``execution_mode`` it stands for.
+    """
+
+    AGENT = "the agent"
+    MODEL = "the decision model"
+
+    @property
+    def mode(self) -> MemoryExecutionMode:
+        if self is MemoryDecider.MODEL:
+            return MemoryExecutionMode.AUTOMATIC
+        return MemoryExecutionMode.AGENTIC
+
+    @classmethod
+    def of(cls, mode: Any) -> "MemoryDecider":
+        """Who decides for an ``execution_mode`` as a config writes it; none is the default."""
+        written = str(mode or DEFAULT_MEMORY_MODE).lower()
+        return cls.MODEL if written == MemoryExecutionMode.AUTOMATIC else cls.AGENT
+
+
+#: The ``execution_mode`` a memory manager runs with when its config names none:
+#: ``BaseMemoryManager``'s default, so a hand-written entry reads as what it does.
+DEFAULT_MEMORY_MODE = MemoryExecutionMode.AUTOMATIC
 
 MEMORY_DECIDER_BLURB: dict[str, str] = {
-    MEMORY_DECIDER_AGENT: (
+    MemoryDecider.AGENT: (
         "the agent's model saves facts itself with a remember tool, while it answers"
     ),
-    MEMORY_DECIDER_MODEL: (
+    MemoryDecider.MODEL: (
         "after each reply the decision model judges whether it said something worth "
         "keeping; the agent's model only writes it down, and decides when it is unsure"
     ),
@@ -857,8 +876,8 @@ class MemoryChoice(BaseModel):
     """
 
     scope: str = "no"
-    decided_by: str | None = None
-    """`MEMORY_DECIDER_AGENT` or `MEMORY_DECIDER_MODEL`; ``None`` when the wizard did
+    decided_by: MemoryDecider | None = None
+    """Who decides what to remember; ``None`` when the wizard did
     not ask (no decision model), which keeps the mode the file has, or ``agentic``
     for a memory it writes anew."""
 
@@ -879,13 +898,14 @@ def current_memory_from(raw: dict[str, Any] | None) -> MemoryChoice:
     """What the file already says about memory, as the wizard's own state.
 
     A memory manager written by hand is read back as the closest choice: the
-    project's own folder is ``project``, anything else is ``global``.
+    project's own folder is ``project``, anything else is ``global``. One that names
+    no ``execution_mode`` runs as ``automatic`` (`DEFAULT_MEMORY_MODE`), so it is read
+    as decided by the decision model, and the question opens there.
     """
     declared = _memory_manager_of(raw)
     if declared is None:
         return MemoryChoice()
-    automatic = str(declared.get("execution_mode", "")).lower() == "automatic"
-    decided_by = MEMORY_DECIDER_MODEL if automatic else MEMORY_DECIDER_AGENT
+    decided_by = MemoryDecider.of(declared.get("execution_mode"))
     if str(declared.get("file_path", "")).startswith(f"${{{PROJECT_DIR_VAR}}}"):
         return MemoryChoice(scope="project", decided_by=decided_by)
     return MemoryChoice(scope="global", decided_by=decided_by)
@@ -934,7 +954,8 @@ def _apply_memory(
     if not memory.enabled:
         agent_dict.pop("memory_manager", None)
         return config
-    mode = MEMORY_DECIDER_MODES.get(memory.decided_by or "")
+    # The value, not the member: the config is written with yaml.safe_dump.
+    mode = memory.decided_by.mode.value if memory.decided_by else None
     if current_memory_from(existing).scope == memory.scope and "memory_manager" in agent_dict:
         if mode is not None:
             agent_dict["memory_manager"] = {**agent_dict["memory_manager"], "execution_mode": mode}
@@ -942,7 +963,7 @@ def _apply_memory(
     agent_dict["memory_manager"] = {
         "type": "filesystem",
         "file_path": memory_file_path(memory.scope),
-        "execution_mode": mode or "agentic",
+        "execution_mode": mode or MemoryExecutionMode.AGENTIC.value,
     }
     return config
 
@@ -1049,7 +1070,7 @@ def configuration_v1_dict_from(
     kept = _keep_unowned(config, existing)
     if memory_loses_its_decider(existing, decisions, memory):
         assert memory is not None
-        memory = memory.model_copy(update={"decided_by": MEMORY_DECIDER_AGENT})
+        memory = memory.model_copy(update={"decided_by": MemoryDecider.AGENT})
     return _apply_memory(_apply_decisions(kept, decisions), memory, existing)
 
 
@@ -1073,7 +1094,7 @@ def memory_loses_its_decider(
     if not (existing or {}).get("decision_providers"):
         return False
     decided_by = memory.decided_by or current_memory_from(existing).decided_by
-    return decided_by == MEMORY_DECIDER_MODEL
+    return decided_by is MemoryDecider.MODEL
 
 
 def _apply_decisions(config: dict[str, Any], decisions: DecisionsChoice | None) -> dict[str, Any]:
@@ -1667,7 +1688,7 @@ def _memory_items(raw: dict[str, Any]) -> list[ConfigItem]:
         scope = current_memory_from({"entrypoint": agent.get("name"), "agents": [agent]}).scope
         fields = [
             ("type", str(declared.get("type", "?"))),
-            ("mode", str(declared.get("execution_mode", "automatic"))),
+            ("mode", str(declared.get("execution_mode") or DEFAULT_MEMORY_MODE.value)),
             ("scope", scope),
             ("file", str(declared.get("file_path", "(default)"))),
         ]

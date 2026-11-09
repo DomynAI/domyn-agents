@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from collections import OrderedDict
 from collections.abc import Sequence
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
@@ -37,12 +37,34 @@ def _known_section(known: Sequence[str], instruction: str) -> str:
     return f"\n\nAlready remembered about the user:\n{lines}\n\n{instruction}"
 
 
+def _conversation_text(context: InteractionContext) -> str:
+    """The user's messages and the replies of the conversation so far, the turn
+    that just ended included, as the memory writers are shown it.
+
+    The turn that just ended is in ``interaction_history`` when the post-agent hook
+    runs, not yet in ``conversation_history``: reading only the latter gave the LLM
+    an empty conversation on a first turn, and it stored nothing. An event in both
+    is read once.
+    """
+    seen: set[str] = set()
+    texts: list[str] = []
+    for e in [*context.conversation_history, *context.interaction_history]:
+        if e.event_type not in (ExecutionEventType.USER_INPUT, ExecutionEventType.RESPONSE):
+            continue
+        if e.event_id is not None:
+            if e.event_id in seen:
+                continue
+            seen.add(e.event_id)
+        texts.extend(part.text or "" for part in e.content)
+    return "\n".join(texts)
+
+
 #: The name of the ``AUTOMATIC`` mode's post-agent hook, whose ``HOOK_END`` event
 #: carries the fact it stored (none when it stored nothing).
 MEMORY_HOOK_NAME = "update_memory"
 
 
-class MemoryExecutionMode(Enum):
+class MemoryExecutionMode(StrEnum):
     AUTOMATIC = "automatic"
     AGENTIC = "agentic"
 
@@ -255,21 +277,7 @@ class BaseMemoryManager(BaseModel, ABC):
         attributes (memory_extraction_prompt, memory_store_token, etc.). ``known``
         is what is already remembered, shown so that it is not stored again.
         """
-        # The turn that just ended is in `interaction_history` when the post-agent
-        # hook runs, not yet in `conversation_history`: reading only the latter gave
-        # the LLM an empty conversation on a first turn, and it stored nothing.
-        seen: set[str] = set()
-        texts: list[str] = []
-        for e in [*context.conversation_history, *context.interaction_history]:
-            if e.event_type not in (ExecutionEventType.USER_INPUT, ExecutionEventType.RESPONSE):
-                continue
-            if e.event_id is not None:
-                if e.event_id in seen:
-                    continue
-                seen.add(e.event_id)
-            texts.extend(part.text or "" for part in e.content)
-        conversation_parts = "\n".join(texts)
-
+        conversation_parts = _conversation_text(context)
         llm_response = await agent.llm_provider.generate(
             messages=[
                 LLMMessage(role="system", content=self.memory_extraction_prompt),
@@ -314,12 +322,7 @@ class BaseMemoryManager(BaseModel, ABC):
         was decided. It may still answer ``NONE``, which stores nothing, and does
         when what it would write is among ``known``, what is already remembered.
         """
-        conversation = "\n".join(
-            part.text or ""
-            for e in context.conversation_history
-            for part in e.content
-            if e.event_type in [ExecutionEventType.USER_INPUT, ExecutionEventType.RESPONSE]
-        )
+        conversation = _conversation_text(context)
         user, assistant = exchange
         llm_response = await agent.llm_provider.generate(
             messages=[
@@ -375,26 +378,8 @@ class BaseMemoryManager(BaseModel, ABC):
         ``max_chars``; the same recall the turn starts with. Slow or failing,
         it is empty: the decision is then taken as before, never skipped.
         """
-        extra = {"run_config": context.run_config}
         try:
-            async with asyncio.timeout(self.recall_timeout_s):
-                page = await self._fitting_page(
-                    context.user_id,
-                    agent,
-                    query=query.strip() or None,
-                    cursor=None,
-                    budget=self.max_chars,
-                    **extra,
-                )
-                if query.strip() and not page.items:
-                    page = await self._fitting_page(
-                        context.user_id,
-                        agent,
-                        query=None,
-                        cursor=None,
-                        budget=self.max_chars,
-                        **extra,
-                    )
+            page = await self._turn_page(agent, context, query)
         except Exception as exc:
             get_logger().warning(f"memory: could not read what is remembered: {type(exc).__name__}")
             get_logger().debug(f"memory: already-remembered failure detail: {exc}")
@@ -509,10 +494,12 @@ class BaseMemoryManager(BaseModel, ABC):
     ) -> MemoryPage:
         """As many memories as fit in ``budget`` characters, with a cursor that follows them.
 
-        The characters are the only bound. The entries that fit are asked for again
-        with that many as the limit, so the cursor of the second answer starts after
-        the last one shown and not after the last one fetched (a server's cursor is
-        its own, and cannot be computed here).
+        The characters are the only bound. Everything from ``cursor`` on is fetched
+        once and cut where the budget ends. With the default pages, whose cursor is a
+        position in the list, the next cursor is that position plus what fits. A
+        manager with pages of its own (a server) has cursors that cannot be computed
+        here: the entries that fit are asked for again with that many as the limit,
+        so its cursor starts after the last one shown and not after the last fetched.
         """
         page = await self.recall_page(user_id, agent, query=query, cursor=cursor, **kwargs)
         room = budget - _FRAME_CHARS
@@ -523,10 +510,38 @@ class BaseMemoryManager(BaseModel, ABC):
             if used > room and fit > 0:
                 break
             fit += 1
-        if 0 < fit < len(page.items):
-            return await self.recall_page(
-                user_id, agent, query=query, limit=fit, cursor=cursor, **kwargs
+        if not 0 < fit < len(page.items):
+            return page
+        if type(self).recall_page is BaseMemoryManager.recall_page:
+            start = int(cursor) if cursor else 0  # validated by the call above
+            return MemoryPage(
+                items=page.items[:fit], next_cursor=str(start + fit), total=page.total
             )
+        return await self.recall_page(
+            user_id, agent, query=query, limit=fit, cursor=cursor, **kwargs
+        )
+
+    async def _turn_page(
+        self, agent: BaseAgent, context: InteractionContext, query: str
+    ) -> MemoryPage:
+        """What a turn is shown of the memory: the best matches for ``query``, else
+        the most recent, within ``max_chars`` and ``recall_timeout_s``.
+
+        The one recall of a turn, read by the block the model starts with and by the
+        decision to store (what is already remembered). Raises on a timeout or a
+        failing manager; each caller says what that means for it.
+        """
+        asked = query.strip() or None
+        # Passed on: a manager may filter on what the caller configured.
+        extra = {"run_config": context.run_config}
+        async with asyncio.timeout(self.recall_timeout_s):
+            page = await self._fitting_page(
+                context.user_id, agent, query=asked, cursor=None, budget=self.max_chars, **extra
+            )
+            if asked and not page.items:
+                page = await self._fitting_page(
+                    context.user_id, agent, query=None, cursor=None, budget=self.max_chars, **extra
+                )
         return page
 
     async def recall_block(self, agent: BaseAgent, context: "InteractionContext") -> str:
@@ -552,26 +567,7 @@ class BaseMemoryManager(BaseModel, ABC):
             question = (agent_input.content[0].text or "").strip()
         block = ""
         try:
-            async with asyncio.timeout(self.recall_timeout_s):
-                # Passed on: a manager may filter on what the caller configured.
-                extra = {"run_config": context.run_config}
-                page = await self._fitting_page(
-                    context.user_id,
-                    agent,
-                    query=question or None,
-                    cursor=None,
-                    budget=self.max_chars,
-                    **extra,
-                )
-                if question and not page.items:
-                    page = await self._fitting_page(
-                        context.user_id,
-                        agent,
-                        query=None,
-                        cursor=None,
-                        budget=self.max_chars,
-                        **extra,
-                    )
+            page = await self._turn_page(agent, context, question)
             block = render_block(
                 page.items, total=page.total, next_cursor=page.next_cursor, query=question or None
             )
