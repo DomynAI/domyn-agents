@@ -53,7 +53,7 @@ From a Python file, the agent is the one that is not a sub-agent of another; fro
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `--agent-name`, `-a` | `str` | | The variable holding the agent, when a Python file defines more than one. |
-| `--resume` | flag | off | Continues a past conversation: `--resume <conversation_id>`, or `--resume` alone to choose one from a list. The id takes the place of `MESSAGE`, so the two cannot be combined. For a conversation started from a file, give the same `FILE`. |
+| `--resume` | flag | off | Continues a past conversation: `--resume <conversation_id>`, or `--resume` alone to choose one from a list. The id takes the place of `MESSAGE`, so the two cannot be combined. For a conversation started from a file, give the same `FILE`. Without `--project`, an id kept in a project's history is found there. |
 | `--expand-skills` | flag | off | Gives the model every [skill](../guides/skills.md) in full up front, instead of an index it reads from on demand. Uses more of the context window. |
 | `--skill-sections` | flag | off | Lists each skill's sections in the index. Uses more of the context window. |
 | `--verbose`, `-v` | flag | off | Shows internal events: model calls, hooks, hand-offs. |
