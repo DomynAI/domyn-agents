@@ -374,7 +374,7 @@ class TestDiscoveringTheSpacesModels:
             patch("builtins.input", side_effect=["1"]),
             patch.object(setup, "select", wraps=setup.select) as picker,
         ):
-            setup._choose_domyn_model(
+            setup._choose_listed_model(
                 console, theme, {"qwen": "vllm Qwen/Qwen3-32B", "gpt": ""}, current=""
             )
 
@@ -1520,7 +1520,24 @@ class TestAVLLMUrlIsCompleted:
     def test_the_saved_url(
         self, console: MagicMock, theme: Theme, tmp_path: Path, typed: str, saved: str
     ) -> None:
-        with patch("builtins.input", side_effect=["vllm", "m", typed, "", "", "", ""]):
+        with patch("builtins.input", side_effect=["vllm", typed, "", "m", "", "", ""]):
+            result = setup.run_setup(console, theme, path=tmp_path / "config.yaml")
+
+        assert result is not None
+        assert result["llm_providers"][0]["url"] == saved
+
+    @pytest.mark.parametrize(
+        ("typed", "saved"),
+        [
+            ("https://gw/v1", "https://gw/v1/chat/completions"),
+            ("http://host:8000", "http://host:8000/v1/chat/completions"),
+            ("https://gw/serve/chat/completions", "https://gw/serve/chat/completions"),
+        ],
+    )
+    def test_a_custom_url_is_completed_too(
+        self, console: MagicMock, theme: Theme, tmp_path: Path, typed: str, saved: str
+    ) -> None:
+        with patch("builtins.input", side_effect=["custom", typed, "", "m", "", "", ""]):
             result = setup.run_setup(console, theme, path=tmp_path / "config.yaml")
 
         assert result is not None
@@ -1531,7 +1548,7 @@ class TestAVLLMUrlIsCompleted:
     ) -> None:
         with patch(
             "builtins.input",
-            side_effect=["custom", "m", "http://host:8000", "", "", "", ""],
+            side_effect=["openai", "m", "http://host:8000", "", "", "", ""],
         ):
             result = setup.run_setup(console, theme, path=tmp_path / "config.yaml")
 
@@ -1548,7 +1565,7 @@ class TestAVLLMUrlIsCompleted:
         buffer = io.StringIO()
         with patch(
             "builtins.input",
-            side_effect=["vllm", "m", "http://user:pw@host:8000", "", "", "", ""],
+            side_effect=["vllm", "http://user:pw@host:8000", "", "m", "", "", ""],
         ):
             setup.run_setup(Console(file=buffer, width=160), theme, path=tmp_path / "config.yaml")
 

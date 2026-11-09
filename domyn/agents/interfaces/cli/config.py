@@ -97,23 +97,32 @@ REQUIRES_URL = ("domyn", "vllm", "custom")
 _CHAT_COMPLETIONS = "/chat/completions"
 
 
-def vllm_chat_url(url: str) -> str:
-    """The chat completions endpoint for a vLLM server URL typed into ``domyn setup``.
+_VERSION_SEGMENT = re.compile(r"v\d+")
 
-    ``VLLMProvider`` posts to its ``url`` as given, so a server's base URL would be a
-    404 on the first message. ``http://host:8000`` and ``http://host:8000/v1`` both
-    become ``http://host:8000/v1/chat/completions``; a URL already ending in
+# Providers whose URL setup completes to the chat completions endpoint, and whose
+# models it lists from the `/models` beside it: both speak OpenAI's API.
+OPENAI_COMPATIBLE = ("vllm", "custom")
+
+
+def chat_completions_url(url: str) -> str:
+    """The chat completions endpoint for a server URL typed into ``domyn setup``.
+
+    ``VLLMProvider`` and ``CustomLLMProvider`` post to their ``url`` as given, so a
+    server's base URL would be a 404 on the first message. ``http://host:8000`` becomes
+    ``http://host:8000/v1/chat/completions``; a URL ending in a version (``…/v1``,
+    ``…/api/v2``) gets ``/chat/completions`` after it; one already ending in
     ``/chat/completions`` is kept as written, so a gateway serving it under another
     prefix still works. Query and fragment are kept.
 
-    The CLI's only: the provider itself takes its ``url`` verbatim, for the services
-    that build it in code.
+    The CLI's only: the providers themselves take their ``url`` verbatim, for the
+    services that build them in code.
     """
     parts = urlsplit(url.strip())
     path = parts.path.rstrip("/")
     if path.endswith(_CHAT_COMPLETIONS):
         return url
-    path += _CHAT_COMPLETIONS if path.endswith("/v1") else "/v1" + _CHAT_COMPLETIONS
+    last = path.rsplit("/", 1)[-1]
+    path += _CHAT_COMPLETIONS if _VERSION_SEGMENT.fullmatch(last) else "/v1" + _CHAT_COMPLETIONS
     return urlunsplit(parts._replace(path=path))
 
 
