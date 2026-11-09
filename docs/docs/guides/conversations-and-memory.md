@@ -146,12 +146,16 @@ Without it, `remember` answers that the memory was not stored. It also refuses a
 
 An agent in `agentic` mode also gets two more tools: `recall`, which reads memories back a page at a time (without arguments the most recent; with a `query` the best matches; with the `cursor` of a previous answer the next page), and `forget`, which removes one memory by the id shown with it. Both read the user id from `run_config` the same way.
 
+With `execution_mode` set to `automatic`, the agent gets no tools: the manager runs after every turn and decides by itself. It asks the agent's model, in one call, whether the conversation holds something worth keeping about the user and, if so, what. The model is shown what is already remembered about the subject of the turn (the best matches for the user's message, else the most recent, within `max_chars`), so a fact is not stored again on every turn that mentions it, and a fact equal to one already stored is dropped. A failure is logged and stores nothing; it never fails the turn.
+
+With a [decision model](decision-models.md) whose `memory` use case is `active`, the two halves are split: the decision model answers whether the latest exchange tells something new about the user, and only on a confident yes is the agent's model called, to write the fact. A confident no stores nothing and calls nothing. An answer that is not confident either way, a timeout, or the use case in `shadow` falls back to the single call above.
+
 ### Options
 
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `file_path` | `str` | `local_memory.jsonl` | The file memories are written to. |
-| `execution_mode` | `MemoryExecutionMode` | | Set it to `agentic`: the agent decides what to store. See [Storing](#storing). |
+| `execution_mode` | `MemoryExecutionMode` | `automatic` | `agentic`: the agent decides what to store, with its tools. `automatic`: the manager decides after every turn, with the agent's model or a decision model. See [Storing](#storing). |
 | `recency_limit` | `int` | `5` | How many memories a direct call to `recall_memories` returns. |
 | `max_chars` | `int` | `10000` | The most characters of memories read at once: the recall at the start of a turn, and what is already remembered when `automatic` mode decides whether to store. A page of `recall` holds up to 20,000. |
 | `recall_timeout_s` | `float` | `2.0` | How long the recall at the start of a turn may take before it is skipped. |

@@ -180,7 +180,14 @@ The agent can remember facts about you between conversations: your name, how you
 
 Each configuration has one memory or none, and nothing falls back from one to the other: a project that keeps its own memory does not read the global one, and a project set to `no` remembers nothing, even when your default configuration has a global memory. To share what the agent learns between a project and your default configuration, pick `global` in both.
 
-The memory is a markdown file you can open and edit; one bullet is one fact. The agent decides what to keep, and says so as it does (`remembered: …`). It reads the memory at the start of each conversation, and can look back through it page by page. See [Conversations and memory](../guides/conversations-and-memory.md) for how it works, and `/memory` under [Commands](sessions.md#commands) to see or change it.
+The memory is a markdown file you can open and edit; one bullet is one fact. The agent decides what to keep, and says so as it does (`remembered: …`).
+
+With a [decision model](../guides/decision-models.md) configured, setup also asks **who decides what to remember**:
+
+- **the agent**: the agent's model stores a fact when it judges one worth keeping, with its `remember` tool (`execution_mode: agentic`).
+- **the decision model**: after every turn the decision model says whether the turn told it something new about you; only on a yes is the agent's model asked to write the fact (`execution_mode: automatic`). What is stored this way is shown as `→ remembered …`.
+
+Without a decision model the question is not asked, and the agent decides. Removing the decision model in a later setup gives the decision back to the agent, and setup says so. It reads the memory at the start of each conversation, and can look back through it page by page. See [Conversations and memory](../guides/conversations-and-memory.md) for how it works, and `/memory` under [Commands](sessions.md#commands) to see or change it.
 
 In `config.yaml`, memory is a `memory_manager` on the agent:
 
