@@ -18,11 +18,10 @@ from domyn.agents.interfaces.cli import config as cfg
 from domyn.agents.interfaces.cli import select as select_mod
 from domyn.agents.interfaces.cli import setup
 from domyn.agents.interfaces.cli.config import (
-    MEMORY_DECIDER_AGENT,
-    MEMORY_DECIDER_MODEL,
     PROJECT_DIR_VAR,
     DecisionsChoice,
     MemoryChoice,
+    MemoryDecider,
     configuration_v1_dict_from,
     current_memory_from,
     current_settings_from,
@@ -330,29 +329,42 @@ class TestWhoDecidesWhatToRemember:
     """Asked only with a decision model: the answer is the memory's execution_mode."""
 
     def test_the_decision_model_writes_automatic(self):
-        choice = MemoryChoice(scope="global", decided_by=MEMORY_DECIDER_MODEL)
+        choice = MemoryChoice(scope="global", decided_by=MemoryDecider.MODEL)
         assert manager_of(written(base(), choice))["execution_mode"] == "automatic"
 
     def test_the_agent_writes_agentic(self):
-        choice = MemoryChoice(scope="global", decided_by=MEMORY_DECIDER_AGENT)
+        choice = MemoryChoice(scope="global", decided_by=MemoryDecider.AGENT)
         assert manager_of(written(base(), choice))["execution_mode"] == "agentic"
 
     def test_changing_it_keeps_what_was_tuned_by_hand(self):
         raw = written(base(), MemoryChoice(scope="global"))
         raw["agents"][0]["memory_manager"]["recency_limit"] = 7
-        again = written(raw, MemoryChoice(scope="global", decided_by=MEMORY_DECIDER_MODEL))
+        again = written(raw, MemoryChoice(scope="global", decided_by=MemoryDecider.MODEL))
         assert manager_of(again)["execution_mode"] == "automatic"
         assert manager_of(again)["recency_limit"] == 7
 
     def test_not_asked_keeps_the_mode_the_file_has(self):
-        raw = written(base(), MemoryChoice(scope="global", decided_by=MEMORY_DECIDER_MODEL))
+        raw = written(base(), MemoryChoice(scope="global", decided_by=MemoryDecider.MODEL))
         again = written(raw, MemoryChoice(scope="global"))
         assert manager_of(again)["execution_mode"] == "automatic"
 
-    @pytest.mark.parametrize("decider", [MEMORY_DECIDER_AGENT, MEMORY_DECIDER_MODEL])
+    @pytest.mark.parametrize("decider", [MemoryDecider.AGENT, MemoryDecider.MODEL])
     def test_what_it_writes_is_what_it_reads(self, decider):
         raw = written(base(), MemoryChoice(scope="global", decided_by=decider))
         assert current_memory_from(raw).decided_by == decider
+
+    def test_a_memory_naming_no_mode_reads_as_what_it_runs(self, numbered):
+        # No execution_mode runs AUTOMATIC: read as "the agent", Enter wrote agentic.
+        raw = written(base(), MemoryChoice(scope="global"))
+        del raw["agents"][0]["memory_manager"]["execution_mode"]
+        current = current_memory_from(raw).decided_by
+        assert current == MemoryDecider.MODEL
+        assert self.ask(current, "")[0] == MemoryDecider.MODEL
+        assert ("mode", "automatic") in cfg._memory_items(raw)[0].fields
+
+    def test_the_default_mode_is_the_managers(self):
+        default = FilesystemMemoryManager.model_fields["execution_mode"].default
+        assert default.value == cfg.DEFAULT_MEMORY_MODE
 
     def ask(self, current, answer, level="active"):
         buffer = io.StringIO()
@@ -371,10 +383,10 @@ class TestWhoDecidesWhatToRemember:
         monkeypatch.setattr(select_mod, "_interactive", lambda theme: False)
 
     def test_enter_keeps_what_the_file_says(self, numbered):
-        assert self.ask(MEMORY_DECIDER_AGENT, "")[0] == MEMORY_DECIDER_AGENT
+        assert self.ask(MemoryDecider.AGENT, "")[0] == MemoryDecider.AGENT
 
     def test_a_new_memory_opens_on_the_decision_model(self, numbered):
-        assert self.ask(None, "")[0] == MEMORY_DECIDER_MODEL
+        assert self.ask(None, "")[0] == MemoryDecider.MODEL
 
     def test_at_the_shadow_level_it_says_the_agent_still_decides(self, numbered):
         _, shown = self.ask(None, "", level="shadow")
@@ -396,7 +408,7 @@ class TestWhoDecidesWhatToRemember:
             monkeypatch.delenv(name, raising=False)
         console = Console(file=io.StringIO(), width=100, force_terminal=False)
         # provider, model, url, api key, max tokens, context window, memory, who decides
-        answers = ["openai", "m", "", "", "", "", "global", MEMORY_DECIDER_MODEL]
+        answers = ["openai", "m", "", "", "", "", "global", MemoryDecider.MODEL]
         with patch("builtins.input", side_effect=answers):
             result = setup.run_setup(
                 console, Theme.build(allow_animation=False), path=tmp_path / "config.yaml"
@@ -461,7 +473,7 @@ class TestAddingAndRemovingTheDecisionModel:
 
     def test_removing_it_makes_the_memory_agentic(self, tmp_path, monkeypatch):
         path = tmp_path / "config.yaml"
-        first, _ = self.run(monkeypatch, path, self.ON, ["global", MEMORY_DECIDER_MODEL])
+        first, _ = self.run(monkeypatch, path, self.ON, ["global", MemoryDecider.MODEL])
         assert manager_of(first)["execution_mode"] == "automatic"
 
         # No decider question: input() would run out of answers.
@@ -475,12 +487,12 @@ class TestAddingAndRemovingTheDecisionModel:
         first, _ = self.run(monkeypatch, path, self.OFF, ["global"])
         assert manager_of(first)["execution_mode"] == "agentic"
 
-        second, shown = self.run(monkeypatch, path, self.ON, ["global", MEMORY_DECIDER_MODEL])
+        second, shown = self.run(monkeypatch, path, self.ON, ["global", MemoryDecider.MODEL])
         assert "who decides what to remember" in shown
         assert manager_of(second)["execution_mode"] == "automatic"
 
     def test_a_hand_written_automatic_without_a_decision_model_is_kept(self):
-        raw = written(base(), MemoryChoice(scope="global", decided_by=MEMORY_DECIDER_MODEL))
+        raw = written(base(), MemoryChoice(scope="global", decided_by=MemoryDecider.MODEL))
         assert "decision_providers" not in raw
         again = configuration_v1_dict_from(
             *current_settings_from(raw),

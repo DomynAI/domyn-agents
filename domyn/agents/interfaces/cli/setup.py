@@ -30,6 +30,7 @@ from typing import IO, TYPE_CHECKING, Any, cast
 import yaml
 
 from domyn.agents.agents.agent import MAX_AGENT_NAME_LENGTH
+from domyn.agents.decisions.runtime import DecisionMode
 from domyn.agents.instructions.discovery import AUTODISCOVERY_DIRS, find_instruction_files
 from domyn.agents.integrations.domyn_platform_sdk import (
     SDK_REQUIREMENT,
@@ -46,14 +47,13 @@ from domyn.agents.interfaces.cli.config import (
     DEFAULT_DECISION_KEY_ENV,
     LOCAL_SKILLS_DIRS,
     MEMORY_DECIDER_BLURB,
-    MEMORY_DECIDER_MODEL,
-    MEMORY_DECIDER_MODES,
     MEMORY_SCOPE_BLURB,
     PROVIDER_HINTS,
     REQUIRES_URL,
     AgentConfig,
     DecisionsChoice,
     MemoryChoice,
+    MemoryDecider,
     ProviderConfig,
     _scrub_url,
     active_project,
@@ -402,18 +402,19 @@ def _ask_memory(console: Console, theme: Theme, current: MemoryChoice) -> Memory
 
 
 def _ask_memory_decider(
-    console: Console, theme: Theme, current: str | None, decisions: DecisionsChoice
-) -> str:
+    console: Console, theme: Theme, current: MemoryDecider | None, decisions: DecisionsChoice
+) -> MemoryDecider:
     """Ask who decides what the memory keeps: the agent, or the decision model.
 
-    Asked only when a memory and a decision model were both chosen. The answer is
-    the memory manager's ``execution_mode`` (`MEMORY_DECIDER_MODES`). Opens on what
+    Asked only when a memory and a decision model were both chosen. The answer's
+    `MemoryDecider.mode` is the memory manager's ``execution_mode``. Opens on what
     the file says, and on the decision model for a memory that is new.
     """
-    options = list(MEMORY_DECIDER_MODES)
-    descriptions = dict(MEMORY_DECIDER_BLURB)
-    if DECISION_LEVELS.get(decisions.level, {}).get("memory", {}).get("mode") == "shadow":
-        descriptions[MEMORY_DECIDER_MODEL] = (
+    options: list[str] = list(MemoryDecider)
+    descriptions: dict[str, str] = dict(MEMORY_DECIDER_BLURB)
+    level = DECISION_LEVELS.get(decisions.level, {}).get("memory", {}).get("mode")
+    if level == DecisionMode.SHADOW:
+        descriptions[MemoryDecider.MODEL] = (
             "after each reply the decision model is asked and its answer recorded, but "
             "at the shadow level the agent's model still decides what is kept"
         )
@@ -422,12 +423,12 @@ def _ask_memory_decider(
         theme,
         "who decides what to remember",
         options,
-        current=current if current in options else MEMORY_DECIDER_MODEL,
+        current=current if current in options else MemoryDecider.MODEL,
         descriptions=descriptions,
     )
     if chosen is None:
         raise KeyboardInterrupt
-    return chosen
+    return MemoryDecider(chosen)
 
 
 def _ask_decision_url(console: Console, theme: Theme, current: str, suggested: str | None) -> str:

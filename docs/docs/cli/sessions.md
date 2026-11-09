@@ -99,7 +99,7 @@ Type `/help` in a session for this list. Commands complete with Tab.
 | `/memory add <text>` | Stores a fact yourself. |
 | `/memory forget <id>` | Removes one, by the id `/memory` shows. |
 | `/memory clear` | Removes everything it remembers about you, after asking. A bullet written into the file by hand belongs to no one, so it stays, and the command says how many did. |
-| `/memory clear all` | Empties the memory file, after asking: hand-written bullets and other users' memories included. Only for a memory kept in a file. |
+| `/memory clear all` | Removes every memory in the file, after asking: hand-written bullets and other users' memories included. Headings and notes that are not bullets stay. Only for a memory kept in a file. |
 | **Context** | |
 | `/context` | Shows how much of the model's context window the last request used, and what used it: the conversation, the memories recalled (with how many), and the tool definitions. Empty until the first request. |
 | `/compact` | Shortens the conversation now. The shorter version is used from the next request. |

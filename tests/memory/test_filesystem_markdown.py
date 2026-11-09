@@ -134,17 +134,25 @@ class TestFilesWrittenByEarlierVersions:
         assert memory.timestamp.tzinfo is not None
 
     @pytest.mark.asyncio
-    async def test_the_next_change_rewrites_it_as_markdown_and_loses_nothing(
-        self, manager, tmp_path
-    ):
+    async def test_a_new_entry_is_appended_as_markdown(self, manager, tmp_path):
         (tmp_path / "memory.md").write_text(self.LEGACY)
         await manager.write_single_memory("u", _Agent("A"), "a new fact")
         text = (tmp_path / "memory.md").read_text()
-        assert text.startswith("# Memory\n") and "{" not in text
+        assert text.startswith(self.LEGACY) and "\n- a new fact <!-- " in text
         assert [m.memory for m in (await manager.recall_page("u")).items] == [
             "a new fact",
             "from the old format",
         ]
+
+    @pytest.mark.asyncio
+    async def test_the_next_removal_rewrites_it_as_markdown(self, manager, tmp_path):
+        (tmp_path / "memory.md").write_text(self.LEGACY)
+        await manager.write_single_memory("u", _Agent("A"), "a new fact")
+        (fact,) = [m for m in (await manager.recall_page("u")).items if m.memory == "a new fact"]
+        assert await manager.delete_memory(fact.id)
+        text = (tmp_path / "memory.md").read_text()
+        assert text.startswith("# Memory\n") and "{" not in text
+        assert [m.memory for m in (await manager.recall_page("u")).items] == ["from the old format"]
 
 
 class TestWhichAgentSees:
@@ -188,6 +196,48 @@ class TestTheFileIsTheUsers:
         assert [m.memory for m in (await manager.recall_page("u")).items] == ["a fact"]
 
     @pytest.mark.asyncio
+    async def test_a_new_entry_leaves_everything_written_by_hand_as_it_was(self, manager, tmp_path):
+        by_hand = "# Memory\n\n## Work\n\nsome notes\n\n* prefers tabs\n1. a list\n- a fact\n"
+        (tmp_path / "memory.md").write_text(by_hand)
+        await manager.write_single_memory("u", _Agent("A"), "added by the agent")
+        text = (tmp_path / "memory.md").read_text()
+        assert text.startswith(by_hand)
+        assert text[len(by_hand) :].startswith("- added by the agent <!-- id=")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "text", ["uses <!-- for HTML comments", "a <!-- b --> c", "ends with <!--"]
+    )
+    async def test_a_comment_in_the_text_is_kept_whole(self, manager, text):
+        await manager.write_single_memory("u", _Agent("A"), text)
+        (memory,) = (await manager.recall_page("u")).items
+        assert memory.memory == text.replace("-->", "-- >")
+        assert memory.user_id == "u" and memory.agent_name == "A"
+
+    @pytest.mark.asyncio
+    async def test_a_file_not_ending_in_a_newline_gets_one(self, manager, tmp_path):
+        (tmp_path / "memory.md").write_text("# Memory\n\n- a fact")
+        await manager.write_single_memory("u", _Agent("A"), "another")
+        texts = [m.memory for m in (await manager.recall_page("u")).items]
+        assert texts == ["another", "a fact"]
+
+    @pytest.mark.asyncio
+    async def test_managers_sharing_a_file_keep_each_others_entries(self, tmp_path):
+        # Two sessions on the global memory: each has its own lock, none sees the other.
+        import asyncio
+
+        path = str(tmp_path / "memory.md")
+        one, two = FilesystemMemoryManager(file_path=path), FilesystemMemoryManager(file_path=path)
+        await asyncio.gather(
+            *(
+                manager.write_single_memory("u", _Agent("A"), f"fact {i} of {k}")
+                for i in range(20)
+                for k, manager in (("one", one), ("two", two))
+            )
+        )
+        assert (await one.recall_page("u")).total == 40
+
+    @pytest.mark.asyncio
     async def test_a_write_leaves_no_temporary_file(self, manager, tmp_path):
         await fill(manager, 3)
         assert [p.name for p in tmp_path.iterdir()] == ["memory.md"]
@@ -218,6 +268,37 @@ class TestDeleting:
         assert await manager.delete_memory("nope") is False
         assert target.memory not in [m.memory for m in (await manager.recall_page("u")).items]
         assert await manager.get_memory(target.id) is None
+
+    @pytest.mark.asyncio
+    async def test_removing_keeps_every_line_that_is_not_removed(self, manager, tmp_path):
+        by_hand = "# Memory\n\n## Work\n\nsome notes\n* prefers tabs\n- by hand\n"
+        (tmp_path / "memory.md").write_text(by_hand)
+        await manager.write_single_memory("u", _Agent("A"), "goes")
+        await manager.write_single_memory("u", _Agent("A"), "stays")
+        goes = next(m for m in (await manager.recall_page("u")).items if m.memory == "goes")
+        assert await manager.delete_memory(goes.id)
+        text = (tmp_path / "memory.md").read_text()
+        assert text.startswith(by_hand) and "- stays <!-- " in text and "goes" not in text
+
+    @pytest.mark.asyncio
+    async def test_clearing_keeps_what_is_not_an_entry(self, manager, tmp_path):
+        (tmp_path / "memory.md").write_text("# Memory\n\n## Work\nsome notes\n- by hand\n")
+        await manager.write_single_memory("u", _Agent("A"), "mine")
+        await manager.reset_memory("u")
+        assert (
+            tmp_path / "memory.md"
+        ).read_text() == "# Memory\n\n## Work\nsome notes\n- by hand\n"
+        await manager.complete_reset()
+        assert (tmp_path / "memory.md").read_text() == "# Memory\n\n## Work\nsome notes\n"
+        assert (await manager.recall_page("u")).total == 0
+
+    @pytest.mark.asyncio
+    async def test_nothing_to_remove_leaves_the_file_unwritten(self, manager, tmp_path):
+        (tmp_path / "memory.md").write_text("# Memory\n\n- by hand\n")
+        before = (tmp_path / "memory.md").stat().st_mtime_ns
+        assert await manager.delete_memory("nope") is False
+        await manager.reset_memory("u")
+        assert (tmp_path / "memory.md").stat().st_mtime_ns == before
 
     @pytest.mark.asyncio
     async def test_reset_can_be_limited_to_one_agent(self, manager):

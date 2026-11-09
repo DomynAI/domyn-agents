@@ -277,10 +277,15 @@ class _Exporter:
 
     def _copy(self, source: Path, dest: Path) -> None:
         if is_private(source, self.places):
-            # Only an `external_files` entry walking up into a domyn home can name one
-            # (a file, or what is in its `conversations/`, `processes/` or `browser/`):
-            # refused all the same, as the export is for someone else.
-            note = f"{source} (API keys, approvals, history and session state are never exported)"
+            # An `external_files` entry walking up into a domyn home (a file, or what is
+            # in its `conversations/`, `processes/` or `browser/`), or a skill's own file
+            # with one of those names (`memory.md`): refused all the same, so that no
+            # layout of skills can carry the real one out to someone else. The note says
+            # so, as the skill is unavailable without the file.
+            note = (
+                f"{source} (API keys, approvals, history, session state and memories"
+                " are never exported)"
+            )
             if note not in self.report.dropped:
                 self.report.dropped.append(note)
             return
