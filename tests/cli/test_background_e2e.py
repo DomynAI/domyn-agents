@@ -77,7 +77,7 @@ def repl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Repl, io.Stri
         runner=Runner(),
         enable_enhanced_input=False,
     )
-    session._state.auto_approve = True
+    session._prefs.auto_approve = True
     return session, out
 
 

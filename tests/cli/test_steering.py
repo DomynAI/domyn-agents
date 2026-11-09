@@ -691,7 +691,7 @@ class TestTheWholePathWithGatedTools:
     @pytest.mark.asyncio
     async def test_the_model_reads_it_on_the_call_after_the_approval(self) -> None:
         repl, scripted, provider, buffer = _repl(gated=True)
-        repl._state.auto_approve = True
+        repl._prefs.auto_approve = True
         provider.pause = lambda: _typed_mid_turn(repl, scripted)
 
         await repl._run_turn("read every file")
@@ -705,7 +705,7 @@ class TestTheWholePathWithGatedTools:
         """What the bug looked like from the outside: the message ran as the next
         turn, after the work it was meant to redirect had been done."""
         repl, scripted, provider, _ = _repl(gated=True)
-        repl._state.auto_approve = True
+        repl._prefs.auto_approve = True
         provider.pause = lambda: _typed_mid_turn(repl, scripted)
 
         await repl._run_turn("read every file")
@@ -719,7 +719,7 @@ class TestTheWholePathWithGatedTools:
         the only receipt there is — ``delivered`` says a turn took it, not that a
         turn read it."""
         repl, scripted, provider, buffer = _repl(gated=True)
-        repl._state.auto_approve = True
+        repl._prefs.auto_approve = True
         provider.pause = lambda: _typed_mid_turn(repl, scripted)
 
         await repl._run_turn("read every file")
@@ -830,7 +830,7 @@ class TestTheApprovalInsideTheEditor:
 
         await _turn_with(repl, turn_auto_on)
 
-        assert repl._state.auto_approve is True
+        assert repl._prefs.auto_approve is True
         assert len(scripted.offered) == 1, "the second call must not ask"
         # One read before /auto, and one after it for the rest of the turn —
         # without the second the bar vanished as soon as auto-approve answered.
@@ -850,7 +850,7 @@ class TestTheApprovalInsideTheEditor:
 
         await _turn_with(repl, press_shift_tab)
 
-        assert repl._state.auto_approve is True
+        assert repl._prefs.auto_approve is True
         assert len(scripted.offered) == 1, "the second call must not ask"
         assert buffer.getvalue().count("auto-approved") == 2
         assert "denied" not in buffer.getvalue()
@@ -866,7 +866,7 @@ class TestTheApprovalInsideTheEditor:
 
         await _turn_with(repl, ctrl_c)
 
-        assert repl._state.auto_approve is False
+        assert repl._prefs.auto_approve is False
         assert "auto-approved" not in buffer.getvalue()
 
 
@@ -874,9 +874,9 @@ class TestShiftTabOutsideAnApproval:
     def test_it_flips_auto_approve_both_ways(self) -> None:
         repl, scripted, _, _ = _choosing_repl()
         repl._toggle_auto_from_key()
-        assert repl._state.auto_approve is True
+        assert repl._prefs.auto_approve is True
         repl._toggle_auto_from_key()
-        assert repl._state.auto_approve is False
+        assert repl._prefs.auto_approve is False
         assert scripted.choice is None, "with nothing open there is nothing to answer"
 
     def test_the_editor_reads_the_flag_the_session_owns(self) -> None:
@@ -889,7 +889,7 @@ class TestShiftTabOutsideAnApproval:
             enable_enhanced_input=False,
         )
         assert wired._input._auto_on() is False
-        wired._state.auto_approve = True  # as /auto leaves it
+        wired._prefs.auto_approve = True  # as /auto leaves it
         assert wired._input._auto_on() is True
         wired._input.toggle_auto()  # as Shift+Tab does
-        assert wired._state.auto_approve is False
+        assert wired._prefs.auto_approve is False

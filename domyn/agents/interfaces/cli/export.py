@@ -63,7 +63,7 @@ copying anything, since an export can be edited after it is made.
 
 Secrets are not exported. A literal API key, header or client secret becomes a
 ``${VAR}`` reference and the report names the variables to set. ``credentials``,
-approvals and conversation history are never copied: nothing names them, and a file
+approvals, the state file and conversation history are never copied: nothing names them, and a file
 called like one is refused even when an ``external_files`` entry does (`is_private`),
 since a project keeps all three in its own folder, next to the files that are exported.
 """
@@ -106,6 +106,7 @@ from domyn.agents.interfaces.cli.config import (
     PROJECT_DIR_REF,
     PROJECT_DIR_VAR,
     PROVIDER_HINTS,
+    STATE_FILENAME,
     ProjectError,
     is_skill_autodiscovery,
     project_dir,
@@ -1042,11 +1043,15 @@ def _in_project(relative: str) -> str:
 
 def is_private(path: Path) -> bool:
     """Whether ``path`` is one of the files a domyn home keeps for its owner alone:
-    the credentials, the approvals, the conversation history (with SQLite's side
-    files). Matched by name wherever it is, so no layout of skills can carry one out.
+    the credentials, the approvals, the state file (what the CLI remembers between sessions), the conversation
+    history (with SQLite's side files). Matched by name wherever it is, so no layout of skills can carry one out.
     """
     name = path.name
-    return name in (CREDENTIALS_FILENAME, APPROVALS_FILENAME) or name.startswith(STORE_FILENAME)
+    return name in (
+        CREDENTIALS_FILENAME,
+        APPROVALS_FILENAME,
+        STATE_FILENAME,
+    ) or name.startswith(STORE_FILENAME)
 
 
 def _listed_skills(listed: Path) -> list[tuple[Path, Path]]:

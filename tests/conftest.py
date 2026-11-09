@@ -42,6 +42,18 @@ def _stop_background_commands(root: Path, pattern: str) -> int:
 
 
 @pytest.fixture(autouse=True)
+def _state_off_the_real_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the remembered CLI state (`state.yaml`) out of the developer's ``~/.domyn``.
+
+    A `Repl` reads it at startup and `/auto` writes it, so a test toggling it
+    anywhere in the suite would otherwise turn it on for the next real session.
+    """
+    from domyn.agents.interfaces.cli.state import CliState
+
+    monkeypatch.setattr(CliState, "path", classmethod(lambda cls: tmp_path / "state.yaml"))
+
+
+@pytest.fixture(autouse=True)
 def _forget_context_windows() -> None:
     """Start every test with no context window remembered.
 
