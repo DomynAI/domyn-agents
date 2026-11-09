@@ -11,7 +11,7 @@ import pytest
 
 from domyn.agents import Agent, Runner
 from domyn.agents.core import BaseEvent, ExecutionEventType, Part
-from domyn.agents.memory.managers import FilesystemMemoryManager
+from domyn.agents.memory.managers import FilesystemMemoryManager, MemoryExecutionMode
 
 
 class Recording(FilesystemMemoryManager):
@@ -82,7 +82,11 @@ async def run_turn(runner: Runner, agent: Agent, text: str) -> list[BaseEvent]:
 async def test_the_recall_runs_beside_the_other_loads_and_the_planner_reuses_it(
     tmp_path, runner, llm_provider
 ):
-    manager = Recording(file_path=str(tmp_path / "memory.md"))
+    # Agentic: the automatic mode reads the memory again after the turn, to tell
+    # what is already remembered, which is not the recall counted here.
+    manager = Recording(
+        file_path=str(tmp_path / "memory.md"), execution_mode=MemoryExecutionMode.AGENTIC
+    )
     (tmp_path / "memory.md").write_text("# Memory\n\n- The user drinks tea every morning\n")
     seen: list[str] = []
 

@@ -19,6 +19,7 @@ replace that path, never break it.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
@@ -37,12 +38,18 @@ USE_CASE = "memory"
 #: that pasted a file must not be refused for being over the model's window.
 MAX_SIDE_CHARS = 4_000
 
+#: The most of what is already remembered that is shown beside the exchange: the
+#: memories that match it best, so a fact stored on an earlier turn is not stored
+#: again on every turn that mentions it.
+MAX_KNOWN_CHARS = 4_000
+
 QUESTION = (
-    "Below is one exchange between a user and an assistant. Does the user reveal "
-    "something about themselves worth remembering in future conversations: who "
-    "they are, a lasting preference, their situation or an ongoing goal? Answer "
-    "no for questions, small talk, one-off requests and anything only relevant "
-    "to this exchange."
+    "Below is one exchange between a user and an assistant, and what is already "
+    "remembered about the user. Does the user reveal something new about "
+    "themselves worth remembering in future conversations: who they are, a lasting "
+    "preference, their situation or an ongoing goal? Answer no for questions, small "
+    "talk, one-off requests and anything only relevant to this exchange, and answer "
+    "no when everything worth remembering is already remembered."
 )
 
 
@@ -59,12 +66,27 @@ class Verdict(StrEnum):
     """No usable answer: take the path without a decision model."""
 
 
-async def decide(runtime: DecisionRuntime | None, *, user: str, assistant: str) -> Verdict:
-    """Ask whether the exchange holds something to remember. Never raises."""
+async def decide(
+    runtime: DecisionRuntime | None,
+    *,
+    user: str,
+    assistant: str,
+    known: Sequence[str] = (),
+) -> Verdict:
+    """Ask whether the exchange holds something new to remember. Never raises.
+
+    ``known`` is what is already remembered (the caller's best matches): a fact
+    among them is not new, which is what keeps a fact from being stored again on
+    every turn that mentions it.
+    """
     if runtime is None or not runtime.enabled(USE_CASE) or not user.strip():
         return Verdict.UNDECIDED
 
-    state = {"user": user[:MAX_SIDE_CHARS], "assistant": assistant[:MAX_SIDE_CHARS]}
+    state = {
+        "user": user[:MAX_SIDE_CHARS],
+        "assistant": assistant[:MAX_SIDE_CHARS],
+        "already_remembered": list(known) or "nothing yet",
+    }
     decision = await runtime.ask(USE_CASE, state, {"store": noul(QUESTION)})
     answer = decision.get("store")
 

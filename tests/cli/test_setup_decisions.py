@@ -24,12 +24,11 @@ from domyn.agents.interfaces.cli import config as cli_config
 from domyn.agents.interfaces.cli import select as select_mod
 from domyn.agents.interfaces.cli.config import (
     DECISION_LEVELS,
-    DEFAULT_DECISION_MODEL,
-    DEFAULT_DECISION_URL,
     DecisionsChoice,
     configuration_v1_dict_from,
     current_decisions_from,
     current_settings_from,
+    decision_url_default,
 )
 
 ENDPOINT = "http://localhost:28080"
@@ -312,23 +311,80 @@ class TestThePromptItself:
         printed = " ".join(str(call) for call in console.print.call_args_list)
         assert "saved anyway" in printed
 
-    def test_erased_fields_go_back_to_the_default_endpoint_and_model(self, monkeypatch):
-        """A changed endpoint opens the field; erasing it is the way back."""
+    def erasing(self, monkeypatch, seen: list[str], answers: list[str] | None = None):
+        """Every text field erased (or answered from ``answers``), its prefill noted."""
         monkeypatch.setattr(setup, "_decision_endpoint_answers", lambda *a: None)
         monkeypatch.delenv("DECISIONS_API_KEY", raising=False)
-        seen: list[str] = []
+        queued = list(answers or [])
 
-        def erasing(console, message, *, prefill="", **kwargs):
+        def read(console, message, *, prefill="", **kwargs):
             seen.append(prefill)
-            return ""
+            if len(seen) > 20:
+                pytest.fail(f"asked {message!r} again and again")
+            return queued.pop(0) if queued else ""
 
-        monkeypatch.setattr(setup, "read_line", erasing)
+        monkeypatch.setattr(setup, "read_line", read)
+
+    def test_the_current_model_is_offered(self, monkeypatch):
+        seen: list[str] = []
+        self.erasing(monkeypatch, seen, answers=["http://other:9000", "other/model"])
         current = DecisionsChoice(base_url="http://other:9000", model="other/model")
         with patch("builtins.input", side_effect=["3"]):
             answer = setup._ask_decisions(MagicMock(), self.theme(), current)
 
-        assert "http://other:9000" in seen and "other/model" in seen
-        assert (answer.base_url, answer.model) == (DEFAULT_DECISION_URL, DEFAULT_DECISION_MODEL)
+        assert seen[1] == "other/model"
+        assert (answer.base_url, answer.model) == ("http://other:9000", "other/model")
+
+    def test_there_is_no_default_model(self, monkeypatch):
+        """Erased, the name is asked again rather than filled with one the
+        server may not expose."""
+        seen: list[str] = []
+        self.erasing(monkeypatch, seen, answers=["http://mine:1", "", "mine/model"])
+        console = MagicMock()
+        with patch("builtins.input", side_effect=["3"]):
+            answer = setup._ask_decisions(console, self.theme(), DecisionsChoice())
+
+        assert seen[1:3] == ["", ""]
+        assert answer.model == "mine/model"
+        printed = " ".join(str(call) for call in console.print.call_args_list)
+        assert "needs a model name" in printed
+
+    def test_a_file_without_a_model_reads_back_none(self):
+        raw = {"decision_providers": [{"name": "d", "type": "system_one", "base_url": ENDPOINT}]}
+        assert current_decisions_from(raw).model == ""
+
+    def test_there_is_no_default_endpoint(self, monkeypatch):
+        """Erased with nothing to fall back on, the endpoint is asked again
+        rather than pointing at a server nobody named."""
+        seen: list[str] = []
+        self.erasing(monkeypatch, seen, answers=["", "http://mine:1", MODEL])
+        console = MagicMock()
+        with patch("builtins.input", side_effect=["3"]):
+            answer = setup._ask_decisions(console, self.theme(), DecisionsChoice())
+
+        assert seen[:2] == ["", ""]
+        assert answer.base_url == "http://mine:1"
+        printed = " ".join(str(call) for call in console.print.call_args_list)
+        assert "needs an endpoint" in printed
+
+    def test_the_vllm_server_is_offered_and_can_be_changed(self, monkeypatch):
+        seen: list[str] = []
+        self.erasing(monkeypatch, seen, answers=["http://elsewhere:1", MODEL])
+        with patch("builtins.input", side_effect=["3"]):
+            answer = setup._ask_decisions(
+                MagicMock(), self.theme(), DecisionsChoice(), "http://gpu:8000"
+            )
+        assert seen[0] == "http://gpu:8000"
+        assert answer.base_url == "http://elsewhere:1"
+
+    def test_an_erased_endpoint_is_the_vllm_server(self, monkeypatch):
+        seen: list[str] = []
+        self.erasing(monkeypatch, seen, answers=["", MODEL])
+        current = DecisionsChoice(base_url="http://other:9000")
+        with patch("builtins.input", side_effect=["3"]):
+            answer = setup._ask_decisions(MagicMock(), self.theme(), current, "http://gpu:8000")
+        assert seen[0] == "http://other:9000"  # the file's endpoint opens the field
+        assert answer.base_url == "http://gpu:8000"
 
     def test_aborting_the_choice_aborts_the_wizard(self):
         with (
@@ -336,6 +392,37 @@ class TestThePromptItself:
             pytest.raises(KeyboardInterrupt),
         ):
             setup._ask_decisions(MagicMock(), self.theme(), DecisionsChoice())
+
+
+class TestTheSuggestedEndpoint:
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://gpu:8000/v1/chat/completions",
+            "http://gpu:8000/v1",
+            "http://gpu:8000/",
+            "http://gpu:8000",
+        ],
+    )
+    def test_a_vllm_url_gives_its_server(self, url):
+        assert decision_url_default("vllm", url) == "http://gpu:8000"
+
+    def test_a_prefix_is_kept(self):
+        assert (
+            decision_url_default("vllm", "https://gw.example/models/qwen/v1/chat/completions")
+            == "https://gw.example/models/qwen"
+        )
+
+    @pytest.mark.parametrize("kind", ["domyn", "openai", "anthropic", "custom", "openrouter"])
+    def test_any_other_provider_offers_nothing(self, kind):
+        assert decision_url_default(kind, "http://gpu:8000/v1/chat/completions") is None
+
+    def test_a_vllm_provider_without_a_url_offers_nothing(self):
+        assert decision_url_default("vllm", None) is None
+        assert decision_url_default("vllm", "  ") is None
+
+    def test_nothing_read_back_means_no_endpoint(self):
+        assert current_decisions_from(None).base_url == ""
 
 
 class TestTheApiKey:
@@ -370,6 +457,9 @@ class TestTheApiKey:
         # `read_credentials` resolves the file through the config module: patching the
         # name `setup` imported would leave it reading the developer's real one.
         monkeypatch.setattr(cli_config, "credentials_path", lambda: tmp_path / "credentials")
+        # Not the developer's own key, from the environment or ~/.domyn/credentials.
+        monkeypatch.setattr(setup, "read_credentials", dict)
+        monkeypatch.delenv("DECISIONS_API_KEY", raising=False)
         saved = {}
         monkeypatch.setattr(
             setup,
@@ -388,7 +478,10 @@ class TestTheApiKey:
         assert "s3cret" not in str(written(base(), answer))
 
     def test_the_reference_is_read_back(self):
-        raw = written(base(), DecisionsChoice(level="shadow", api_key_env="MY_KEY"))
+        raw = written(
+            base(),
+            DecisionsChoice(level="shadow", base_url=ENDPOINT, model=MODEL, api_key_env="MY_KEY"),
+        )
         assert current_decisions_from(raw).api_key_env == "MY_KEY"
 
     def test_no_key_writes_no_api_key(self):

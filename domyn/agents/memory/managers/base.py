@@ -3,6 +3,7 @@ import re
 import uuid
 from abc import ABC, abstractmethod
 from collections import OrderedDict
+from collections.abc import Sequence
 from datetime import datetime
 from enum import Enum
 from typing import Any, ClassVar
@@ -11,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from domyn.agents.core import BaseAgent, ExecutionEventType, InteractionContext
 from domyn.agents.decisions import runtime_of
-from domyn.agents.decisions.memory import Verdict, decide, last_exchange
+from domyn.agents.decisions.memory import MAX_KNOWN_CHARS, Verdict, decide, last_exchange
 from domyn.agents.llm import LLMMessage
 from domyn.agents.logger import get_logger
 from domyn.agents.memory.render import MAX_ENTRY_CHARS, entry_line, render_block
@@ -23,6 +24,19 @@ _READ_AT_MOST = 100_000
 _FRAME_CHARS = 400
 # Turns whose recall is remembered, so the next request of a turn reuses it.
 _CACHED_TURNS = 64
+
+
+def _known_section(known: Sequence[str], instruction: str) -> str:
+    """The already-remembered list appended to a writing prompt; empty for none."""
+    if not known:
+        return ""
+    lines = "\n".join(f"- {memory}" for memory in known)
+    return f"\n\nAlready remembered about the user:\n{lines}\n\n{instruction}"
+
+
+#: The name of the ``AUTOMATIC`` mode's post-agent hook, whose ``HOOK_END`` event
+#: carries the fact it stored (none when it stored nothing).
+MEMORY_HOOK_NAME = "update_memory"
 
 
 class MemoryExecutionMode(Enum):
@@ -231,11 +245,13 @@ class BaseMemoryManager(BaseModel, ABC):
         self,
         agent: BaseAgent,
         context: InteractionContext,
+        known: Sequence[str] = (),
     ) -> str | None:
         """Extract user preferences from a conversation using the LLM.
 
         The extraction prompt and parsing tokens are configurable via class
-        attributes (memory_extraction_prompt, memory_store_token, etc.).
+        attributes (memory_extraction_prompt, memory_store_token, etc.). ``known``
+        is what is already remembered, shown so that it is not stored again.
         """
         # The turn that just ended is in `interaction_history` when the post-agent
         # hook runs, not yet in `conversation_history`: reading only the latter gave
@@ -255,7 +271,15 @@ class BaseMemoryManager(BaseModel, ABC):
         llm_response = await agent.llm_provider.generate(
             messages=[
                 LLMMessage(role="system", content=self.memory_extraction_prompt),
-                LLMMessage(role="user", content=f"Conversation:\n{conversation_parts}"),
+                LLMMessage(
+                    role="user",
+                    content=f"Conversation:\n{conversation_parts}"
+                    + _known_section(
+                        known,
+                        f"If the conversation adds nothing new to these, reply "
+                        f"{self.memory_store_token}: no.",
+                    ),
+                ),
             ],
             temperature=0.3,
             max_tokens=500,
@@ -280,11 +304,13 @@ class BaseMemoryManager(BaseModel, ABC):
         agent: BaseAgent,
         context: InteractionContext,
         exchange: tuple[str, str],
+        known: Sequence[str] = (),
     ) -> str | None:
         """Have the LLM write the memory a decision model said the turn holds.
 
         Unlike :meth:`build_memory_content` it is not asked whether to store: that
-        was decided. It may still answer ``NONE``, which stores nothing.
+        was decided. It may still answer ``NONE``, which stores nothing, and does
+        when what it would write is among ``known``, what is already remembered.
         """
         conversation = "\n".join(
             part.text or ""
@@ -301,6 +327,10 @@ class BaseMemoryManager(BaseModel, ABC):
                     content=(
                         f"Conversation:\n{conversation}\n\n"
                         f"Latest exchange:\nUser: {user}\nAssistant: {assistant}"
+                        + _known_section(
+                            known,
+                            "Write only what is not already there; if nothing is new, reply NONE.",
+                        )
                     ),
                 ),
             ],
@@ -322,21 +352,65 @@ class BaseMemoryManager(BaseModel, ABC):
         whether and the LLM only writes; without one, or when its answer is not
         confident either way, the LLM decides and writes in one call as before.
         """
+        exchange = last_exchange(context)
+        known = await self._already_remembered(agent, context, exchange[0])
         runtime = runtime_of(agent)
         if runtime is None:
-            return await self.build_memory_content(agent, context)
-        exchange = last_exchange(context)
-        verdict = await decide(runtime, user=exchange[0], assistant=exchange[1])
+            return await self.build_memory_content(agent, context, known)
+        verdict = await decide(runtime, user=exchange[0], assistant=exchange[1], known=known)
         if verdict is Verdict.SKIP:
             return None
         if verdict is Verdict.SAVE:
-            return await self.write_memory_content(agent, context, exchange)
-        return await self.build_memory_content(agent, context)
+            return await self.write_memory_content(agent, context, exchange, known)
+        return await self.build_memory_content(agent, context, known)
 
-    async def update_memory(self, agent: BaseAgent, context: InteractionContext) -> None:
-        """Update/store a memory. Errors are logged, never propagated."""
+    async def _already_remembered(
+        self, agent: BaseAgent, context: InteractionContext, query: str
+    ) -> list[str]:
+        """What is already remembered that the turn is about, for the store decision.
+
+        The best matches for the user's message, else the most recent, within
+        ``MAX_KNOWN_CHARS``; the same recall the turn starts with. Slow or failing,
+        it is empty: the decision is then taken as before, never skipped.
+        """
+        extra = {"run_config": context.run_config}
+        try:
+            async with asyncio.timeout(self.recall_timeout_s):
+                page = await self._fitting_page(
+                    context.user_id,
+                    agent,
+                    query=query.strip() or None,
+                    cursor=None,
+                    budget=MAX_KNOWN_CHARS + _FRAME_CHARS,
+                    **extra,
+                )
+                if query.strip() and not page.items:
+                    page = await self._fitting_page(
+                        context.user_id,
+                        agent,
+                        query=None,
+                        cursor=None,
+                        budget=MAX_KNOWN_CHARS + _FRAME_CHARS,
+                        **extra,
+                    )
+        except Exception as exc:
+            get_logger().warning(f"memory: could not read what is remembered: {type(exc).__name__}")
+            get_logger().debug(f"memory: already-remembered failure detail: {exc}")
+            return []
+        return [m.memory for m in page.items]
+
+    async def update_memory(self, agent: BaseAgent, context: InteractionContext) -> str | None:
+        """Store what the turn holds worth remembering, and return it; ``None`` for nothing.
+
+        Run as the ``AUTOMATIC`` mode's post-agent hook, whose event carries the
+        returned fact, so an interface can say what was remembered. Errors are
+        logged, never propagated.
+        """
         try:
             memory_content = await self._extract_memory_from_turn(agent, context)
+            if memory_content and await self._is_remembered(context.user_id, agent, memory_content):
+                get_logger().info("memory: already remembered, not stored again")
+                return None
             if memory_content:
                 await self.write_single_memory(
                     user_id=context.user_id,
@@ -345,9 +419,11 @@ class BaseMemoryManager(BaseModel, ABC):
                     agent=agent,
                     run_config=context.run_config,
                 )
+                return memory_content
         except Exception as e:
             get_logger().warning(f"update_memory failed, skipping: {type(e).__name__}")
             get_logger().debug(f"update_memory detail: {e}", exc_info=True)
+        return None
 
     @abstractmethod
     async def recall_memories(

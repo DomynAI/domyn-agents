@@ -124,3 +124,56 @@ async def test_without_the_user_the_old_behaviour_was_to_store_nothing(tmp_path)
 
     assert "no user_id" in await manager.remember(_A(), "a fact", None)
     assert await manager.remember(_A(), "a fact", {"user_id": USER_ID}) == "Memory stored."
+
+
+class _Extractor(_Model):
+    """Answers the turn, and as the automatic memory's extractor stores one fact."""
+
+    async def generate(self, messages: Any, **kwargs: Any) -> LLMResponse:
+        system = str(getattr(messages[0], "content", "") or "")
+        if "StoreMemory" in system:
+            known = "- The user likes green tea" in str(getattr(messages[1], "content", ""))
+            content = (
+                "StoreMemory: no\nMemoryContent: -"
+                if known
+                else "StoreMemory: yes\nMemoryContent: The user likes green tea"
+            )
+            return LLMResponse(content=content, generated_tokens=1, execution_time=0.0)
+        return LLMResponse(content="Noted.", generated_tokens=1, execution_time=0.0)
+
+
+@pytest.mark.asyncio
+async def test_the_automatic_memory_says_what_it_remembered(tmp_path):
+    """The post-agent hook stores silently; the line is the only sign of it."""
+    file = tmp_path / "memory.md"
+    agent = Agent(
+        name="Assistant",
+        description="d",
+        instruction="Be brief.",
+        llm_provider=_Extractor(),
+        planner=PlannerStrategyFactory.from_config({"type": "tool_use"}, save_in_registry=False),
+        memory_manager=FilesystemMemoryManager(
+            file_path=str(file), execution_mode=MemoryExecutionMode.AUTOMATIC
+        ),
+    )
+    buffer = io.StringIO()
+    console = Console(file=buffer, width=100, force_terminal=False, no_color=True)
+    runner = Runner()
+    repl = Repl(
+        agent,
+        console,
+        Theme.build(allow_animation=False),
+        runner=runner,
+        enable_enhanced_input=False,
+    )
+    repl._input.ask = MagicMock(side_effect=EOFError)  # type: ignore[method-assign]
+
+    await repl.run("I like green tea")
+    assert "remembered The user likes green tea" in buffer.getvalue()
+    assert "The user likes green tea" in file.read_text()
+
+    # Already remembered: not stored again, and nothing said.
+    seen = len(buffer.getvalue())
+    await repl.run("I really like green tea")
+    assert "remembered" not in buffer.getvalue()[seen:]
+    assert file.read_text().count("The user likes green tea") == 1

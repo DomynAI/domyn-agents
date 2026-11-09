@@ -29,7 +29,7 @@ An agent with no decision model behaves exactly as it does today — nothing is 
 
 The approval gate is a level of its own on purpose. Everywhere else a wrong answer changes what the model is *shown* and the turn carries on; at the gate, allowing removes a human confirmation.
 
-The wizard asks for the endpoint and the model name, then sends a real request to check both. A failure warns and saves anyway — the endpoint may come up later.
+The wizard asks for the endpoint and the model name, then sends a real request to check both. A failure warns and saves anyway — the endpoint may come up later. There is no default endpoint: when the main model is on vLLM, its server (`http://gpu:8000` for `http://gpu:8000/v1/chat/completions`) is offered, to be changed if the decision model lives elsewhere; with any other provider you type it. The model name has no default either: it is the name the server exposes, and a wrong one is what the check reports.
 
 ```
   decision model:
@@ -38,8 +38,8 @@ The wizard asks for the endpoint and the model name, then sends a real request t
    * 3) active                 — pick skills and instructions, decide what to remember; the approval gate only records
      4) active, approvals too  — also let it allow or deny a tool call
 
-  decision endpoint [http://localhost:28080]:
-  decision model name [Cloudflare/clef]:
+  decision endpoint (empty = http://gpu:8000): http://gpu:8000
+  decision model name: Cloudflare/clef
   endpoint: answering
 ```
 
