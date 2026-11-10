@@ -337,9 +337,6 @@ class _ToolCallsOutcome:
     close_iterator: bool = False
     should_continue: bool = True
     last: BaseEvent | None = None
-    # Whether sub-agents ran as branches: their caller's context is then rebuilt
-    # from the conversation, where their events are, before it resumes.
-    ran_agents: bool = False
 
 
 @dataclass
@@ -453,6 +450,7 @@ class ContextBuilder:
             )
 
         hidden = state.hidden() if state.hidden is not None else set()
+        hidden |= _other_copies(state)
         events_history = [
             event
             for event in state.conversation_info.events_history
@@ -498,7 +496,14 @@ class ContextBuilder:
                 )
             )
             if agents_calls:
-                agents_calls = [agents_calls[-1]]
+                # Its own interaction's, when there is one: the same agent started
+                # twice by one response has two, and the latest is the other's.
+                agents_calls = [
+                    next(
+                        (x for x in agents_calls if x.interaction_id == state.interaction_id),
+                        agents_calls[-1],
+                    )
+                ]
 
             interaction_history = agents_calls + list(
                 filter(
@@ -607,6 +612,34 @@ class ContextBuilder:
             return _collect_direct_peers(current_agent, entrypoint_agent)
         else:  # HandoffScope.EXPLICIT
             return [_return_agent(agent) for agent in current_agent.sub_agents]
+
+
+def _other_copies(state: RunnerState) -> set[str]:
+    """The interactions of the other copies of this agent started by the same
+    batch (one response calling it twice): copies share a name, so visibility,
+    which goes by author, would show each the other's task and work as its own."""
+    events = state.conversation_info.events_history
+    own = next(
+        (
+            e
+            for e in events
+            if e.event_type == ExecutionEventType.AGENT_START
+            and e.interaction_id == state.interaction_id
+        ),
+        None,
+    )
+    batch = (own.metadata.get(METADATA_TOOL_BATCH) or {}).get("id") if own else None
+    if not batch:
+        return set()
+    return {
+        e.interaction_id
+        for e in events
+        if e.event_type == ExecutionEventType.AGENT_START
+        and e.author == state.current_agent.name
+        and e.interaction_id != state.interaction_id
+        and (e.metadata.get(METADATA_TOOL_BATCH) or {}).get("id") == batch
+        and e.interaction_id is not None
+    }
 
 
 def _return_agent(agent: Agent | DelegateAgent | str) -> Agent | DelegateAgent:
@@ -1310,7 +1343,7 @@ class Runner:
                     resumed = outcome.last
                 if not outcome.should_continue:
                     return
-                if outcome.ran_agents:
+                if any(c.event_type == ExecutionEventType.AGENT_CALL for c in still_held):
                     # Sub-agents held behind the answered call ran as branches.
                     context = await self._context_after_branches(state, context)
             # The approved call finishing is a tool-cycle boundary like any other —
@@ -2235,16 +2268,17 @@ class Runner:
                 conversation_id=state.conversation_id,
             )
 
-        # Recover the AGENT_START that seeded the current agent's task
+        # Recover the AGENT_START that seeded the current agent's task: its own
+        # interaction's first, as above for the history.
+        starts = [
+            x
+            for x in reversed(context.conversation_history)
+            if x.event_type == ExecutionEventType.AGENT_START
+            and getattr(x.action, "name", None) == state.current_agent.name
+        ]
         context.agent_input = next(
-            filter(
-                lambda x: (
-                    x.event_type == ExecutionEventType.AGENT_START
-                    and getattr(x.action, "name", None) == state.current_agent.name
-                ),
-                reversed(context.conversation_history),
-            ),
-            context.agent_input,
+            (x for x in starts if x.interaction_id == context.interaction_id),
+            starts[0] if starts else context.agent_input,
         )
 
     async def _execute_agent_loop(
@@ -3174,7 +3208,7 @@ class Runner:
             state,
             branch=BranchStack(record),
             depth=state.depth + 1,
-            hidden=hidden_from(batch, action.call_id),
+            hidden=hidden_from(batch, action.call_id, state.hidden),
             shared_state=context.state,
             steering_reaches_subagents=False,
             continue_count=0,
@@ -3245,7 +3279,11 @@ class Runner:
             return
         if not ended and record["stack"]:
             reason = (
-                (error.error_message or self._text_of(error) or "error")
+                (
+                    error.error_message
+                    or " ".join(p.text for p in (error.content or []) if p.text)
+                    or "error"
+                )
                 if error is not None
                 else "it stopped without an answer"
             )
@@ -3273,10 +3311,6 @@ class Runner:
         record["status"] = DONE
         return failure
 
-    @staticmethod
-    def _text_of(event: BaseEvent) -> str:
-        return " ".join(p.text for p in (event.content or []) if p.text)
-
     async def _end_batch(
         self,
         batch: dict[str, Any],
@@ -3293,14 +3327,12 @@ class Runner:
         (``_next_waiting_branch``). None waiting: the batch is over.
         """
         waiting = [b for b in batch["branches"] if b["status"] == PAUSED]
-        if not waiting:
-            outcome.ran_agents = True
+        if not outcome.should_continue or not waiting:
+            # None waits, or a hook stopped one of them, which stops the turn.
             return
         first, rest = waiting[0], waiting[1:]
         context.state.setdefault(WAITING_BRANCHES_KEY, {})[context.interaction_id] = {
-            "branches": [
-                {k: b.get(k) for k in ("stack", "question", HELD_TOOL_CALLS_KEY)} for b in rest
-            ],
+            "branches": rest,
             "held": [],
         }
         outcome.paused = True
@@ -3518,9 +3550,7 @@ class Runner:
         # Any: mypy reads `BaseEvent.action`, an unresolved union, as None.
         agent_calls: list[Any] = [call.action for call, tool in group if tool is None]
         if agent_calls:
-            batch = new_batch(
-                uuid.uuid4().hex, [(action.call_id, action.name) for action in agent_calls]
-            )
+            batch = new_batch([(action.call_id, action.name) for action in agent_calls])
         if len(group) == 1:
             call, tool = group[0]
             yield "event", call
@@ -4412,11 +4442,17 @@ class Runner:
         context = new_context
         transition.context = context
 
-        if (context.state.get(WAITING_BRANCHES_KEY) or {}).get(context.interaction_id):
+        mine = (context.state.get(WAITING_BRANCHES_KEY) or {}).get(context.interaction_id)
+        if mine:
             # It ran a batch of sub-agents, and more of them wait for an answer, or
             # calls were held behind them: shown after this end, not before it.
             yield event
             transition.end_yielded = True
+            # Sub-agents among the held calls run as branches: their events are then
+            # in the conversation, not in this context.
+            held_agents = not mine["branches"] and any(
+                raw.get("event_type") == ExecutionEventType.AGENT_CALL.value for raw in mine["held"]
+            )
             waiting = _ToolCallsOutcome()
             async for ev in self._next_waiting_branch(state, context, waiting):
                 yield ev
@@ -4425,7 +4461,7 @@ class Runner:
                 transition.should_continue = False
             if waiting.paused or not waiting.should_continue:
                 return
-            if waiting.ran_agents:
+            if held_agents:
                 context = await self._context_after_branches(state, context)
                 transition.context = context
 
@@ -4825,7 +4861,7 @@ class Runner:
 
     def _store(self, state: RunnerState, context: InteractionContext) -> dict[str, Any]:
         """Where the current agent's held calls and batch of sub-agents are kept."""
-        return self._stack(state).store(context.state)
+        return state.branch.record if state.branch is not None else context.state
 
     async def _add_event(
         self,

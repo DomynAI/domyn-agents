@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 
 from domyn.agents.core import (
     AGENT_ERROR_CODE,
@@ -452,6 +452,14 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
     time. On, the calls are marked as a batch (``METADATA_TOOL_BATCH``) and the
     runner runs them together; off, each runs as it arrives, after the one before
     it. See ``Runner._run_tool_calls``."""
+
+    @model_validator(mode="after")
+    def refuse_parallel_handoffs_alone(self) -> "ToolUsePlannerStrategy":
+        # The batch is what runs sub-agents together: without it the option would
+        # do nothing, silently.
+        if self.parallel_handoffs and not self.parallel_tool_calls:
+            raise ValueError("parallel_handoffs needs parallel_tool_calls")
+        return self
 
     def batches(
         self, agent: Any, tool_calls: list[LLMToolCall], context: InteractionContext
