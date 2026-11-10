@@ -286,14 +286,19 @@ class GitBashBackend(LocalBackend):
         return self._bash
 
     async def _spawn(self, command: str, streams: dict[str, Any]) -> asyncio.subprocess.Process:
+        # The line travels in the environment, not on the command line: a Git Bash
+        # started from a Windows program re-reads its command line by rules of its
+        # own, with single quotes as quotes and globbing, so every line with a '
+        # in it (all of shlex.quote's) arrived rewritten. Unset before it runs.
+        env = {**(streams.get("env") or os.environ), "DOMYN_COMMAND": command}
         return await asyncio.create_subprocess_exec(
             str(self.bash),
             "-c",
-            command,
+            'c=$DOMYN_COMMAND; unset DOMYN_COMMAND; eval "$c"',
             # Its own group, so a timeout can end the whole tree with taskkill
             # /T; and no console window flashing up for every command.
             creationflags=_WINDOWS_CREATION_FLAGS,
-            **streams,
+            **{**streams, "env": env},
         )
 
     async def _terminate(self, process: asyncio.subprocess.Process) -> None:

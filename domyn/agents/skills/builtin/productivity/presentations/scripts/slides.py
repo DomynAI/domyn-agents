@@ -58,8 +58,8 @@ import check_pptx  # noqa: E402  (beside this file; the check's measure is fits(
 SKILL_DIR = HERE.parent
 TEMPLATE = SKILL_DIR / "template" / "layouts.pptx"
 RESOURCES = Path(__file__).resolve().parents[3] / "resources"
-P = json.loads((RESOURCES / "palette.json").read_text())
-T = json.loads((RESOURCES / "typography.json").read_text())
+P = json.loads((RESOURCES / "palette.json").read_text(encoding="utf-8"))
+T = json.loads((RESOURCES / "typography.json").read_text(encoding="utf-8"))
 ASSETS = RESOURCES / "assets"
 
 EMU = 914400  # per inch

@@ -68,12 +68,12 @@ class FileCursorStore:
         if not self._path.exists():
             return {}
         try:
-            return cast(dict[str, str], json.loads(self._path.read_text()))
+            return cast(dict[str, str], json.loads(self._path.read_text(encoding="utf-8")))
         except (json.JSONDecodeError, OSError):
             return {}
 
     def _write(self, data: dict[str, str]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data))
+        tmp.write_text(json.dumps(data), encoding="utf-8")
         tmp.replace(self._path)  # atomic on POSIX

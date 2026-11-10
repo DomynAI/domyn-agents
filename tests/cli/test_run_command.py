@@ -40,20 +40,20 @@ class TestLoadModuleFromPath:
 
     def test_raises_value_error_for_non_py_extension(self, tmp_path: Path) -> None:
         yaml_file = tmp_path / "config.yaml"
-        yaml_file.write_text("agents: []")
+        yaml_file.write_text("agents: []", encoding="utf-8")
         with pytest.raises(ValueError, match=r"\.py"):
             load_module_from_path(str(yaml_file))
 
     def test_loads_module_and_exposes_variables(self, tmp_path: Path) -> None:
         py_file = tmp_path / "my_module.py"
-        py_file.write_text("ANSWER = 42\nMESSAGE = 'hello'\n")
+        py_file.write_text("ANSWER = 42\nMESSAGE = 'hello'\n", encoding="utf-8")
         module = load_module_from_path(str(py_file))
         assert module.ANSWER == 42
         assert module.MESSAGE == "hello"
 
     def test_loaded_module_is_executable_python(self, tmp_path: Path) -> None:
         py_file = tmp_path / "compute.py"
-        py_file.write_text("RESULT = 2 + 2 * 5\n")
+        py_file.write_text("RESULT = 2 + 2 * 5\n", encoding="utf-8")
         module = load_module_from_path(str(py_file))
         assert module.RESULT == 12
 
@@ -399,7 +399,7 @@ class TestBuildSkillsRuntime:
     def test_builds_runtime_for_existing_dir(self, tmp_path: Path) -> None:
         skills = tmp_path / "skills"
         skills.mkdir()
-        (skills / "a.md").write_text("---\nname: a\ndescription: d\n---\nbody\n")
+        (skills / "a.md").write_text("---\nname: a\ndescription: d\n---\nbody\n", encoding="utf-8")
         runtime = build_skills_runtime([skills], expand_all=False)
         assert runtime is not None
         assert "a.md" not in runtime.source.describe()
@@ -477,7 +477,7 @@ class TestRunCommandExtendsTheAgentsSkills:
     def _skills_dir(root: Path, name: str) -> Path:
         directory = root / name
         directory.mkdir()
-        (directory / f"{name}.md").write_text(SKILL.format(name=name))
+        (directory / f"{name}.md").write_text(SKILL.format(name=name), encoding="utf-8")
         return directory
 
     def test_a_local_dir_runtime_keeps_its_paths_and_its_config(
@@ -641,7 +641,7 @@ class TestRunCommandWithARootThatHasNoSkillsField:
         from domyn.agents.cli.commands.run import command
 
         config = tmp_path / "agent.yaml"
-        config.write_text(DELEGATE_CONFIG)
+        config.write_text(DELEGATE_CONFIG, encoding="utf-8")
 
         started: list[object] = []
 

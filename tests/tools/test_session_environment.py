@@ -101,14 +101,14 @@ class TestBuildingTheEnvironment:
         SessionEnvironment(tmp_path).prepare("c1")
         marker = tmp_path / ".domyn" / "conversations" / ".gitignore"
         assert marker.is_file()
-        assert "*" in marker.read_text()
+        assert "*" in marker.read_text(encoding="utf-8")
 
     def test_an_existing_ignore_file_is_left_alone(self, tmp_path: Path) -> None:
         conversations = tmp_path / ".domyn" / "conversations"
         conversations.mkdir(parents=True)
-        (conversations / ".gitignore").write_text("mine\n")
+        (conversations / ".gitignore").write_text("mine\n", encoding="utf-8")
         SessionEnvironment(tmp_path).prepare("c1")
-        assert (conversations / ".gitignore").read_text() == "mine\n"
+        assert (conversations / ".gitignore").read_text(encoding="utf-8") == "mine\n"
 
     @pytest.mark.parametrize(
         "linked", [".domyn", ".domyn/conversations", ".domyn/conversations/c1"]
@@ -142,7 +142,7 @@ class TestBuildingTheEnvironment:
         which is how things worked before. Refusing to run the command at all
         would trade a small problem for a total one."""
         blocked = tmp_path / "file-not-a-dir"
-        blocked.write_text("x")
+        blocked.write_text("x", encoding="utf-8")
         assert SessionEnvironment(blocked).prepare("c1") is None
 
 

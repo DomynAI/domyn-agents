@@ -322,11 +322,11 @@ class TestTheCommandLine:
         workspace = tmp_path / "repo"
         (workspace / ".domyn" / "browser").mkdir(parents=True)
         victim = tmp_path / "zshrc"
-        victim.write_text("precious\n")
+        victim.write_text("precious\n", encoding="utf-8")
         (workspace / ".domyn" / "browser" / "agent-browser.json").symlink_to(victim)
         # Stands in for agent-browser: prints the file its `--config` names.
         stub = tmp_path / "stub-browser"
-        stub.write_text('#!/bin/sh\ncat "$2"\n')
+        stub.write_text('#!/bin/sh\ncat "$2"\n', encoding="utf-8")
         stub.chmod(0o755)
 
         backend = build_backend("local", Workspace(workspace))
@@ -335,7 +335,7 @@ class TestTheCommandLine:
 
         assert result.exit_code == 0, result.stderr
         assert result.stdout == "{}"
-        assert victim.read_text() == "precious\n"
+        assert victim.read_text(encoding="utf-8") == "precious\n"
 
     def test_session_names_fit_the_socket_budget(self) -> None:
         """A 37-character name overflowed the 103-byte socket path, measured."""

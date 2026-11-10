@@ -86,9 +86,9 @@ for _needed in (PALETTE_FILE, TYPOGRAPHY_FILE):
 # Every colour a chart uses, by its palette key: what the style does not set itself is
 # taken from here by role, e.g. a reference line in PALETTE["text"]["light_background"]
 # ["muted"], the second series' colour in PALETTE["charts"]["categorical"][1].
-PALETTE = json.loads(PALETTE_FILE.read_text())
+PALETTE = json.loads(PALETTE_FILE.read_text(encoding="utf-8"))
 # The text roles (title, body, caption…) and their sizes in points.
-TYPOGRAPHY = json.loads(TYPOGRAPHY_FILE.read_text())
+TYPOGRAPHY = json.loads(TYPOGRAPHY_FILE.read_text(encoding="utf-8"))
 
 # Where the DM Sans files are: the skills' resources, or a run folder's copy.
 FONT_DIRS = (HERE / "assets" / "fonts", HERE / "fonts")

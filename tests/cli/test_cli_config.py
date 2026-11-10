@@ -6,6 +6,7 @@ working state on the way to `configuration_v1_dict_from`. These tests exercise
 that projection, the credentials store, and the small pure helpers around them.
 """
 
+import os
 from pathlib import Path
 from typing import ClassVar
 from unittest.mock import patch
@@ -37,9 +38,11 @@ class TestConfigLocation:
         """Project-local wins so a repo can pin its own model without touching
         the user's global setup."""
         (cfg.GLOBAL_DIR).mkdir(parents=True)
-        (cfg.GLOBAL_DIR / cfg.CONFIG_FILENAME).write_text("entrypoint: Global\n")
+        (cfg.GLOBAL_DIR / cfg.CONFIG_FILENAME).write_text("entrypoint: Global\n", encoding="utf-8")
         (cfg.PROJECT_DIR).mkdir(parents=True)
-        (cfg.PROJECT_DIR / cfg.CONFIG_FILENAME).write_text("entrypoint: Project\n")
+        (cfg.PROJECT_DIR / cfg.CONFIG_FILENAME).write_text(
+            "entrypoint: Project\n", encoding="utf-8"
+        )
 
         raw = cfg.read_raw_config()
         assert raw is not None
@@ -57,6 +60,9 @@ class TestConfigLocation:
 
 
 class TestSecrets:
+    @pytest.mark.skipif(
+        os.name == "nt", reason="Windows has no mode bits: the profile's ACL guards it"
+    )
     def test_credentials_file_is_owner_only(self) -> None:
         path = cfg.write_credential("OPENAI_API_KEY", "sk-x")
         assert oct(path.stat().st_mode)[-3:] == "600"

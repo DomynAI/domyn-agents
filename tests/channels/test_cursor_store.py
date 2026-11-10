@@ -84,7 +84,7 @@ async def test_persists_across_store_instances(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_corrupted_file_treated_as_empty(tmp_path: Path) -> None:
     path = tmp_path / "cursors.json"
-    path.write_text("{not valid json")
+    path.write_text("{not valid json", encoding="utf-8")
     store = FileCursorStore(path)
     assert await store.load("chan-1") is None
     # Saving after a corrupt read must still work (starts fresh).

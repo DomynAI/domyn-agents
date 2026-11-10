@@ -112,7 +112,7 @@ def _review(folder: Path, console: Console, theme: Theme, *, runs_code: bool) ->
             console,
             theme,
             "warning",
-            f"The project {folder} names files outside its folder, which this machine "
+            f"The project {folder.as_posix()} names files outside its folder, which this machine "
             "would read or use:\n" + "".join(f"  - {line}\n" for line in problems),
         )
         _confirm(
@@ -121,14 +121,14 @@ def _review(folder: Path, console: Console, theme: Theme, *, runs_code: bool) ->
             "Use this project anyway?",
             f"Not used: check the paths above, then use the project from a terminal to "
             f"confirm them, or change its config.yaml so it names only files inside "
-            f"{folder}.",
+            f"{folder.as_posix()}.",
         )
     if runs_code and (code := code_files(raw)):
         _say(
             console,
             theme,
             "warning",
-            f"The project {folder} runs code of its own when the agent starts, before any "
+            f"The project {folder.as_posix()} runs code of its own when the agent starts, before any "
             "approval is asked: Python with everything you can do on this machine.",
         )
         for path in code:
@@ -138,7 +138,7 @@ def _review(folder: Path, console: Console, theme: Theme, *, runs_code: bool) ->
                 if path.is_file()
                 else ["    does not exist"]
             )
-            _say(console, theme, "meta", f"  {path}\n" + "\n".join(lines))
+            _say(console, theme, "meta", f"  {path.as_posix()}\n" + "\n".join(lines))
         _confirm(
             console,
             theme,

@@ -107,7 +107,7 @@ def main() -> None:
     args = p.parse_args()
 
     out = common.data_utils.output_dir(args.out)
-    meta = json.loads((out / common.META_FILE).read_text())
+    meta = json.loads((out / common.META_FILE).read_text(encoding="utf-8"))
     target, freq, h = meta["target"], meta["freq"], meta["horizon"]
     names = {
         "seasonal_naive": "Seasonal naive",
@@ -386,11 +386,12 @@ def main() -> None:
         f"{args.main_label} − seasonal naive {args.metric}: 95% CI {nlo:+.3g} to {nhi:+.3g} — {naive_verdict}\n\n"
         f"{common.markdown_table(by_window)}\n\n"
         "Coverage: the share of actual values inside the 80% / 95% intervals. Close to 80 / 95 "
-        "means the intervals are honest; well below means they are too narrow.\n"
+        "means the intervals are honest; well below means they are too narrow.\n",
+        encoding="utf-8",
     )
     common.record_run(out, Path(__file__), "compare")
 
-    print((out / "comparison.md").read_text())
+    print((out / "comparison.md").read_text(encoding="utf-8"))
     print(f"outputs in {out}")
 
 

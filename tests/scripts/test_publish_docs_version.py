@@ -15,13 +15,13 @@ publish = publish_docs_version.publish
 def make_build(root: Path, marker: str) -> Path:
     build = root / f"build-{marker}"
     (build / "guides").mkdir(parents=True)
-    (build / "index.html").write_text(marker)
-    (build / "guides" / "tools.html").write_text(marker)
+    (build / "index.html").write_text(marker, encoding="utf-8")
+    (build / "guides" / "tools.html").write_text(marker, encoding="utf-8")
     return build
 
 
 def listed(site: Path) -> dict:
-    return json.loads((site / "versions.json").read_text())
+    return json.loads((site / "versions.json").read_text(encoding="utf-8"))
 
 
 class TestPublishingAVersion:
@@ -29,7 +29,7 @@ class TestPublishingAVersion:
         site = tmp_path / "site"
         publish(site, make_build(tmp_path, "one"), "v1.0.0", "/repo/")
 
-        assert (site / "v1.0.0" / "guides" / "tools.html").read_text() == "one"
+        assert (site / "v1.0.0" / "guides" / "tools.html").read_text(encoding="utf-8") == "one"
         assert (site / ".nojekyll").exists()
         assert listed(site) == {"latest": "v1.0.0", "versions": ["v1.0.0"]}
 
@@ -38,9 +38,9 @@ class TestPublishingAVersion:
         publish(site, make_build(tmp_path, "one"), "v1.0.0", "/repo/")
         publish(site, make_build(tmp_path, "two"), "v1.1.0", "/repo/")
 
-        assert "/repo/v1.1.0/" in (site / "index.html").read_text()
-        assert '"v1.1.0"' in (site / "404.html").read_text()
-        assert (site / "v1.0.0" / "index.html").read_text() == "one"
+        assert "/repo/v1.1.0/" in (site / "index.html").read_text(encoding="utf-8")
+        assert '"v1.1.0"' in (site / "404.html").read_text(encoding="utf-8")
+        assert (site / "v1.0.0" / "index.html").read_text(encoding="utf-8") == "one"
 
     def test_a_patch_of_an_older_line_does_not_take_the_root(self, tmp_path: Path) -> None:
         site = tmp_path / "site"
@@ -67,10 +67,10 @@ class TestPublishingAVersion:
     def test_republishing_a_tag_replaces_it_without_leftovers(self, tmp_path: Path) -> None:
         site = tmp_path / "site"
         publish(site, make_build(tmp_path, "first"), "v1.0.0")
-        (site / "v1.0.0" / "stale.html").write_text("stale")
+        (site / "v1.0.0" / "stale.html").write_text("stale", encoding="utf-8")
         publish(site, make_build(tmp_path, "second"), "v1.0.0")
 
-        assert (site / "v1.0.0" / "index.html").read_text() == "second"
+        assert (site / "v1.0.0" / "index.html").read_text(encoding="utf-8") == "second"
         assert not (site / "v1.0.0" / "stale.html").exists()
         assert listed(site)["versions"] == ["v1.0.0"]
 

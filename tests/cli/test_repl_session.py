@@ -178,7 +178,9 @@ class TestSlashCommands:
         from domyn.agents.skills import LocalDirSkillSource, SkillsRuntime
         from domyn.agents.skills.integration import attach_skills
 
-        (tmp_path / "essay.md").write_text("---\nname: essay\ndescription: d\n---\nbody\n")
+        (tmp_path / "essay.md").write_text(
+            "---\nname: essay\ndescription: d\n---\nbody\n", encoding="utf-8"
+        )
         repl, buffer = _repl("/skill zzz", "then a real message")
         attach_skills(repl._agent, SkillsRuntime(source=LocalDirSkillSource(paths=[tmp_path])))
 

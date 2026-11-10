@@ -1,10 +1,17 @@
 """The suite's own cleanup: background commands a test leaves running are stopped."""
 
+import os
 import subprocess
 import time
 from pathlib import Path
 
+import pytest
+
 from tests.conftest import _PROCESS_FILES, _stop_background_commands
+
+# The POSIX cleanup: these record a native pid, where on Windows the files hold
+# the pid Git Bash gave the wrapper, which only a Git Bash can map back.
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="the POSIX cleanup, by process group")
 
 
 def _start(workspace: Path, *, recorded_pgid: int | None = None) -> subprocess.Popen[bytes]:
@@ -12,8 +19,8 @@ def _start(workspace: Path, *, recorded_pgid: int | None = None) -> subprocess.P
     process = subprocess.Popen(["sleep", "60"], start_new_session=True)
     run = workspace / ".domyn" / "processes" / "default" / "abc123"
     run.mkdir(parents=True)
-    (run / "run.pid").write_text(f"{process.pid}\n")
-    (run / "run.pgid").write_text(f"{recorded_pgid or process.pid}\n")
+    (run / "run.pid").write_text(f"{process.pid}\n", encoding="utf-8")
+    (run / "run.pgid").write_text(f"{recorded_pgid or process.pid}\n", encoding="utf-8")
     return process
 
 

@@ -75,10 +75,11 @@ class TestReadingTheKey:
         assert _parse("required:\n  - scripts/\n") == []
 
     def test_files_that_are_there_are_not_shown_to_the_model(self, tmp_path: Path) -> None:
-        (tmp_path / "secret-name.py").write_text("x")
+        (tmp_path / "secret-name.py").write_text("x", encoding="utf-8")
         skill = tmp_path / "SKILL.md"
         skill.write_text(
-            "---\nname: s\ndescription: d\nexternal_files:\n  - secret-name.py\n---\nbody\n"
+            "---\nname: s\ndescription: d\nexternal_files:\n  - secret-name.py\n---\nbody\n",
+            encoding="utf-8",
         )
         descriptor, content = parse_skill_file(skill)
 
@@ -89,7 +90,9 @@ class TestReadingTheKey:
 
     def test_a_missing_file_is_named_in_the_unavailable_reason(self, tmp_path: Path) -> None:
         skill = tmp_path / "SKILL.md"
-        skill.write_text("---\nname: s\ndescription: d\nexternal_files:\n  - x.py\n---\nbody\n")
+        skill.write_text(
+            "---\nname: s\ndescription: d\nexternal_files:\n  - x.py\n---\nbody\n", encoding="utf-8"
+        )
         descriptor, _ = parse_skill_file(skill)
 
         line = evaluate_requirements(descriptor).index_line()
@@ -112,9 +115,9 @@ class TestReadingTheKey:
 def skill_file(tmp_path: Path) -> Path:
     folder = tmp_path / "area" / "skill"
     (folder / "scripts").mkdir(parents=True)
-    (folder / "scripts" / "run.py").write_text("x")
-    (folder / "SKILL.md").write_text("---\nname: skill\ndescription: d\n---\nb\n")
-    (tmp_path / "area" / "shared.py").write_text("s")
+    (folder / "scripts" / "run.py").write_text("x", encoding="utf-8")
+    (folder / "SKILL.md").write_text("---\nname: skill\ndescription: d\n---\nb\n", encoding="utf-8")
+    (tmp_path / "area" / "shared.py").write_text("s", encoding="utf-8")
     return folder / "SKILL.md"
 
 
@@ -168,7 +171,7 @@ class TestExpanding:
         (scripts / "__pycache__").mkdir()
         (scripts / "__pycache__" / "run.cpython-312.pyc").write_bytes(b"c")
         (scripts / "deep").mkdir()
-        (scripts / "deep" / "more.py").write_text("m")
+        (scripts / "deep" / "more.py").write_text("m", encoding="utf-8")
 
         names = [p.relative_to(scripts).as_posix() for p in expand_files(scripts)]
 
@@ -178,7 +181,7 @@ class TestExpanding:
         self, skill_file: Path, tmp_path: Path
     ) -> None:
         outside = tmp_path / "secret.txt"
-        outside.write_text("s")
+        outside.write_text("s", encoding="utf-8")
         scripts = skill_file.parent / "scripts"
         (scripts / "link.txt").symlink_to(outside)
 
@@ -190,7 +193,7 @@ class TestExpanding:
         """Only what is *below* the entry is judged: the folders above are the user's."""
         weird = tmp_path / "__pycache__" / "skill"
         weird.mkdir(parents=True)
-        (weird / "a.py").write_text("a")
+        (weird / "a.py").write_text("a", encoding="utf-8")
 
         assert [p.name for p in expand_files(weird)] == ["a.py"]
 
@@ -230,14 +233,15 @@ class TestCheckedOnEveryLoad:
         folder = tmp_path / "skills" / "report"
         folder.mkdir(parents=True)
         (folder / "SKILL.md").write_text(
-            "---\nname: report\ndescription: d\nexternal_files:\n  - build.py\n---\nb\n"
+            "---\nname: report\ndescription: d\nexternal_files:\n  - build.py\n---\nb\n",
+            encoding="utf-8",
         )
 
         available, reason = self._availability(tmp_path / "skills")
         assert available is False
         assert reason is not None and "build.py" in reason
 
-        (folder / "build.py").write_text("x")
+        (folder / "build.py").write_text("x", encoding="utf-8")
 
         assert self._availability(tmp_path / "skills") == (True, None)
 
@@ -246,7 +250,7 @@ class TestCheckedOnEveryLoad:
         folder = tmp_path / "skills" / "report"
         folder.mkdir(parents=True)
         (folder / "SKILL.md").write_text(
-            "---\nname: report\ndescription: d\nrequired:\n  - build.py\n---\nb\n"
+            "---\nname: report\ndescription: d\nrequired:\n  - build.py\n---\nb\n", encoding="utf-8"
         )
 
         assert self._availability(tmp_path / "skills") == (True, None)

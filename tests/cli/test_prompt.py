@@ -139,7 +139,7 @@ class TestCapabilityGating:
         pytest.importorskip("prompt_toolkit")
         monkeypatch.setattr("sys.stdin.isatty", lambda: True, raising=False)
         blocked = tmp_path / "blocked"
-        blocked.write_text("not a directory")
+        blocked.write_text("not a directory", encoding="utf-8")
         session, _ = _session(enable_enhanced=True, history_path=blocked / "sub" / "history")
         assert session.enhanced
 
@@ -406,7 +406,7 @@ class TestAChoiceInsideTheEditor:
     async def test_an_arrow_after_a_number_does_not_recall_history(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        (tmp_path / "history").write_text("\n# 2026-01-01\n+earlier message\n")
+        (tmp_path / "history").write_text("\n# 2026-01-01\n+earlier message\n", encoding="utf-8")
         assert await self._run(monkeypatch, tmp_path, "2\x1b[A\r") == (0, "reading", False)
 
     @pytest.mark.asyncio

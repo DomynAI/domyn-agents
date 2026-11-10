@@ -85,7 +85,7 @@ agent = Agent(
 '''
 
     agent_file = project_dir / "agent.py"
-    agent_file.write_text(agent_content)
+    agent_file.write_text(agent_content, encoding="utf-8")
     typer.echo(f"Created agent configuration: {agent_file}")
 
 
@@ -114,7 +114,7 @@ CMD ["uv", "run", "domyn", "serve", "agent.py", "--host", "0.0.0.0", "--port", "
 """
 
     dockerfile = project_dir / "Dockerfile"
-    dockerfile.write_text(dockerfile_content)
+    dockerfile.write_text(dockerfile_content, encoding="utf-8")
     typer.echo(f"Created Dockerfile: {dockerfile}")
 
 
@@ -167,7 +167,7 @@ https://domynai.github.io/domyn-agents/.
 """
 
     readme_file = project_dir / "README.md"
-    readme_file.write_text(readme_content)
+    readme_file.write_text(readme_content, encoding="utf-8")
     typer.echo(f"Created README: {readme_file}")
 
 
@@ -183,7 +183,9 @@ def find_domyn_agents_checkout(start: Path) -> Path | None:
         if not candidate.is_file():
             continue
         try:
-            name = tomlkit.parse(candidate.read_text()).get("project", {}).get("name")
+            name = (
+                tomlkit.parse(candidate.read_text(encoding="utf-8")).get("project", {}).get("name")
+            )
         except Exception:
             continue
         if name == "domyn":
@@ -328,7 +330,7 @@ def init_command(
         # Adding .gitignore if not present
         gitignore_file = project_dir / ".gitignore"
         if not gitignore_file.exists():
-            gitignore_file.write_text("")
+            gitignore_file.write_text("", encoding="utf-8")
 
         # Success message
         typer.echo(f"\n✅ Successfully created Domyn Agents project: {project_name}")

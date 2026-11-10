@@ -58,7 +58,7 @@ def console() -> MagicMock:
 def _write(path: Path, name: str, extra: str = "") -> None:
     file = path if path.suffix == ".md" else path / "SKILL.md"
     file.parent.mkdir(parents=True, exist_ok=True)
-    file.write_text(f"---\nname: {name}\ndescription: d\n{extra}---\nbody\n")
+    file.write_text(f"---\nname: {name}\ndescription: d\n{extra}---\nbody\n", encoding="utf-8")
 
 
 @pytest.fixture

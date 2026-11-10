@@ -58,8 +58,10 @@ def _enums(schema: Any, path: str = "") -> dict[str, list[Any]]:
 def test_the_wire_shape_of_base_event_is_unchanged() -> None:
     actual = _shape(BaseEvent.model_json_schema())
     if os.environ.get("DOMYN_UPDATE_SCHEMA"):
-        SCHEMA_FILE.write_text(json.dumps(actual, indent=2, sort_keys=True) + "\n")
-    expected = json.loads(SCHEMA_FILE.read_text())
+        SCHEMA_FILE.write_text(
+            json.dumps(actual, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    expected = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))
 
     assert _without_enums(actual) == _without_enums(expected), (
         "BaseEvent's schema changed. If it is intended, regenerate "

@@ -1,3 +1,4 @@
+import os
 from collections.abc import AsyncGenerator, Coroutine, Generator
 from typing import Any
 
@@ -87,6 +88,22 @@ def tool_end_event() -> BaseEvent:
         action=ToolAction(name="my_tool", parameters={}, observation="tool result"),
         content=[Part(text="Result: tool result")],
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_windows_console_needed() -> Generator[None, None, None]:
+    """On Windows, prompt_toolkit draws only to a real console, which a test run
+    has none of (NoConsoleScreenBufferError). An editor a test builds draws to
+    nothing instead; a test that sets up its own app session still wins, being
+    inside this one. Elsewhere it changes nothing."""
+    if os.name != "nt":
+        yield
+        return
+    from prompt_toolkit.application import create_app_session
+    from prompt_toolkit.output import DummyOutput
+
+    with create_app_session(output=DummyOutput()):
+        yield
 
 
 @pytest.fixture(autouse=True)

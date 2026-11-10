@@ -58,7 +58,7 @@ def _write(path: Path, name: str, description: str = "does a thing") -> None:
     else:
         path.mkdir(parents=True, exist_ok=True)
         file = path / "SKILL.md"
-    file.write_text(f"---\nname: {name}\ndescription: {description}\n---\nbody\n")
+    file.write_text(f"---\nname: {name}\ndescription: {description}\n---\nbody\n", encoding="utf-8")
 
 
 # Captured before the CLI conftest replaces it for every other wizard test.
@@ -255,7 +255,7 @@ class TestWhatTheConfigHolds:
     ) -> None:
         stray = cfg.skills_install_dir() / "mine"
         stray.mkdir(parents=True)
-        (stray / "SKILL.md").write_text("mine")
+        (stray / "SKILL.md").write_text("mine", encoding="utf-8")
 
         result = _run(console, theme, [*FIELDS, "none", "no", ""])
 
@@ -422,7 +422,7 @@ class TestTheStartupWarning:
         self, llm_provider: Any, tmp_path: Path
     ) -> None:
         (tmp_path / "a").mkdir()
-        (tmp_path / "b.md").write_text("x")
+        (tmp_path / "b.md").write_text("x", encoding="utf-8")
 
         assert (
             _missing_skills_warning(_agent(llm_provider, [tmp_path / "a", tmp_path / "b.md"]))
@@ -576,7 +576,7 @@ def _skill_with_external_files(root: Path, name: str, entries: list[str]) -> Non
     listed = "".join(f"  - {e}\n" for e in entries)
     (root / name).mkdir(parents=True, exist_ok=True)
     (root / name / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: d\nexternal_files:\n{listed}---\nbody\n"
+        f"---\nname: {name}\ndescription: d\nexternal_files:\n{listed}---\nbody\n", encoding="utf-8"
     )
 
 

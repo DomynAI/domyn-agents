@@ -27,7 +27,16 @@ def main(argv: list[str]) -> int:
         return 2
     version = argv[1].removeprefix("v")
     out = subprocess.run(
-        ["gh", "release", "view", f"v{version}", "-R", "vercel-labs/agent-browser", "--json", "assets"],
+        [
+            "gh",
+            "release",
+            "view",
+            f"v{version}",
+            "-R",
+            "vercel-labs/agent-browser",
+            "--json",
+            "assets",
+        ],
         check=True,
         capture_output=True,
         text=True,

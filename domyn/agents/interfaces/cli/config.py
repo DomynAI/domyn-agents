@@ -422,7 +422,7 @@ def project_location(folder: Path) -> str:
     try:
         return f"~/{folder.relative_to(Path.home()).as_posix()}"
     except ValueError:
-        return str(folder)
+        return folder.as_posix()
 
 
 def home_dir() -> Path:

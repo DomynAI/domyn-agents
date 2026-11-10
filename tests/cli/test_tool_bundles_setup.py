@@ -124,7 +124,13 @@ class TestARerun:
         first = _run(console, theme, [*FIELDS, "none", ""], path=target)
         assert first is not None
 
-        second = _run(console, theme, [""] * 8, yaml.safe_load(target.read_text()), path=target)
+        second = _run(
+            console,
+            theme,
+            [""] * 8,
+            yaml.safe_load(target.read_text(encoding="utf-8")),
+            path=target,
+        )
 
         assert second is not None
         assert _mounted(second) is None

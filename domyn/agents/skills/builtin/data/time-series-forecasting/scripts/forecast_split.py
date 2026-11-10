@@ -33,7 +33,7 @@ def main() -> None:
     panel = common.Panel(args)
     common.record_run(panel.out, Path(__file__), "split")
 
-    meta = json.loads((panel.out / common.META_FILE).read_text())
+    meta = json.loads((panel.out / common.META_FILE).read_text(encoding="utf-8"))
     print(
         f"{meta['series']} series of {meta['target']}, {meta['periods']} {meta['freq']} periods "
         f"({meta['first_period']} to {meta['last_period']}), season length {meta['season_length']}"

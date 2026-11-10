@@ -56,7 +56,9 @@ def locate(cwd: Path, script_dir: Path, decoy: Path) -> subprocess.CompletedProc
 def decoy(tmp_path: Path) -> Path:
     folder = tmp_path / "decoy"
     folder.mkdir()
-    (folder / "seaborn_style.py").write_text("raise SystemExit('the wrong seaborn_style')\n")
+    (folder / "seaborn_style.py").write_text(
+        "raise SystemExit('the wrong seaborn_style')\n", encoding="utf-8"
+    )
     return folder
 
 
@@ -75,7 +77,7 @@ class TestItIsFoundByTheTreeAlone:
         """tabular-classification-regression's common.py needs scikit-learn to import, which
         the test environment lacks, so its path setup is checked by reading it."""
         for common in DATA_SKILLS.glob("*/scripts/common.py"):
-            text = common.read_text()
+            text = common.read_text(encoding="utf-8")
             assert (
                 'sys.path.insert(1, str(Path(__file__).resolve().parents[3] / "resources"))' in text
             ), common
@@ -85,13 +87,15 @@ class TestItIsFoundByTheTreeAlone:
         that order only because `seaborn_style` sorts after `common`: a rename that broke
         it would leave every chart script failing on its first import."""
         scripts = [
-            s for s in BUILTIN.glob("*/*/scripts/*.py") if "import seaborn_style" in s.read_text()
+            s
+            for s in BUILTIN.glob("*/*/scripts/*.py")
+            if "import seaborn_style" in s.read_text(encoding="utf-8")
         ]
         assert scripts
         for script in scripts:
             if script.name == "common.py":
                 continue  # imports it inside the functions that draw
-            lines = script.read_text().splitlines()
+            lines = script.read_text(encoding="utf-8").splitlines()
             first = {
                 name: next(i for i, ln in enumerate(lines) if re.match(rf"import {name}\b", ln))
                 for name in ("common", "seaborn_style")
@@ -103,7 +107,7 @@ class TestItIsFoundByTheTreeAlone:
         allowed = {PLOTLY_STYLE, BUILTIN / "visualization" / "interactive-charts" / "SKILL.md"}
         for path in BUILTIN.rglob("*"):
             if path.suffix in (".py", ".md") and path not in allowed:
-                text = path.read_text().lower()
+                text = path.read_text(encoding="utf-8").lower()
                 assert "import plotly" not in text and "kaleido" not in text, path
 
 
@@ -116,7 +120,7 @@ class TestARunFolderKeepsItsOwnCopy:
             sys.path.remove(str(DATA_SKILLS))
         out = data_utils.output_dir(tmp_path / "run")
         script = out.parent / "step.py"
-        script.write_text("")
+        script.write_text("", encoding="utf-8")
         data_utils.record_run(out, script, ("step",))
         assert (out / "seaborn_style.py").read_bytes() == STYLE.read_bytes()
         assert (out / "palette.json").read_bytes() == PALETTE.read_bytes()
@@ -211,7 +215,7 @@ def palette_colours(node: object) -> set[str]:
 class TestThePalette:
     def test_every_chart_colour_is_one_of_the_templates(self) -> None:
         """The `charts` section arranges colours extracted from the master deck; it adds none."""
-        palette = json.loads(PALETTE.read_text())
+        palette = json.loads(PALETTE.read_text(encoding="utf-8"))
         charts = palette.pop("charts")
         assert palette_colours(charts) <= palette_colours(palette)
         accents = ("primary", "secondary", "tertiary", "quaternary", "quinary", "senary")
@@ -252,7 +256,7 @@ class TestTheStyle:
         import matplotlib as mpl
         from matplotlib.colors import to_hex
 
-        palette = json.loads(PALETTE.read_text())
+        palette = json.loads(PALETTE.read_text(encoding="utf-8"))
         charts, text = palette["charts"], palette["text"]["light_background"]
         rc = mpl.rcParams
         assert [to_hex(c["color"]).upper() for c in rc["axes.prop_cycle"]] == [
@@ -269,7 +273,7 @@ class TestTheStyle:
     def test_text_sizes_are_the_typographys(self, style) -> None:  # type: ignore[no-untyped-def]
         import matplotlib as mpl
 
-        roles = json.loads(TYPOGRAPHY.read_text())["roles"]
+        roles = json.loads(TYPOGRAPHY.read_text(encoding="utf-8"))["roles"]
         assert mpl.rcParams["font.size"] == roles["body"]["size"]
         assert mpl.rcParams["figure.titlesize"] == roles["heading"]["size"]
 
@@ -284,7 +288,7 @@ class TestTheStyle:
         from matplotlib import colormaps
         from matplotlib.colors import to_hex
 
-        charts = json.loads(PALETTE.read_text())["charts"]
+        charts = json.loads(PALETTE.read_text(encoding="utf-8"))["charts"]
         diverging = colormaps[style.colormap("diverging")]
         assert to_hex(diverging(0.0)).upper() == charts["negative"].upper()
         assert to_hex(diverging(1.0)).upper() == charts["positive"].upper()
@@ -380,7 +384,7 @@ class TestThePlotlyStyle:
         return import_from_resources("plotly_style")
 
     def test_it_writes_no_image(self) -> None:
-        text = PLOTLY_STYLE.read_text()
+        text = PLOTLY_STYLE.read_text(encoding="utf-8")
         assert "write_image" not in text and "import kaleido" not in text
 
     def test_importing_it_makes_it_the_default(self, style) -> None:  # type: ignore[no-untyped-def]
@@ -394,7 +398,7 @@ class TestThePlotlyStyle:
     def test_the_template_picks_its_colours_from_the_palette(self, style) -> None:  # type: ignore[no-untyped-def]
         import plotly.io as pio
 
-        palette = json.loads(PALETTE.read_text())
+        palette = json.loads(PALETTE.read_text(encoding="utf-8"))
         charts, text = palette["charts"], palette["text"]["light_background"]
         layout = pio.templates[style.NAME].layout
         assert list(layout.colorway) == charts["categorical"]
@@ -423,7 +427,7 @@ class TestThePlotlyStyle:
         name = style.save(go.Figure(go.Bar(x=["a"], y=[1])), tmp_path, "a chart")
         assert name == "a_chart.html"
         assert sorted(p.name for p in tmp_path.iterdir()) == ["a_chart.html"]
-        page = (tmp_path / name).read_text()
+        page = (tmp_path / name).read_text(encoding="utf-8")
         # A preview serving the page alone has nothing beside it to load.
         assert 'src="plotly.min.js"' not in page
         assert "Plotly" in page and len(page) > 1_000_000

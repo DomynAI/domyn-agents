@@ -36,8 +36,8 @@ def _stop_background_commands(root: Path, pattern: str) -> int:
     stopped = 0
     for pgid_file in root.glob(pattern):
         with contextlib.suppress(OSError, ValueError):
-            pgid = int(pgid_file.read_text().strip())
-            pid = int((pgid_file.parent / "run.pid").read_text().strip())
+            pgid = int(pgid_file.read_text(encoding="utf-8").strip())
+            pid = int((pgid_file.parent / "run.pid").read_text(encoding="utf-8").strip())
             if pgid <= 1 or os.getpgid(pid) != pgid:
                 continue
             os.killpg(pgid, signal.SIGKILL)
@@ -61,26 +61,33 @@ def _stop_background_commands_windows(root: Path, pattern: str) -> int:
     targets = []
     for pgid_file in root.glob(pattern):
         with contextlib.suppress(OSError, ValueError):
-            pid = int((pgid_file.parent / "run.pid").read_text().strip())
+            pid = int((pgid_file.parent / "run.pid").read_text(encoding="utf-8").strip())
             run_sh = "/".join([*pgid_file.parent.parts[-2:], "run.sh"])
             targets.append((pid, run_sh))
     if not targets:
         return 0
+    # One line printed per process ended, which is the count returned.
     lines = [
         f'if tr "\\0" " " < /proc/{pid}/cmdline 2>/dev/null | grep -qF -- {shlex.quote(run_sh)} '
-        f"&& w=$(cat /proc/{pid}/winpid 2>/dev/null); then taskkill //F //T //PID $w; fi"
+        f"&& w=$(cat /proc/{pid}/winpid 2>/dev/null) "
+        f"&& taskkill //F //T //PID $w >/dev/null 2>&1; then echo stopped; fi"
         for pid, run_sh in targets
     ]
     with contextlib.suppress(Exception):
         from domyn.agents.tools.builtin.git_bash import find_git_bash
 
-        subprocess.run(
-            [str(find_git_bash()), "-c", "\n".join(lines)],
+        # The script in the environment, as GitBashBackend sends a line: Git Bash
+        # re-reads its command line, single quotes included.
+        done = subprocess.run(
+            [str(find_git_bash()), "-c", 'eval "$DOMYN_COMMAND"'],
+            env={**os.environ, "DOMYN_COMMAND": "\n".join(lines)},
             capture_output=True,
+            text=True,
             timeout=60,
             check=False,
         )
-    return len(targets)
+        return done.stdout.count("stopped")
+    return 0
 
 
 @pytest.fixture(autouse=True)

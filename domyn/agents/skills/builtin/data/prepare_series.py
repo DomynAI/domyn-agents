@@ -340,7 +340,7 @@ def main() -> None:
     if a.features:
         if a.layout != "long":
             raise SystemExit("--features needs --layout long: wide layouts hold one value per cell")
-        features = sf.check_feature_spec(json.loads(a.features.read_text()))
+        features = sf.check_feature_spec(json.loads(a.features.read_text(encoding="utf-8")))
     if a.table:
         df, _ = data_utils.load_table(a.table)
         a.data = data_utils.find_input(a.table, data_utils.TABLE_FILE)
