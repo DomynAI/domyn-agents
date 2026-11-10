@@ -63,14 +63,11 @@ class TrunkStack:
     async def empty(self) -> None:
         await self._manager.empty_agents_stack(*self._key)
 
-    def store(self, conversation_state: dict[str, Any]) -> dict[str, Any]:
-        """Where this stack's held calls live: the conversation state."""
-        return conversation_state
-
 
 class BranchStack:
     """A branch's stack, kept in its record: what goes on top of its caller's
-    stack if it stops to wait for an answer."""
+    stack if it stops to wait for an answer. The record also holds the calls the
+    branch holds at a pause, moved with its agents."""
 
     def __init__(self, record: dict[str, Any]) -> None:
         self.record = record
@@ -99,21 +96,14 @@ class BranchStack:
     async def empty(self) -> None:
         self.record["stack"].clear()
 
-    def store(self, conversation_state: dict[str, Any]) -> dict[str, Any]:
-        """Where this branch's held calls live: its record, moved to its caller's
-        store with its agents when it goes on top."""
-        return self.record
-
 
 AgentStack = TrunkStack | BranchStack
 
 
-def new_batch(batch_id: str, calls: list[tuple[str, str]]) -> dict[str, Any]:
+def new_batch(calls: list[tuple[str, str]]) -> dict[str, Any]:
     """The record of a batch about to start: one branch per ``(call_id, agent)``,
     in the order of the calls."""
     return {
-        "id": batch_id,
-        "asking": None,
         "branches": [
             {
                 "call_id": call_id,
@@ -132,16 +122,21 @@ def branch_of(batch: dict[str, Any], call_id: str | None) -> dict[str, Any] | No
     return next((b for b in batch["branches"] if b["call_id"] == call_id), None)
 
 
-def hidden_from(batch: dict[str, Any], call_id: str) -> Callable[[], set[str]]:
+def hidden_from(
+    batch: dict[str, Any], call_id: str, outer: Callable[[], set[str]] | None = None
+) -> Callable[[], set[str]]:
     """The interactions a branch must not see: those of its siblings that have not
-    ended. Read when asked, so a sibling that ends is visible from then on."""
+    ended, and whatever its caller does not see (``outer``, for a branch whose
+    caller is a branch). Read when asked, so a sibling that ends is visible from
+    then on."""
 
     def hidden() -> set[str]:
-        return {
+        mine = {
             interaction
             for branch in batch["branches"]
             if branch["call_id"] != call_id and branch["status"] != DONE
             for interaction in branch["interactions"]
         }
+        return mine | outer() if outer is not None else mine
 
     return hidden

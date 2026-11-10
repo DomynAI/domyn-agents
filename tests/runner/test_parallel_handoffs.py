@@ -22,6 +22,7 @@ import pytest
 from pydantic import Field
 
 from domyn.agents.agents import Agent
+from domyn.agents.agents.base import ContextVisibility
 from domyn.agents.agents.delegate_agent import DelegateAgent
 from domyn.agents.conversation_manager import (
     BaseConversationManager,
@@ -36,6 +37,8 @@ from domyn.agents.core import (
     Part,
 )
 from domyn.agents.core.context import InteractionContext
+from domyn.agents.hooks.base import HookPhase, HookResult, HookType
+from domyn.agents.hooks.function_hook import FunctionHook
 from domyn.agents.llm.base import (
     BaseLLMProvider,
     LLMMessage,
@@ -420,10 +423,13 @@ class TestASubAgentWaitingForApproval:
 class _Remote(RunnerTransport):
     """An external agent that takes ``delay`` seconds and then ends with an answer."""
 
-    def __init__(self, name: str, delay: float, log: list[str]) -> None:
+    def __init__(
+        self, name: str, delay: float, log: list[str], interaction_id: str | None = None
+    ) -> None:
         self._name = name
         self._delay = delay
         self._log = log
+        self._interaction_id = interaction_id
 
     async def execute(
         self, agent_name: str, context: InteractionContext
@@ -435,6 +441,7 @@ class _Remote(RunnerTransport):
             event_type=ExecutionEventType.AGENT_END,
             author=self._name,
             content=[Part(text=f"{self._name} found it")],
+            interaction_id=self._interaction_id,
         )
 
     async def send_result(self, event: BaseEvent, conversation_id: str | None = None) -> None:
@@ -633,6 +640,278 @@ class TestWhatRunsAlongside:
         said = " ".join(str(m.content or "") for m in main.shown[1])
         assert "Remote found it" in said and "Alpha found it" in said
 
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_an_external_agent_ending_under_ids_of_its_own_still_ends(
+        self, planner: str
+    ) -> None:
+        # `DelegateAgent` puts the delegation's ids on what the remote runner sends,
+        # which is what tells the branch that its agent ended.
+        log: list[str] = []
+        alpha, _ = _sub("Alpha", planner, log)
+        remote = DelegateAgent(
+            name="Remote",
+            description="finds r",
+            transport=_Remote("Remote", 0.0, log, interaction_id="the-remote-runner-s-own"),
+        )
+        main = _Script(
+            label="main",
+            log=log,
+            replies=[[("Alpha", '{"task": "a"}'), ("Remote", '{"task": "r"}')], "Done."],
+        )
+        root = Agent(
+            name="MainAgent",
+            description="the agent",
+            instruction="delegate",
+            llm_provider=main,
+            planner=_planner(planner, parallel_handoffs=True),
+            sub_agents=[alpha, remote],
+        )
+
+        events = await _run(Runner(), root, f"c_remote_ids_{planner}")
+
+        assert _answered_by_main(events)
+        assert sorted(main.answered(1)) == ["main_1_0", "main_1_1"]
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_a_sub_agent_handing_off_in_turn_stays_in_its_branch(self, planner: str) -> None:
+        log: list[str] = []
+        helper, helper_provider = _sub("Helper", planner, log)
+        alpha_provider = _Script(
+            label="Alpha", log=log, replies=[[("Helper", '{"task": "help"}')], "Alpha found it"]
+        )
+        alpha = Agent(
+            name="Alpha",
+            description="finds a",
+            instruction="ask your helper",
+            llm_provider=alpha_provider,
+            planner=_planner(planner),
+            sub_agents=[helper],
+        )
+        main = _Script(
+            label="main",
+            log=log,
+            replies=[[("Alpha", '{"task": "a"}'), ("Beta", '{"task": "b"}')], "Done."],
+        )
+        root = Agent(
+            name="MainAgent",
+            description="the agent",
+            instruction="delegate",
+            llm_provider=main,
+            planner=_planner(planner, parallel_handoffs=True),
+            sub_agents=[alpha, _sub("Beta", planner, log)[0]],
+        )
+
+        events = await _run(Runner(), root, f"c_inner_handoff_{planner}")
+
+        # Helper returned to Alpha, not to the caller; Alpha was asked again.
+        assert len(helper_provider.shown) == 1
+        assert len(alpha_provider.shown) == 2
+        assert _of(events, ExecutionEventType.AGENT_END).count("Alpha") == 1
+        assert _answered_by_main(events)
+        assert len(main.shown) == 2
+        assert sorted(main.answered(1)) == ["main_1_0", "main_1_1"]
+
+
+class _ByTask(_Script):
+    """A sub-agent whose answer says which task it read; on "task one" it first
+    asks to write, which needs approval."""
+
+    async def generate(self, messages: list[LLMMessage], **kwargs: Any) -> LLMResponse:
+        self.shown.append(list(messages))
+        said = " ".join(str(m.content or "") for m in messages)
+        if "task one" in said and not any(m.role == "tool" for m in messages):
+            return LLMResponse(
+                content="",
+                generated_tokens=1,
+                execution_time=0.0,
+                usage={},
+                tool_calls=[
+                    LLMToolCall(
+                        id=f"w{len(self.shown)}",
+                        type="function",
+                        function=ToolCallFunction(name="write", arguments='{"path": "x"}'),
+                    )
+                ],
+            )
+        task = "one" if "task one" in said else "two"
+        return LLMResponse(
+            content=f"did task {task}", generated_tokens=1, execution_time=0.0, usage={}
+        )
+
+
+class _SlowSecondReply(_Script):
+    """Answers its first request at once and every later one after a while."""
+
+    async def generate(self, messages: list[LLMMessage], **kwargs: Any) -> LLMResponse:
+        if self.shown:
+            await asyncio.sleep(0.6)
+        return await super().generate(messages, **kwargs)
+
+
+def _stopping_hook() -> FunctionHook:
+    async def stop(context: Any, agent: Any) -> HookResult:
+        return HookResult(success=True, break_execution=True, name="stop")
+
+    return FunctionHook(
+        name="stop", fun=stop, trigger=HookPhase.PRE_AGENT_CALL, type=HookType.LISTENER
+    )
+
+
+class TestCopiesAndNesting:
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_two_copies_of_one_agent_never_read_each_other(self, planner: str) -> None:
+        log: list[str] = []
+        provider = _ByTask(label="Alpha", log=log)
+        alpha = Agent(
+            name="Alpha",
+            description="does tasks",
+            instruction="do the task",
+            llm_provider=provider,
+            planner=_planner(planner),
+            tools=[_write_tool(log)],
+        )
+        main = _Script(
+            label="main",
+            log=log,
+            replies=[
+                [("Alpha", '{"task": "task one"}'), ("Alpha", '{"task": "task two"}')],
+                "Done.",
+            ],
+        )
+        root = Agent(
+            name="MainAgent",
+            description="the agent",
+            instruction="delegate",
+            llm_provider=main,
+            planner=_planner(planner, parallel_handoffs=True),
+            sub_agents=[alpha],
+        )
+        runner = Runner()
+        conversation = f"c_copies_{planner}"
+        await _run(runner, root, conversation)
+
+        events = await _run(runner, root, conversation, _approve())
+
+        # The copy resumed after its approval reads its own task, not the other's,
+        # nor the other's answer, and does the task it was given.
+        resumed = " ".join(str(m.content or "") for m in provider.shown[-1])
+        assert "task one" in resumed
+        assert "task two" not in resumed
+        assert "did task two" not in resumed
+        answers = [
+            " ".join(p.text for p in e.content if p.text)
+            for e in events
+            if e.event_type == ExecutionEventType.AGENT_END and e.author == "Alpha"
+        ]
+        assert answers and "did task one" in answers[-1]
+        assert _answered_by_main(events)
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_a_branch_of_a_branch_does_not_see_its_caller_s_siblings_at_work(
+        self, planner: str
+    ) -> None:
+        log: list[str] = []
+
+        async def secret(path: str) -> str:
+            """Read a secret.
+
+            Args:
+                path: the file.
+            """
+            return "BETA-SECRET"
+
+        # Beta reads its secret at once and answers late: the secret is in the
+        # conversation while Beta still runs, and X starts Y meanwhile.
+        beta_provider = _SlowSecondReply(
+            label="Beta", log=log, replies=[[("secret", '{"path": "x"}')], "Beta done"]
+        )
+        beta = Agent(
+            name="Beta",
+            description="b",
+            instruction="do",
+            llm_provider=beta_provider,
+            planner=_planner(planner),
+            tools=[FunctionTool(func=secret)],
+        )
+        y_provider = _Script(label="Y", log=log, replies=["Y done"])
+        y = Agent(
+            name="Y",
+            description="y",
+            instruction="do",
+            llm_provider=y_provider,
+            planner=_planner(planner),
+            context_visibility=ContextVisibility.GLOBAL,
+        )
+        z, _ = _sub("Z", planner, log)
+        x = Agent(
+            name="X",
+            description="x",
+            instruction="delegate",
+            llm_provider=_Script(
+                label="X",
+                log=log,
+                delay=0.2,
+                replies=[[("Y", '{"task": "y"}'), ("Z", '{"task": "z"}')], "X done"],
+            ),
+            planner=_planner(planner, parallel_handoffs=True),
+            sub_agents=[y, z],
+        )
+        main = _Script(
+            label="main",
+            log=log,
+            replies=[[("X", '{"task": "x"}'), ("Beta", '{"task": "b"}')], "Done."],
+        )
+        root = Agent(
+            name="MainAgent",
+            description="the agent",
+            instruction="delegate",
+            llm_provider=main,
+            planner=_planner(planner, parallel_handoffs=True),
+            sub_agents=[x, beta],
+        )
+
+        events = await _run(Runner(), root, f"c_nested_hidden_{planner}")
+
+        assert _answered_by_main(events)
+        assert not any("BETA-SECRET" in str(m.content or "") for m in y_provider.shown[0])
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_a_hook_stopping_one_stops_the_turn_though_another_waits(
+        self, planner: str
+    ) -> None:
+        log: list[str] = []
+        alpha, _ = _sub("Alpha", planner, log, writes=True)
+        beta, _ = _sub("Beta", planner, log)
+        beta.hooks = [_stopping_hook()]
+        main = _Script(
+            label="main",
+            log=log,
+            replies=[[("Alpha", '{"task": "a"}'), ("Beta", '{"task": "b"}')], "Done."],
+        )
+        root = Agent(
+            name="MainAgent",
+            description="the agent",
+            instruction="delegate",
+            llm_provider=main,
+            planner=_planner(planner, parallel_handoffs=True),
+            sub_agents=[alpha, beta],
+        )
+        runner = Runner()
+        conversation = f"c_hook_stop_{planner}"
+
+        events = await _run(runner, root, conversation)
+
+        assert events[-1].event_type != ExecutionEventType.TOOL_NEEDS_FEEDBACK
+        assert (
+            await runner.conversation_manager.get_last_agent_stack(APP, USER, conversation) is None
+        )
+        assert len(main.shown) == 1
+
 
 class TestWhenASubAgentDoesNotEnd:
     @pytest.mark.parametrize("planner", PLANNERS)
@@ -768,7 +1047,12 @@ class TestOffIsAsBefore:
         assert _of(events, ExecutionEventType.AGENT_START) == ["Alpha"]
 
 
-class TestReactRefusesIt:
+class TestWhatRefusesIt:
     def test_react_with_parallel_handoffs_does_not_load(self) -> None:
         with pytest.raises(ValueError, match="parallel_handoffs"):
             _planner("react", parallel_handoffs=True)
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    def test_it_does_not_load_without_the_batch_it_needs(self, planner: str) -> None:
+        with pytest.raises(ValueError, match="parallel_tool_calls"):
+            _planner(planner, parallel_handoffs=True, parallel_tool_calls=False)
