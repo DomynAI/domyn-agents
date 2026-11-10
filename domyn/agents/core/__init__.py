@@ -299,7 +299,15 @@ METADATA_VISIBILITY_ONLY = "visibility_only"
 # the calls until the last one arrives and then runs the batch, those that need
 # no approval at the same time (see ``Runner._run_tool_calls``). A TOOL_START
 # without it is run as soon as it arrives, as every call used to be.
+#
+# Under ``parallel_handoffs`` an AGENT_CALL carries it too, and so does the
+# AGENT_START the runner builds for it: the sub-agents of the batch then run at
+# the same time, each as a branch of the conversation (``runner.branches``).
 METADATA_TOOL_BATCH = "tool_batch"
+# Set on the TOOL_NEEDS_FEEDBACK a sub-agent of a batch stops on: the name of the
+# sub-agent the batch started, which may have handed off to the one asking. Lets
+# a front-end say which of the agents working at once is asking.
+METADATA_BRANCH = "branch"
 # Set on an EXTERNAL_PART event to say whether its content should be rendered
 # into the messages sent to the model. Defaults to False when absent: an
 # externally-injected part is for display/history only unless explicitly
