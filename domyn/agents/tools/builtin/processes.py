@@ -125,6 +125,21 @@ otherwise run that command from ``list_commands`` and ``check_command``, which
 ask no approval. So nothing else is accepted as a handle."""
 
 
+SAFE_HOME = re.compile(r"[A-Za-z0-9_./@+=:,~-]+")
+"""What a processes folder may be made of: it is put into shell lines, some of them
+inside double quotes, so no quote, ``$``, backtick, backslash or space."""
+
+
+def processes_home(state_dir: str | None) -> str:
+    """The processes folder for a backend: under its state folder when it has one
+    and the path is plain enough for a shell line, else the relative `HOME`."""
+    if state_dir:
+        candidate = f"{state_dir}/processes"
+        if SAFE_HOME.fullmatch(candidate):
+            return candidate
+    return HOME
+
+
 class ProcessRecord(BaseModel):
     """What survives a turn, and therefore what has to be JSON.
 
@@ -140,6 +155,10 @@ class ProcessRecord(BaseModel):
     handle: str
     command: str
     conversation: str = ""
+    home: str = HOME
+    """The folder the processes of every conversation are under: `HOME`, or an
+    absolute one when the backend has a state folder. Read back from stored state, so
+    it is checked like the handle: it goes into shell lines."""
     finished: bool = False
     """Set once observed finished, so the cap can count live ones without
     paying a probe per record just to ask."""
@@ -156,9 +175,16 @@ class ProcessRecord(BaseModel):
             raise ValueError("not a handle this module made")
         return value
 
+    @field_validator("home")
+    @classmethod
+    def _home_is_plain(cls, value: str) -> str:
+        if not SAFE_HOME.fullmatch(value):
+            raise ValueError("not a folder this module made")
+        return value
+
     @property
     def dir(self) -> str:
-        return f"{HOME}/{safe_id(self.conversation)}/{self.handle}"
+        return f"{self.home}/{safe_id(self.conversation)}/{self.handle}"
 
 
 class ProcessState(BaseModel):
@@ -197,9 +223,11 @@ class ProcessState(BaseModel):
     model_config = {"extra": "ignore"}
 
 
-def new_record(command: str, conversation: str = "") -> ProcessRecord:
+def new_record(command: str, conversation: str = "", home: str = HOME) -> ProcessRecord:
     """A record for a command that has not been started yet."""
-    return ProcessRecord(handle=secrets.token_hex(4), command=command, conversation=conversation)
+    return ProcessRecord(
+        handle=secrets.token_hex(4), command=command, conversation=conversation, home=home
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -587,7 +615,7 @@ def build_sweep(records: list[ProcessRecord]) -> str:
     return "; ".join(parts)
 
 
-def build_discover(conversation: str = "") -> str:
+def build_discover(conversation: str = "", home: str = HOME) -> str:
     """Ask the machine what this conversation left running, without being told.
 
     ``build_sweep`` needs the records; this needs nothing. Each process has a
@@ -598,7 +626,7 @@ def build_discover(conversation: str = "") -> str:
     that loses the conversation's state used to orphan it permanently — still
     running, still writing, unreachable. Now it is one listing away.
     """
-    d = shlex.quote(f"{HOME}/{safe_id(conversation)}")
+    d = shlex.quote(f"{home}/{safe_id(conversation)}")
     return (
         f"for p in {d}/*/; do "
         f'[ -d "$p" ] || continue; '

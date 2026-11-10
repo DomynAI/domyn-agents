@@ -6,6 +6,7 @@ from domyn.agents.cli.commands import (
     run_command,
     serve_command,
 )
+from domyn.agents.cli.commands.clean import clean_command
 from domyn.agents.cli.commands.export import export_command
 from domyn.agents.cli.commands.setup import setup_command
 from domyn.agents.cli.commands.skills import skill_command, skills_command
@@ -38,7 +39,7 @@ def version_callback(value: bool) -> None:
 #
 # So these default to WARNING. ``--log-level`` still overrides, and inside a
 # session ``/verbose`` turns them back on without leaving it.
-_QUIET_COMMANDS = frozenset({"run", "setup", "init", "skills", "skill", "export"})
+_QUIET_COMMANDS = frozenset({"run", "setup", "init", "skills", "skill", "export", "clean"})
 
 
 @app.callback()
@@ -90,6 +91,10 @@ app.command(
         "API keys, approvals and conversation history are never included."
     ),
 )(export_command)
+app.command(
+    "clean",
+    help="Delete old conversations and the files the agent created for them",
+)(clean_command)
 app.command("run", help="Chat with an agent — interactively, or with a single prompt")(run_command)
 app.command(
     "serve",

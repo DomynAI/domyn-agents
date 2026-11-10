@@ -47,7 +47,12 @@ async def render(
     known = processes.registry(state)
     seen: dict[str, dict[str, Any]] = {}
     if backend is not None:
-        result = await backend.run(processes.build_discover(conversation_id), timeout=60)
+        result = await backend.run(
+            processes.build_discover(
+                conversation_id, processes.processes_home(getattr(backend, "state_dir", None))
+            ),
+            timeout=60,
+        )
         if not result.backend_error:
             seen = processes.parse_discover(result.stdout)
 
@@ -89,7 +94,11 @@ async def render(
         console.print(f"      $ {_trim(command)}", style=theme.style("meta"), highlight=False)
         # The log, so it can be followed from another terminal without going
         # through the agent at all.
-        where = record.dir if record else f"{processes.HOME}/{handle}"
+        where = (
+            record.dir
+            if record
+            else f"{processes.processes_home(getattr(backend, 'state_dir', None) if backend else None)}/{handle}"
+        )
         console.print(f"      {where}/out.log", style=theme.style("meta"), highlight=False)
         if record is None:
             console.print(

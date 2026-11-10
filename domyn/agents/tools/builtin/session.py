@@ -50,6 +50,23 @@ from domyn.agents.logger import get_logger
 # already keeps its config in.
 HOME_DIRNAME = ".domyn"
 
+_state_dir: Path | None = None
+
+
+def set_state_dir(path: Path | None) -> None:
+    """Where the tools built from now on keep their state (venvs, background
+    processes, browser files): the CLI's home folder, ``~/.domyn`` or the project's.
+
+    ``None`` is the library default, ``<workspace>/.domyn``. Process-wide, as the CLI's
+    own active project is: one process runs one session folder.
+    """
+    global _state_dir
+    _state_dir = path
+
+
+def default_state_dir() -> Path | None:
+    return _state_dir
+
 
 def safe_id(conversation_id: str) -> str:
     """A conversation id reduced to something safe to use as a directory name.
@@ -71,10 +88,16 @@ class SessionPaths:
 
     root: Path
     conversation_id: str
+    state_dir: Path | None = None
+    """Where state lives instead of ``<root>/.domyn``."""
+
+    @property
+    def base(self) -> Path:
+        return self.state_dir if self.state_dir is not None else self.root / HOME_DIRNAME
 
     @property
     def home(self) -> Path:
-        return self.root / HOME_DIRNAME / "conversations" / safe_id(self.conversation_id)
+        return self.base / "conversations" / safe_id(self.conversation_id)
 
     @property
     def venv(self) -> Path:
@@ -97,12 +120,15 @@ class SessionPaths:
 class SessionEnvironment:
     """Builds and caches one virtualenv per conversation."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, state_dir: Path | None = None) -> None:
         self._root = root
+        self._state_dir = state_dir
         self._ready: set[str] = set()
 
     def paths(self, conversation_id: str) -> SessionPaths:
-        return SessionPaths(root=self._root, conversation_id=conversation_id)
+        return SessionPaths(
+            root=self._root, conversation_id=conversation_id, state_dir=self._state_dir
+        )
 
     def prepare(self, conversation_id: str) -> SessionPaths | None:
         """Make sure the conversation's venv exists. ``None`` if it cannot.
@@ -119,8 +145,10 @@ class SessionEnvironment:
         try:
             # A cloned repository can commit `.domyn` or `.domyn/conversations` as a
             # link; mkdir and open would follow it and build the venv wherever it points.
-            here = self._root
-            for part in paths.home.relative_to(self._root).parts:
+            # A state folder is the user's own (``~/.domyn``, a project), so only what
+            # is below it is checked; in the project, every step from its root.
+            here = self._state_dir if self._state_dir is not None else self._root
+            for part in paths.home.relative_to(here).parts:
                 here = here / part
                 if here.is_symlink():
                     raise OSError(f"{here} is a link")

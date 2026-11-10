@@ -250,7 +250,9 @@ def build_run_command(
                 state,
             )
 
-        record = processes.new_record(command, conversation_id)
+        record = processes.new_record(
+            command, conversation_id, processes.processes_home(getattr(backend, "state_dir", None))
+        )
         result = await backend.run(
             processes.build_launch(
                 record, yield_s=limit, max_lifetime=max_lifetime_s, stdin=stdin or None
@@ -427,7 +429,11 @@ def build_list_commands(backend: CommandBackend) -> Callable[..., Awaitable[Any]
         # also finds anything this conversation started whose record was lost.
         seen: dict[str, Any] = {}
         result = await backend.run(
-            processes.build_discover(conversation_id), timeout=60, conversation_id=conversation_id
+            processes.build_discover(
+                conversation_id, processes.processes_home(getattr(backend, "state_dir", None))
+            ),
+            timeout=60,
+            conversation_id=conversation_id,
         )
         if not result.backend_error:
             seen = processes.parse_discover(result.stdout)

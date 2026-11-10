@@ -463,7 +463,7 @@ class BrowserSessions:
         backend: CommandBackend,
         options: BrowserOptions,
         *,
-        browser_dir: str = f"{HOME_DIRNAME}/browser",
+        browser_dir: str | None = None,
     ) -> None:
         """``browser_dir`` is where the browser's files go: the full text of a
         page too long to show.
@@ -476,6 +476,9 @@ class BrowserSessions:
         """
         self.backend = backend
         self.options = options
+        if browser_dir is None:
+            state = getattr(backend, "state_dir", None)
+            browser_dir = f"{state}/browser" if state else f"{HOME_DIRNAME}/browser"
         self.browser_dir = browser_dir
         self.policy = UrlPolicy(allow_private=options.allow_private_urls)
         self._used: set[str] = set()

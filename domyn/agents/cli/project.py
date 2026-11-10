@@ -9,6 +9,7 @@ from rich.console import Console
 from domyn.agents.interfaces.cli import Theme
 from domyn.agents.interfaces.cli.config import (
     ProjectError,
+    home_dir,
     is_project_path,
     load_credentials_into_environment,
     read_raw_config,
@@ -18,6 +19,7 @@ from domyn.agents.interfaces.cli.export import import_warnings
 from domyn.agents.interfaces.cli.project_trust import code_files, project_problems
 from domyn.agents.interfaces.cli.prompt import interactive_terminal
 from domyn.agents.interfaces.cli.select import select
+from domyn.agents.tools.builtin.session import set_state_dir
 
 # Annotated, so the parameter's default is a real ``None``: the commands are also
 # called as plain functions, where a ``typer.Option`` default would arrive as itself.
@@ -98,6 +100,9 @@ def select_project(
         # Startup put ~/.domyn/credentials in the environment, before the option was
         # parsed: the project's own keys go over it, before any config is read.
         load_credentials_into_environment()
+    # Everything the session leaves behind goes where its config is, never in the folder
+    # it was started in.
+    set_state_dir(home_dir())
     return folder
 
 

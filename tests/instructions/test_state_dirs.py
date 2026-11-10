@@ -6,12 +6,11 @@ and an ``AGENTS.md`` among them must never reach the system prompt. A built-in t
 starts writing somewhere new under ``.domyn`` fails here until it is listed.
 """
 
-import inspect
 from pathlib import Path, PurePath
 
 from domyn.agents.instructions.discovery import STATE_DIRS
 from domyn.agents.interfaces.cli.config import LOCAL_SKILLS_DIRS
-from domyn.agents.tools.builtin import BrowserSessions, processes
+from domyn.agents.tools.builtin import BrowserOptions, BrowserSessions, processes
 from domyn.agents.tools.builtin.session import HOME_DIRNAME, SessionPaths
 
 
@@ -23,7 +22,8 @@ def test_conversation_folders(tmp_path: Path) -> None:
 
 
 def test_the_browser_folder() -> None:
-    default = inspect.signature(BrowserSessions.__init__).parameters["browser_dir"].default
+    # With no state folder, the default is under the working directory's `.domyn`.
+    default = BrowserSessions(object(), BrowserOptions()).browser_dir  # type: ignore[arg-type]
 
     assert PurePath(default).parts[0] == HOME_DIRNAME
     assert PurePath(default).parts[1] in STATE_DIRS

@@ -297,6 +297,7 @@ class TestTheRegistry:
             "handle",
             "command",
             "conversation",
+            "home",
             "finished",
             "started_at",
             "cursor",

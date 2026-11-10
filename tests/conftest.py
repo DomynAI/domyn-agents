@@ -101,3 +101,14 @@ def _no_speech_model_downloads(
     models: Path = tmp_path_factory.mktemp("models")
     monkeypatch.setattr(local, "_default_models_dir", lambda: models)
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+
+
+@pytest.fixture(autouse=True)
+def _no_state_dir() -> Iterator[None]:
+    """The CLI points the built-in tools' state at its home folder for the process;
+    a test that selected a project must not move the next one's venvs and logs."""
+    from domyn.agents.tools.builtin.session import set_state_dir
+
+    set_state_dir(None)
+    yield
+    set_state_dir(None)

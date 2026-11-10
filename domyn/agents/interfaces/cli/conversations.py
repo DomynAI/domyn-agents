@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from domyn.agents.interfaces.cli.config import config_dir, list_projects, projects_dir
+from domyn.agents.interfaces.cli.config import home_dir, list_projects, projects_dir
 from domyn.agents.logger import get_logger
 
 if TYPE_CHECKING:
@@ -39,9 +39,10 @@ HISTORY_TURNS = 20
 
 
 def store_path() -> Path:
-    """Beside the config, so a project that pins its own agent keeps its own
-    history and does not spill into the user's global one."""
-    return config_dir() / STORE_FILENAME
+    """In the folder that stands for ``~/.domyn``: the project's when one is selected, else
+    the global one, wherever ``domyn run`` is started. A ``./.domyn`` in the working
+    directory never holds history, or a past conversation would be lost by changing folder."""
+    return home_dir() / STORE_FILENAME
 
 
 def build_manager(path: Path | None = None) -> BaseConversationManager:

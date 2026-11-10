@@ -40,11 +40,13 @@ import signal
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from domyn.agents.logger import get_logger
 from domyn.agents.tools.builtin.session import (
     SessionEnvironment,
+    default_state_dir,
     environment_for,
     restricted_environment,
 )
@@ -85,6 +87,11 @@ class CommandBackend(ABC):
     """Somewhere commands can be run."""
 
     name: str = "backend"
+
+    state_dir: str | None = None
+    """Where this backend keeps what a conversation leaves behind (background
+    processes, browser files), as the commands see it. ``None``: under ``.domyn`` in
+    the directory commands run in."""
 
     is_isolated: bool = False
     """Whether a destructive command is contained by something other than
@@ -139,10 +146,15 @@ class LocalBackend(CommandBackend):
         *,
         isolate_environment: bool = True,
         allowed_env: Iterable[str] = (),
+        state_dir: Path | None = None,
     ) -> None:
         self._workspace = workspace
         self._isolate = isolate_environment
-        self._sessions = SessionEnvironment(workspace.root) if isolate_environment else None
+        state = state_dir if state_dir is not None else default_state_dir()
+        if state is not None:
+            state = state.expanduser().resolve()
+            self.state_dir = str(state)
+        self._sessions = SessionEnvironment(workspace.root, state) if isolate_environment else None
         self._allowed_env = list(allowed_env)
 
     @property

@@ -114,6 +114,7 @@ Verify against `domyn --help` before relying on this list.
 | `domyn run` | Chat with an agent, interactively or with a single prompt |
 | `domyn setup` | Configure provider, model and default agent (also runs automatically on first `run`); `--project <name>` creates or edits `~/.domyn/projects/<name>`; `--import <dir>` creates that project from an export (`~/.domyn/projects/<the folder's name>` without `--project`) |
 | `domyn export <dir>` | Copy the configuration, its skills and instruction files into a new folder laid out as a project |
+| `domyn clean` | Remove old conversations (`--older-than <days>` or `--all`, `--dry-run`, `--yes`) from the selected project's or the global history, with their `conversations/<id>/` environment folders and a `VACUUM` of `conversations.db` (`interfaces/cli/clean.py`) |
 | `domyn init` | Initialize a new project |
 | `domyn skills` | List available skills |
 | `domyn skill show\|remove <name>` | Show a configured skill (`<name>#<section>` for one section), or unlist it from the config |
@@ -199,6 +200,8 @@ Two packages, and the split is not obvious from the names:
 
 - `domyn/agents/cli/` — the Typer entrypoint and one subpackage per command (`cli/commands/run/`, …). Argument parsing and wiring.
 - `domyn/agents/interfaces/cli/` — everything the session itself is made of: the REPL, the renderer, the theme, the config model, the views. **This is where almost all CLI behaviour lives**, so look here first despite the name.
+
+**State never lands in the folder `domyn run` starts in.** `select_project` (`cli/project.py`) points the built-in tools at `home_dir()` (`set_state_dir`, `tools/builtin/session.py`): the per-conversation venv and `output/` (`<home>/conversations/<id>/`), background-process logs (`<home>/processes/`, `processes_home`) and browser page files (`<home>/browser/`) go to the project's folder or `~/.domyn`, together with `conversations.db` (`store_path`, always `home_dir()`, no longer beside a `./.domyn/config.yaml`). Without a state folder set (a library host) they stay under `<workspace>/.domyn`. A `./.domyn` in the working directory is now only the project-local config and skills.
 
 `~/.domyn/` holds the state: `config.yaml` (provider, model, agent, tools, workspace, compaction), `credentials` (0600, API keys never in `config.yaml`), `approvals.yaml` and `projects/*/approvals.yaml`, `builtin-skills/` (the builtin skills chosen in setup, rewritten by every setup — see Skills), and `conversations.db` (the history `--resume` and `/resume` read). It is **not** an instructions folder: `SOUL.md` / `AGENTS.md` there are not read (see below).
 
