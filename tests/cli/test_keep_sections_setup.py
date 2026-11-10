@@ -200,3 +200,74 @@ class TestARerun:
 
         assert _run(console, theme, [EOFError], _existing(), target) is None
         assert not target.exists()
+
+
+def _with_decisions() -> dict[str, Any]:
+    existing = cfg.configuration_v1_dict_from(
+        cfg.ProviderConfig(type="openai", model_name="m1", max_tokens=8000),
+        cfg.AgentConfig(instruction="Be terse.", tools=["files"], skills=SKILLS),
+        cfg.CompactionConfig(),
+        decisions=cfg.DecisionsChoice(
+            level="active", base_url="http://clef:28080", model="Cloudflare/clef"
+        ),
+    )
+    # A threshold tuned by hand, which no level of the wizard writes.
+    existing["agents"][0]["decisions"]["approvals"]["min_confidence"] = 0.9
+    return existing
+
+
+class TestTheDecisionModel:
+    @pytest.fixture
+    def ask_decisions(self, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+        spy = MagicMock(return_value=cfg.DecisionsChoice())
+        monkeypatch.setattr(setup, "_ask_decisions", spy)
+        return spy
+
+    def test_is_not_offered_for_keeping_when_the_config_has_none(
+        self, console: MagicMock, theme: Theme, tmp_path: Path, keep: MagicMock
+    ) -> None:
+        _run(console, theme, ["", "", "", ""], _existing(), tmp_path / "config.yaml")
+
+        assert "decision model" not in _asked(keep)
+
+    def test_enter_keeps_it_as_written_and_asks_nothing_about_it(
+        self,
+        console: MagicMock,
+        theme: Theme,
+        tmp_path: Path,
+        keep: MagicMock,
+        ask_decisions: MagicMock,
+    ) -> None:
+        existing = _with_decisions()
+        result = _run(console, theme, ["", "", "", "", ""], existing, tmp_path / "config.yaml")
+
+        assert result is not None
+        assert _asked(keep) == ["model", "instructions", "tools", "skills", "decision model"]
+        assert ask_decisions.call_count == 0
+        assert result["decision_providers"] == existing["decision_providers"]
+        assert result["agents"][0]["decisions"] == existing["agents"][0]["decisions"]
+
+    def test_shows_what_it_holds(
+        self, console: MagicMock, theme: Theme, tmp_path: Path, ask_decisions: MagicMock
+    ) -> None:
+        _run(console, theme, ["", "", "", "", ""], _with_decisions(), tmp_path / "config.yaml")
+
+        printed = [str(c.args[0]) for c in console.print.call_args_list if c.args]
+        for line in ("level: active", "endpoint: http://clef:28080", "model: Cloudflare/clef"):
+            assert f"    {line}" in printed
+
+    def test_no_asks_the_level_question(
+        self,
+        console: MagicMock,
+        theme: Theme,
+        tmp_path: Path,
+        ask_decisions: MagicMock,
+    ) -> None:
+        result = _run(
+            console, theme, ["", "", "", "", "n"], _with_decisions(), tmp_path / "config.yaml"
+        )
+
+        assert result is not None
+        assert ask_decisions.call_count == 1
+        assert ask_decisions.call_args.args[2].level == "active"
+        assert "decision_providers" not in result
