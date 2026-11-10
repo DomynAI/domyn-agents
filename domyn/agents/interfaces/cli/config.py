@@ -911,6 +911,20 @@ def current_memory_from(raw: dict[str, Any] | None) -> MemoryChoice:
     return MemoryChoice(scope="global", decided_by=decided_by)
 
 
+def describe_memory(raw: dict[str, Any] | None) -> list[str]:
+    """The memory the file declares, one line per setting, as setup shows it before
+    asking whether to keep it; empty for none."""
+    declared = _memory_manager_of(raw)
+    if declared is None:
+        return []
+    choice = current_memory_from(raw)
+    return [
+        f"memory: {choice.scope}",
+        f"file: {declared.get('file_path') or '(default)'}",
+        f"decided by: {choice.decided_by}",
+    ]
+
+
 #: The global memory as an export writes it: whoever runs the project, in their home.
 GLOBAL_MEMORY_REF = f"~/.domyn/{MEMORY_FILENAME}"
 
