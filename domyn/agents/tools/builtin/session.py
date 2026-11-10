@@ -233,15 +233,30 @@ _SAFE_ENV_NAMES = frozenset(
         # `domyn skill remove`, an edit to the config — can tell which configuration
         # is in use. Absent outside a project.
         "DOMYN_PROJECT_DIR",
-        # Windows equivalents.
+        # Windows equivalents. Without SystemRoot a Windows program cannot even
+        # open a socket; the program folders are where Git Bash and the
+        # programs it starts look for their own files; USERNAME is USER.
         "SystemRoot",
+        "WINDIR",
         "TEMP",
         "TMP",
         "USERPROFILE",
+        "USERNAME",
+        "HOMEDRIVE",
+        "HOMEPATH",
         "APPDATA",
         "LOCALAPPDATA",
+        "ProgramData",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "CommonProgramFiles",
         "ComSpec",
         "PATHEXT",
+        "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE",
+        # Where Git Bash is, when it is not where git_bash.py looks.
+        "DOMYN_GIT_BASH_PATH",
     }
 )
 

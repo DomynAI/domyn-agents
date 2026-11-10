@@ -15,6 +15,7 @@ something, the exit code coming back — only exist in the real thing.
 # No `from __future__ import annotations`: this imports the tool modules, which
 # rely on real annotations at construction time.
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -24,11 +25,14 @@ from domyn.agents.tools.builtin import (
     BuiltinTools,
     CommandBackend,
     CommandResult,
+    GitBashBackend,
     LocalBackend,
     Workspace,
+    backends,
     build_backend,
     bundle,
 )
+from domyn.agents.tools.builtin.git_bash import GitBashNotFoundError
 from domyn.agents.tools.builtin.shell import render
 
 
@@ -130,6 +134,69 @@ class TestLocalBackend:
 class TestResolvingABackend:
     def test_local_resolves(self, workspace: Workspace) -> None:
         assert isinstance(build_backend("local", workspace), LocalBackend)
+
+    @pytest.mark.skipif(os.name != "nt", reason="what local means on Windows")
+    def test_local_is_git_bash_on_windows(self, workspace: Workspace) -> None:
+        """Never cmd.exe: the approval gate judged the line as POSIX shell."""
+        assert isinstance(build_backend("local", workspace), GitBashBackend)
+
+    @pytest.mark.skipif(os.name == "nt", reason="off Windows only")
+    def test_local_is_not_git_bash_elsewhere(self, workspace: Workspace) -> None:
+        assert not isinstance(build_backend("local", workspace), GitBashBackend)
+
+    @pytest.mark.skipif(os.name == "nt", reason="off Windows only")
+    def test_git_bash_refuses_off_windows(self, workspace: Workspace) -> None:
+        """Running /bin/sh instead would run something else than configured."""
+        with pytest.raises(BackendUnavailableError, match="Windows only"):
+            build_backend("git_bash", workspace)
+
+    @pytest.mark.skipif(os.name != "nt", reason="Windows only")
+    def test_git_bash_by_name(self, workspace: Workspace) -> None:
+        assert isinstance(build_backend("git_bash", workspace), GitBashBackend)
+
+    def test_the_fallbacks_resolve_local_too(self, tmp_path: Path) -> None:
+        """The bundle builds its backend by name, so on Windows it is Git Bash
+        and never a LocalBackend running cmd.exe."""
+        tools = bundle("shell", root=tmp_path)
+        assert type(tools.backend) is type(build_backend("local", Workspace.at(tmp_path)))
+
+
+class TestWithoutGitBash:
+    """On Windows with no Git for Windows: the agent still works, and a
+    command says what to install instead of failing obscurely."""
+
+    @pytest.mark.asyncio
+    async def test_a_command_reports_what_to_install(
+        self, workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def missing() -> Path:
+            raise GitBashNotFoundError("Git Bash was not found. Install Git for Windows")
+
+        monkeypatch.setattr(backends, "find_git_bash", missing)
+        backend = GitBashBackend(workspace, isolate_environment=False)
+
+        result = await backend.run("echo hi", timeout=5)
+
+        assert result.exit_code is None
+        assert result.backend_error is not None
+        assert "Git for Windows" in result.backend_error
+
+    @pytest.mark.asyncio
+    async def test_it_is_looked_for_again_after_installing(
+        self, workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Not cached when missing: installing Git mid-session needs no restart."""
+        calls = []
+
+        def missing() -> Path:
+            calls.append(1)
+            raise GitBashNotFoundError("Git Bash was not found.")
+
+        monkeypatch.setattr(backends, "find_git_bash", missing)
+        backend = GitBashBackend(workspace, isolate_environment=False)
+        await backend.run("true", timeout=5)
+        await backend.run("true", timeout=5)
+        assert len(calls) == 2
 
     def test_an_unknown_name_refuses(self, workspace: Workspace) -> None:
         """Unlike an unknown tool bundle, which degrades with a warning. Handing

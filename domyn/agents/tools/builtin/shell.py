@@ -47,7 +47,7 @@ from typing import Any
 from domyn.agents.core import ApprovalType
 from domyn.agents.tools.base import UpdateToolResult
 from domyn.agents.tools.builtin import processes
-from domyn.agents.tools.builtin.backends import CommandBackend, CommandResult, LocalBackend
+from domyn.agents.tools.builtin.backends import CommandBackend, CommandResult, build_backend
 from domyn.agents.tools.builtin.workspace import Workspace
 
 # Long enough for an install or a test suite, short enough that a hung command
@@ -524,7 +524,7 @@ def shell_tools(
     reach something this conversation started (``processes.build_kill``) —
     asking permission for either is asking permission to notice.
     """
-    resolved = backend or LocalBackend(workspace)
+    resolved = backend or build_backend("local", workspace)
     return [
         run_command_tool(
             workspace, timeout_s=timeout_s, max_lifetime_s=max_lifetime_s, backend=resolved
@@ -580,7 +580,7 @@ def run_command_tool(
 
     return FunctionTool(
         func=build_run_command(
-            backend or LocalBackend(workspace),
+            backend or build_backend("local", workspace),
             timeout_s=timeout_s,
             max_lifetime_s=max_lifetime_s,
         ),

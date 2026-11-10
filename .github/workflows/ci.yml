@@ -153,7 +153,49 @@ jobs:
             | tee -a "$GITHUB_STEP_SUMMARY"
           exit "${PIPESTATUS[0]}"
 
-  # Every Python version the package supports (pyproject.toml's classifiers,
+  # Windows, Intel and ARM, on the version in .python-version. Commands run in
+  # Git Bash (Git for Windows, preinstalled on the runners), as they do for a
+  # user. Pull requests and main alike: a change that breaks Windows is caught
+  # before it is merged.
+  test-windows:
+    needs: changes
+    if: >-
+      always() && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true')
+    name: test-windows (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: .python-version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        shell: bash
+        run: uv sync --all-extras
+
+      - name: Run tests
+        shell: bash
+        run: uv run pytest tests/ examples/ -q --no-cov -p no:cacheprovider
+
   # and the Python badge in the README). On main and on release tags (called
   # from release.yml, where the event is the tag's push, or the dispatch of a
   # nightly alpha): pull requests run the job above, on the version in

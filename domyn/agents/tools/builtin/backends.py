@@ -40,9 +40,11 @@ import signal
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from domyn.agents.logger import get_logger
+from domyn.agents.tools.builtin.git_bash import GitBashNotFoundError, find_git_bash
 from domyn.agents.tools.builtin.session import (
     SessionEnvironment,
     environment_for,
@@ -57,6 +59,18 @@ if TYPE_CHECKING:
 # refusable, so anything longer means something is wrong that waiting will not
 # fix.
 _REAP_TIMEOUT_S = 5.0
+
+# CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW, spelled as numbers: the names
+# exist in `subprocess` on Windows only, and mypy checks this file everywhere.
+_WINDOWS_CREATION_FLAGS = 0x00000200 | 0x08000000
+
+
+class ShellUnavailableError(RuntimeError):
+    """The backend's shell cannot be started here (no Git Bash on Windows).
+
+    Reported as the command's ``backend_error``, with what to install, rather
+    than raised: the agent keeps working, and the model can tell the user.
+    """
 
 
 class BackendUnavailableError(RuntimeError):
@@ -170,22 +184,21 @@ class LocalBackend(CommandBackend):
         logger.info(f"run_command: executing locally in {self._workspace.root}")
         logger.debug(f"run_command: {command!r}")
 
+        # DEVNULL, never inherited: unset, the child reads whatever this process
+        # reads — in the CLI, the terminal the user is typing into. Measured: it
+        # really does steal their keystrokes. EOF instead makes an unanswerable
+        # prompt fail fast.
+        streams: dict[str, Any] = {
+            "cwd": str(self._workspace.root),
+            "env": env,
+            "stdin": asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+        }
         try:
-            process = await asyncio.create_subprocess_shell(
-                command,
-                cwd=str(self._workspace.root),
-                env=env,
-                # DEVNULL, never inherited: unset, the child reads whatever
-                # this process reads — in the CLI, the terminal the user is
-                # typing into. Measured: it really does steal their keystrokes.
-                # EOF instead makes an unanswerable prompt fail fast.
-                stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                # Its own process group, so a timeout can kill the whole tree
-                # and not just the shell. See _terminate_tree.
-                start_new_session=True,
-            )
+            process = await self._spawn(command, streams)
+        except ShellUnavailableError as exc:
+            return CommandResult(exit_code=None, stdout="", stderr="", backend_error=str(exc))
         except OSError as exc:
             logger.warning(f"run_command: could not start: {type(exc).__name__}")
             logger.debug(f"run_command start detail: {exc}")
@@ -202,7 +215,7 @@ class LocalBackend(CommandBackend):
                 timeout=timeout,
             )
         except TimeoutError:
-            await _terminate_tree(process)
+            await self._terminate(process)
             return CommandResult(exit_code=None, stdout="", stderr="", timed_out=True)
 
         return CommandResult(
@@ -210,6 +223,91 @@ class LocalBackend(CommandBackend):
             stdout=raw_out.decode("utf-8", "replace"),
             stderr=raw_err.decode("utf-8", "replace"),
         )
+
+    async def _spawn(self, command: str, streams: dict[str, Any]) -> asyncio.subprocess.Process:
+        """Start ``command`` in this backend's shell. The seam a subclass replaces."""
+        return await asyncio.create_subprocess_shell(
+            command,
+            # Its own process group, so a timeout can kill the whole tree and
+            # not just the shell. See _terminate_tree.
+            start_new_session=True,
+            **streams,
+        )
+
+    async def _terminate(self, process: asyncio.subprocess.Process) -> None:
+        """End a timed-out command and everything it started."""
+        await _terminate_tree(process)
+
+
+class GitBashBackend(LocalBackend):
+    """Runs on this Windows machine, in Git Bash, in the workspace directory.
+
+    What ``local`` means on Windows. The line is POSIX shell — the approval
+    gate split it with a POSIX parser, the background processes and the browser
+    tools write it for bash — so it is run by bash, never by ``cmd.exe``, which
+    reads ``&``, ``^``, ``%VAR%`` and quotes differently. See git_bash.py for
+    where it is looked for.
+
+    Looked for on the first command, not when built: an agent with no Git Bash
+    still starts and still answers, and each command it tries says how to
+    install it.
+    """
+
+    name = "git_bash"
+
+    def __init__(
+        self,
+        workspace: Workspace,
+        *,
+        isolate_environment: bool = True,
+        allowed_env: Iterable[str] = (),
+        bash: Path | None = None,
+    ) -> None:
+        super().__init__(
+            workspace, isolate_environment=isolate_environment, allowed_env=allowed_env
+        )
+        self._bash = bash
+
+    @property
+    def bash(self) -> Path:
+        """The ``bash.exe`` commands run in, found on first use."""
+        if self._bash is None:
+            try:
+                self._bash = find_git_bash()
+            except GitBashNotFoundError as exc:
+                raise ShellUnavailableError(str(exc)) from exc
+        return self._bash
+
+    async def _spawn(self, command: str, streams: dict[str, Any]) -> asyncio.subprocess.Process:
+        return await asyncio.create_subprocess_exec(
+            str(self.bash),
+            "-c",
+            command,
+            # Its own group, so a timeout can end the whole tree with taskkill
+            # /T; and no console window flashing up for every command.
+            creationflags=_WINDOWS_CREATION_FLAGS,
+            **streams,
+        )
+
+    async def _terminate(self, process: asyncio.subprocess.Process) -> None:
+        """``taskkill /T``: Windows has no process group to signal, but ending a
+        process with /T takes every process it started, which is the same tree."""
+        with contextlib.suppress(OSError, TimeoutError):
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill",
+                "/F",
+                "/T",
+                "/PID",
+                str(process.pid),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                creationflags=_WINDOWS_CREATION_FLAGS,
+            )
+            await asyncio.wait_for(killer.wait(), timeout=_REAP_TIMEOUT_S)
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(process.wait(), timeout=_REAP_TIMEOUT_S)
 
 
 async def _terminate_tree(process: asyncio.subprocess.Process) -> None:
@@ -249,12 +347,27 @@ def build_backend(
     An unknown name raises, unlike every other unknown config value here, which
     degrades with a warning: handing back a local backend to someone who asked
     to be sandboxed gives the illusion of a boundary, which is worse than none.
+
+    ``local`` is this machine's shell: ``/bin/sh`` on macOS and Linux, Git Bash
+    on Windows, where ``cmd.exe`` is never used. ``git_bash`` names the second
+    explicitly, and exists on Windows only: elsewhere there is no Git Bash, and
+    quietly running ``/bin/sh`` instead would be running something else than
+    the configuration says.
     """
+    if name == "git_bash" and os.name != "nt":
+        raise BackendUnavailableError(
+            "the 'git_bash' command backend runs on Windows only; use 'local' here. "
+            "Refusing to fall back to another shell."
+        )
+    if name == "git_bash" or (name == "local" and os.name == "nt"):
+        return GitBashBackend(
+            workspace, isolate_environment=isolate_environment, allowed_env=allowed_env
+        )
     if name == "local":
         return LocalBackend(
             workspace, isolate_environment=isolate_environment, allowed_env=allowed_env
         )
     raise BackendUnavailableError(
-        f"unknown command backend '{name}' (available: local). "
+        f"unknown command backend '{name}' (available: local, git_bash on Windows). "
         "Refusing to fall back to running on this machine."
     )
