@@ -19,9 +19,9 @@ in the folder it runs in, and it can answer questions about public GitHub reposi
   `domyn run` loads it directly.
 - **Environment variables.** `${VLLM_API_KEY}` and the other `${...}` values are read from
   the environment when the file is loaded, so no secret is written in the file.
-- **Built-in file tools.** `tool_bundles` gives the agent the `files` bundle, which can only
-  reach files inside the folder the agent runs in. Reading files runs freely, while writing
-  them asks you first.
+- **Built-in file tools.** `tool_bundles` declares the `files` bundle, and the agent binds it
+  to the `project` resource, the folder the agent runs in: the tools can only reach files
+  inside it. Reading files runs freely, while writing them asks you first.
 - **MCP server.** When a server is listed under `mcp_servers`, the agent gets every tool
   that server offers. This example uses [DeepWiki](https://deepwiki.com), a public server
   that answers questions about public GitHub repositories. The comments in `config.yaml`

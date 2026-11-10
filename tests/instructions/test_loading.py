@@ -35,9 +35,11 @@ def _write(directory: Path, name: str, body: str) -> Path:
     return path
 
 
-async def _load(*paths: Path, max_bytes: int | None = None) -> AgentInstructions:
+async def _load(
+    *paths: Path, max_bytes: int | None = None, walk: tuple[Path, ...] = ()
+) -> AgentInstructions:
     runtime = InstructionRuntime(
-        source=LocalDirInstructionsSource(paths=list(paths)),
+        source=LocalDirInstructionsSource(paths=list(paths), walk=list(walk)),
         **({"max_bytes": max_bytes} if max_bytes is not None else {}),
     )
     return await runtime.load()
@@ -244,9 +246,13 @@ def _put(path: Path, body: str) -> Path:
     return path
 
 
+_BOTH = (Path(".domyn"), Path(".agents"))
+
+
 class TestTheAutodiscoveryWalk:
-    """``.domyn`` and ``.agents``, as written, are walked on every load; every other
-    directory contributes only the files directly in it."""
+    """A folder listed in ``walk`` is walked on every load (a project's ``.domyn`` and
+    ``.agents``); every other directory contributes only the files directly in it,
+    whatever it is called."""
 
     @pytest.fixture
     def project(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -258,7 +264,7 @@ class TestTheAutodiscoveryWalk:
         _put(project / ".domyn" / "instructions" / "SOUL.md", "identity")
         _put(project / ".domyn" / "instructions" / "additional" / "AGENTS.md", "project")
 
-        loaded = await _load(Path(".domyn"))
+        loaded = await _load(Path(".domyn"), walk=(Path(".domyn"),))
 
         assert [one.text for one in loaded.soul] == ["identity"]
         assert [one.text for one in loaded.agent] == ["project"]
@@ -267,7 +273,14 @@ class TestTheAutodiscoveryWalk:
     async def test_however_the_entry_is_spelled(self, project: Path) -> None:
         _put(project / ".domyn" / "sub" / "AGENTS.md", "project")
 
-        assert (await _load(Path("./.domyn/"))).names == ("AGENTS.md",)
+        assert (await _load(Path("./.domyn/"), walk=(Path(".domyn"),))).names == ("AGENTS.md",)
+
+    @pytest.mark.asyncio
+    async def test_not_without_being_asked_to(self, project: Path) -> None:
+        """Never inferred from the name: a copy of ``.domyn`` elsewhere reads the same."""
+        _put(project / ".domyn" / "sub" / "AGENTS.md", "project")
+
+        assert not await _load(Path(".domyn"))
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -279,7 +292,7 @@ class TestTheAutodiscoveryWalk:
         a standing instruction like any other there."""
         _put(project / where / "AGENTS.md", "in a skill")
 
-        loaded = await _load(Path(".domyn"), Path(".agents"))
+        loaded = await _load(Path(".domyn"), Path(".agents"), walk=_BOTH)
 
         assert [one.text for one in loaded.agent] == ["in a skill"]
 
@@ -291,7 +304,7 @@ class TestTheAutodiscoveryWalk:
         _put(project / ".domyn" / "a" / "b" / "AGENTS.md", "domyn deep")
         _put(project / ".domyn" / "AGENTS.md", "domyn top")
 
-        loaded = await _load(Path(".domyn"), Path(".agents"))
+        loaded = await _load(Path(".domyn"), Path(".agents"), walk=_BOTH)
 
         assert [one.text for one in loaded.agent] == ["domyn top", "domyn deep", "agents top"]
 
@@ -301,7 +314,7 @@ class TestTheAutodiscoveryWalk:
         deeper = _put(project / ".domyn" / "sub" / "SOUL.md", "deeper soul")
         other = _put(project / ".agents" / "SOUL.md", "agents soul")
 
-        loaded = await _load(Path(".domyn"), Path(".agents"))
+        loaded = await _load(Path(".domyn"), Path(".agents"), walk=_BOTH)
 
         assert [one.text for one in loaded.soul] == ["top soul"]
         assert loaded.superseded == (str(deeper.resolve()), str(other.resolve()))
@@ -311,7 +324,7 @@ class TestTheAutodiscoveryWalk:
         user = _put(tmp_path / "user" / "SOUL.md", "user soul")
         _put(project / ".domyn" / "sub" / "SOUL.md", "project soul")
 
-        loaded = await _load(user, Path(".domyn"))
+        loaded = await _load(user, Path(".domyn"), walk=(Path(".domyn"),))
 
         assert [one.text for one in loaded.soul] == ["user soul"]
 
@@ -555,6 +568,10 @@ llm_providers:
 planner_strategies:
   - name: tools
     type: tool_use
+resources:
+  - id: expert_notes
+    type: local_dir
+    paths: ["{expert_dir}"]
 agents:
   - name: SqlExpert
     description: sql specialist
@@ -563,8 +580,8 @@ agents:
     planner_strategy: tools
     standing_instructions:
       source:
-        type: local_dir
-        paths: ["{expert_dir}"]
+        type: resource
+        resource: expert_notes
       max_bytes: 1000
   - name: Orchestrator
     description: coordinator

@@ -230,10 +230,11 @@ class TestAnExplicitlyNamedFile:
                             "instruction": "i",
                             "llm_provider": "default_provider",
                             "planner_strategy": "tool_use_thought",
-                            "tool_bundles": ["fs"],
+                            "tool_bundles": [{"use": "fs", "workspace": "work"}],
                         }
                     ],
                     "tool_bundles": [{"name": "fs", "bundles": ["files"]}],
+                    "resources": [{"id": "work", "type": "local_dir", "paths": ["."]}],
                     **extra,
                 }
             ),
@@ -250,8 +251,10 @@ class TestAnExplicitlyNamedFile:
         self._write(
             config_file,
             {
-                "tool_bundles": [
-                    {"name": "fs", "bundles": ["files"], "workspace": str(workspace_dir)}
+                "tool_bundles": [{"name": "fs", "bundles": ["files"]}],
+                "resources": [
+                    {"id": "work", "type": "local_dir", "paths": [str(workspace_dir)]},
+                    {"id": "mine", "type": "local_dir", "paths": [str(skills_dir)]},
                 ],
                 # Replaces the whole default `agents` list written by `_write`.
                 "agents": [
@@ -261,9 +264,9 @@ class TestAnExplicitlyNamedFile:
                         "instruction": "i",
                         "llm_provider": "default_provider",
                         "planner_strategy": "tool_use_thought",
-                        "tool_bundles": ["fs"],
+                        "tool_bundles": [{"use": "fs", "workspace": "work"}],
                         "skills": {
-                            "source": {"type": "local_dir", "paths": [str(skills_dir)]},
+                            "source": {"type": "resource", "resource": "mine", "path": "."},
                         },
                     }
                 ],
@@ -276,7 +279,9 @@ class TestAnExplicitlyNamedFile:
         agent, _ = resolved
         assert skills_dir.resolve() in agent.builtin_tools[0].workspace.extra_roots
         assert agent.skills is not None
-        assert agent.skills.source.paths == [skills_dir]  # type: ignore[attr-defined]
+        from domyn.agents.skills.sources import local_source_paths
+
+        assert local_source_paths(agent.skills.source) == [skills_dir]
 
     async def test_planner_strategy_compactor_reaches_the_planner(
         self, tmp_path: Path, theme: Theme

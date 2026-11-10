@@ -36,10 +36,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from pydantic import Field as PydanticField
 
 from domyn.agents.logger import get_logger
+from domyn.agents.resources.base import Resource, ResourceError
 from domyn.agents.tools.builtin.backends import (
     BackendUnavailableError,
     CommandBackend,
@@ -201,11 +202,14 @@ class BuiltinBundleConfig(BaseModel):
     does: declared once at the top level, referenced by name per agent, and
     expanded before the agent is built rather than resolved through the
     single-tool registry path.
+
+    It names **no** place: one bundle is declared once and each agent binds it to
+    its own resource, ``tool_bundles: [{use: <name>, workspace: <resource id>}]``,
+    so a sub-agent with a folder of its own does not need a copy of the bundle.
     """
 
     name: str
     bundles: list[str] = PydanticField(default_factory=lambda: list(DEFAULT_BUNDLES))
-    workspace: str | None = None
     backend: str = "auto"
     """Where ``run_command`` runs: ``auto`` (a Docker container when Docker can be
     used, else this machine, with a warning), ``docker`` (a container, or refuse to
@@ -222,12 +226,33 @@ class BuiltinBundleConfig(BaseModel):
     docker: DockerBackendOptions = PydanticField(default_factory=DockerBackendOptions)
     """Options for the Docker backend; ignored when ``backend`` is ``local``."""
 
+    @model_validator(mode="before")
+    @classmethod
+    def _no_workspace(cls, value: Any) -> Any:
+        # Refused rather than ignored: silently ignored, the tools would run in a
+        # folder nobody named.
+        if isinstance(value, dict) and "workspace" in value:
+            raise ValueError(
+                f"tool bundle {value.get('name')!r}: 'workspace' is no longer a key of the "
+                "bundle. Declare the folder under 'resources:' (for example `{id: workspace, "
+                "type: local_dir, paths: [.]}`) and bind it on each agent with "
+                f"`tool_bundles: [{{use: {value.get('name')}, workspace: workspace}}]`, or run "
+                "`domyn setup` again"
+            )
+        return value
+
     def build(
         self,
         *,
+        resource: Resource,
         extra_roots: Iterable[str | os.PathLike[str]] = (),
     ) -> BuiltinTools:
-        """Build the bundle's tools.
+        """Build the bundle's tools, bound to ``resource``.
+
+        The resource's first root is the workspace and its other roots are reachable
+        too (``Workspace.extra_roots``); a read-only resource makes the write tools
+        refuse. Only a resource on this machine can be a workspace: the loader refuses
+        any other before getting here (``resources.config.check_bundle_resource``).
 
         ``extra_roots`` widens the workspace the same way the CLI's own
         ``skill_dirs`` does today (see ``Workspace.extra_roots``) — passed in
@@ -242,7 +267,15 @@ class BuiltinBundleConfig(BaseModel):
         output of conversations started anywhere. Those are read through the shell
         (``check_command``, ``run_command``), as the browser's files already are.
         """
-        space = Workspace.at(self.workspace, also=list(extra_roots))
+        roots = resource.local_roots()
+        if not roots:
+            raise ResourceError(
+                f"tool bundle {self.name!r}: resource {resource.id!r} ({resource.type}) is not "
+                "a folder on this machine"
+            )
+        space = Workspace.at(
+            roots[0], also=[*roots[1:], *extra_roots], read_only=resource.read_only
+        )
         backend = build_backend(
             self.backend,
             space,

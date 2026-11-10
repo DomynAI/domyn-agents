@@ -60,7 +60,8 @@ def _config(home: Path, paths: list[str]) -> Path:
 
 def _paths(config: Path) -> list[str]:
     raw: dict[str, Any] = yaml.safe_load(config.read_text(encoding="utf-8"))
-    return list(raw["agents"][0]["skills"]["source"]["paths"])
+    # Unlisting the last skill drops the resource, and the agent's `skills` with it.
+    return list(cfg.source_paths(raw, raw["agents"][0].get("skills"), "skills") or [])
 
 
 def _invoke(*args: str) -> Result:
@@ -304,6 +305,29 @@ class TestRemove:
         assert result.exit_code == 0, result.output
         assert _paths(config) == []
         assert "until the next `domyn setup`" in result.output
+
+
+class TestRemovingABuiltIn:
+    def test_one_read_through_the_install_folder_is_left_to_setup(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        install = home / "builtin-skills"
+        monkeypatch.setattr(skills_command, "skills_install_dir", lambda: install)
+        _skill(install / "visualization" / "charts", "charts")
+        config = _config(home, [])
+        raw = yaml.safe_load(config.read_text(encoding="utf-8"))
+        raw["resources"] = [{"id": "builtin_skills", "type": "local_dir", "paths": [str(install)]}]
+        raw["agents"][0]["skills"] = {
+            "source": {"type": "resource", "resource": "builtin_skills", "path": "."}
+        }
+        config.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+        result = _invoke("remove", "charts")
+
+        assert result.exit_code == 1
+        said = " ".join(result.output.split())
+        assert "is a built-in skill" in said and "run `domyn setup` and untick it" in said
+        assert _paths(config) == [str(install)]
 
 
 def test_an_unknown_action_is_refused(home: Path) -> None:

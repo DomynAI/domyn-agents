@@ -906,8 +906,13 @@ def _number(name: str) -> str:
 
 
 def _listed(config: dict[str, Any]) -> list[str] | None:
+    # As setup reads them back: its resources' paths, the built-ins' install folder as
+    # the folder of each skill in it, as the wizard edits them.
     skills = config["agents"][0].get("skills")
-    return None if skills is None else skills["source"]["paths"]
+    if skills is None:
+        return None
+    local = cfg.as_local_source(config, "skills", skills)
+    return list(local["source"]["paths"])
 
 
 class TestChoosingTheSkills:
@@ -1087,7 +1092,8 @@ class TestWhatTheConfigAlreadyHolds:
         assert result is not None
         paths = _listed(result)
         assert paths is not None
-        assert paths[-1] == str(mine)
+        # Kept, ahead of the built-ins: those are read last, through their own folder.
+        assert paths[0] == str(mine)
         assert len(paths) == 2
 
     def test_a_source_that_is_not_a_local_directory_is_left_alone(

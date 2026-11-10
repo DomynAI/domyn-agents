@@ -651,6 +651,7 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
             path: Path to write, relative to the workspace root.
             content: The full new contents of the file.
         """
+        workspace.refuse_write(path)
         resolved = workspace.resolve(path)
         _refuse_hard_link(path, resolved)
         _refuse_text_over_document(path, resolved)
@@ -670,6 +671,7 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
             path: Path to append to, relative to the workspace root.
             content: Text to add at the end.
         """
+        workspace.refuse_write(path)
         resolved = workspace.resolve(path)
         _refuse_hard_link(path, resolved)
         _refuse_text_over_document(path, resolved)
@@ -689,6 +691,7 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
             old: Exact text to replace.
             new: Text to put in its place.
         """
+        workspace.refuse_write(path)
         resolved = workspace.resolve(path, must_exist=True)
         _refuse_hard_link(path, resolved)
         _refuse_text_over_document(path, resolved)

@@ -37,9 +37,26 @@ def _write_config(path: Path, skill_paths: list[str]) -> None:
                         "description": "test agent",
                         "instruction": "Be brief.",
                         "llm_provider": "p",
-                        "skills": {"source": {"type": "local_dir", "paths": skill_paths}},
+                        **(
+                            {
+                                "skills": {
+                                    "source": {
+                                        "type": "resource",
+                                        "resource": "skills",
+                                        "path": ".",
+                                    }
+                                }
+                            }
+                            if skill_paths
+                            else {}
+                        ),
                     }
                 ],
+                **(
+                    {"resources": [{"id": "skills", "type": "local_dir", "paths": skill_paths}]}
+                    if skill_paths
+                    else {}
+                ),
             }
         ),
         encoding="utf-8",
@@ -89,10 +106,12 @@ class TestExportFromTheSession:
         await repl.run()
 
         exported = yaml.safe_load((dest / "config.yaml").read_text(encoding="utf-8"))
-        assert exported["agents"][0]["skills"]["source"]["paths"] == [
-            "${DOMYN_PROJECT_DIR}/skills/notes"
+        from domyn.agents.interfaces.cli import config as cli_config
+
+        assert cli_config.source_paths(exported, exported["agents"][0]["skills"], "skills") == [
+            "${DOMYN_PROJECT_DIR}/resources/notes"
         ]
-        assert (dest / "skills" / "notes" / "SKILL.md").is_file()
+        assert (dest / "resources" / "notes" / "SKILL.md").is_file()
         # The report `domyn export` prints.
         assert f"Exported {config} to {dest}" in out.getvalue()
         assert "domyn run --project" in out.getvalue()
@@ -105,7 +124,7 @@ class TestExportFromTheSession:
 
         await repl.run()
 
-        assert not (dest / "skills").exists()
+        assert not (dest / "resources").exists()
 
     @pytest.mark.asyncio
     async def test_an_existing_folder_is_refused_and_left_alone(

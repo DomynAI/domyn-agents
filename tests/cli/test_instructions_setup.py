@@ -70,7 +70,7 @@ def _run(
 
 def _paths(config: dict[str, Any]) -> list[str] | None:
     declared = config["agents"][0].get("standing_instructions")
-    return None if declared is None else declared["source"]["paths"]
+    return None if declared is None else cfg.source_paths(config, declared, "standing_instructions")
 
 
 class TestAFolder:
@@ -86,7 +86,11 @@ class TestAFolder:
         result = _run(console, theme, str(notes))
 
         assert _paths(result) == [str(soul), str(top), str(deep)]
-        assert result["agents"][0]["standing_instructions"]["source"]["type"] == "local_dir"
+        # Declared once as a resource, which the source names by id.
+        assert result["agents"][0]["standing_instructions"]["source"] == {
+            "type": "resource",
+            "resource": "instructions",
+        }
 
     def test_what_is_found_is_named(
         self, console: Console, theme: Theme, tmp_path: Path, out: io.StringIO
@@ -113,7 +117,10 @@ class TestAFolder:
 
         _, agent, _ = cfg.current_settings_from(yaml.safe_load(Path("config.yaml").read_text()))
 
-        assert agent.standing_instructions == result["agents"][0]["standing_instructions"]
+        # Read back as setup edits them: the paths of the resource the source names.
+        assert agent.standing_instructions == {
+            "source": {"type": "local_dir", "paths": _paths(result)}
+        }
 
 
 class TestAFile:
