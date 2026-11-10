@@ -59,9 +59,19 @@ def _conversation_text(context: InteractionContext) -> str:
     return "\n".join(texts)
 
 
-#: The name of the ``AUTOMATIC`` mode's post-agent hook, whose ``HOOK_END`` event
-#: carries the fact it stored (none when it stored nothing).
-MEMORY_HOOK_NAME = "update_memory"
+class MemoryAsset(StrEnum):
+    """What a memory manager attaches to an agent, by name: the tools of the
+    ``AGENTIC`` mode and the hook of the ``AUTOMATIC`` one."""
+
+    REMEMBER_TOOL = "remember"
+    """``AGENTIC``: the tool that stores a fact."""
+    RECALL_TOOL = "recall"
+    """``AGENTIC``: the tool that reads what is remembered, a page at a time."""
+    FORGET_TOOL = "forget"
+    """``AGENTIC``: the tool that removes a fact by its id."""
+    UPDATE_HOOK = "update_memory"
+    """``AUTOMATIC``: the post-agent hook, whose ``HOOK_END`` event carries the fact
+    it stored (none when it stored nothing)."""
 
 
 class MemoryExecutionMode(StrEnum):

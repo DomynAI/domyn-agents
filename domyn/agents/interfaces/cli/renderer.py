@@ -66,7 +66,7 @@ from rich.text import Text
 from domyn.agents.core import BaseEvent, ExecutionEventType
 from domyn.agents.interfaces.cli.calls import as_written, summary
 from domyn.agents.interfaces.cli.markdown import MarkdownStream, render_markdown
-from domyn.agents.memory.managers.base import MEMORY_HOOK_NAME
+from domyn.agents.memory.managers.base import MemoryAsset
 
 if TYPE_CHECKING:
     from rich.console import Console
@@ -801,7 +801,7 @@ class EventRenderer:
         params = getattr(action, "parameters", None) or {}
         sym = self._theme.symbols
         self._wrote_work = True
-        if str(action.name) == "remember" and isinstance(params, Mapping):
+        if str(action.name) == MemoryAsset.REMEMBER_TOOL and isinstance(params, Mapping):
             self._remembering[str(action.call_id)] = str(params.get("memory_content") or "")
         # Two spans, not a base style: the arguments would inherit the name's bold.
         line = Text()
@@ -818,7 +818,7 @@ class EventRenderer:
     @staticmethod
     def _remembered_by_hook(event: BaseEvent) -> str:
         """The fact the automatic memory stored after the agent, if this event is that."""
-        if (event.metadata or {}).get("hook_name") != MEMORY_HOOK_NAME:
+        if (event.metadata or {}).get("hook_name") != MemoryAsset.UPDATE_HOOK:
             return ""
         return " ".join(" ".join(p.text for p in event.content or [] if p.text).split())
 
@@ -844,7 +844,7 @@ class EventRenderer:
         sym = self._theme.symbols
         action: Any = event.action
         observation = getattr(action, "observation", None) if action else None
-        if action is not None and str(action.name) == "remember":
+        if action is not None and str(action.name) == MemoryAsset.REMEMBER_TOOL:
             kept = self._remembering.pop(str(action.call_id), "")
             result = str(observation or " ".join(p.text for p in event.content if p.text))
             if result.startswith("Memory stored.") and kept:
