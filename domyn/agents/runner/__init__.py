@@ -3135,24 +3135,9 @@ class Runner:
         await self._write_conversation_state(state, context)
         await self._refresh_state(state)
         shared = context.state
-        agent_input = context.agent_input
-        if agent_input is None or agent_input.event_type in (
-            ExecutionEventType.TOOL_FEEDBACK,
-            ExecutionEventType.AGENT_FEEDBACK,
-        ):
-            # Resumed by an answer meant for a sub-agent: the caller's own task is
-            # the AGENT_START that started it, as `_handle_tool_feedback` recovers.
-            agent_input = next(
-                (
-                    x
-                    for x in reversed(state.conversation_info.events_history)
-                    if x.event_type == ExecutionEventType.AGENT_START
-                    and getattr(x.action, "name", None) == state.current_agent.name
-                ),
-                BaseEvent(
-                    event_type=ExecutionEventType.AGENT_START, author=state.current_agent.name
-                ),
-            )
+        agent_input = context.agent_input or BaseEvent(
+            event_type=ExecutionEventType.AGENT_START, author=state.current_agent.name
+        )
         rebuilt = ContextBuilder.create_context(state, agent_input, await self._stack(state).last())
         rebuilt.state = shared
         rebuilt.is_subagent = context.is_subagent
