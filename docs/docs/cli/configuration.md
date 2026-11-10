@@ -52,33 +52,61 @@ agents:
   stream: true
   skills:
     source:
-      type: local_dir
-      paths:
-      - .domyn/skills
-      - .agents/skills
-      - /home/me/.domyn/builtin-skills/productivity/brainstorming
+      type: resource
+      resource:
+      - id: autodiscovery
+        path: skills
+      - skills
+      - builtin_skills
+      path: .
   standing_instructions:
     source:
-      type: local_dir
-      paths:
-      - /home/me/notes/SOUL.md
-      - .domyn
-      - .agents
+      type: resource
+      resource:
+      - instructions
+      - id: autodiscovery
+        walk: true
   tool_bundles:
-  - cli_tools
+  - use: cli_tools
+    workspace: workspace
+resources:
+- id: workspace
+  type: local_dir
+  paths:
+  - .
+- id: autodiscovery
+  type: local_dir
+  paths:
+  - .domyn
+  - .agents
+- id: skills
+  type: local_dir
+  paths:
+  - /home/me/my-skills/review
+- id: builtin_skills
+  type: local_dir
+  paths:
+  - /home/me/.domyn/builtin-skills
+- id: instructions
+  type: local_dir
+  paths:
+  - /home/me/notes/SOUL.md
 tool_bundles:
 - name: cli_tools
   bundles:
   - files
   - shell
   - browser
-  workspace: null
   sandbox: local
   isolate_environment: true
   allowed_env: []
 ```
 
-The relative paths are the folders the wizard loads from the directory the session starts in, when you answered yes to them; the absolute ones are the files and skills it found or installed.
+The folders are declared once, under `resources`, and the agent names them by id: the tools work in `workspace`; the skills are read from the `skills/` folder of `autodiscovery`, then `skills`, then `builtin_skills`, so a project's skill wins over yours and yours over a built-in; the instructions are read from `instructions`, then from `autodiscovery` with its subfolders (`walk: true`), so your `SOUL.md` comes first and the project's brief last. `autodiscovery` is the `.domyn` and `.agents` of the folder the session starts in, written only when you answer yes to loading them; the other paths are the files and skills the wizard found. `builtin_skills` is the folder the built-in skills you chose are installed into, read whole: it holds exactly those, and a skill of your own with the same name wins. Setup installs the built-ins wherever that resource points, `builtin-skills` in the configuration's folder when there is none. `domyn setup` rewrites these resources whole every time, and keeps any other resource you add.
+
+A configuration written before resources existed (`tool_bundles: [cli_tools]`, `workspace` on the bundle, or skills and instructions with `type: local_dir`) no longer loads: `domyn run` names the line to change. Run `domyn setup` again to rewrite it.
+
+`domyn export` keeps `autodiscovery` as it is, so the exported project still reads the `.domyn` and `.agents` of wherever it runs, and adds what they held when you exported, copied into the project, as `autodiscovery_export`, read beside it.
 
 The settings you are most likely to change:
 
@@ -89,7 +117,7 @@ The settings you are most likely to change:
 | `bundles` | The [built-in tools](tools-and-approvals.md): `files`, `shell` and `browser`. Remove one to take those tools away, or leave the list empty for an agent that only talks. |
 | `skills` | The [skills](../guides/skills.md) the agent loads. Only what is listed here is loaded. |
 | `standing_instructions` | The [standing instructions](../guides/standing-instructions.md) added to the system prompt on every turn. |
-| `workspace` | The directory the file tools are confined to. `null` means the directory the session starts from. |
+| `paths` of the `workspace` resource | The directory the file tools are confined to. `.` is the directory the session starts from. |
 | `isolate_environment` | `false` lets commands use the environment you run `domyn` from instead of a virtual environment per conversation. |
 | `allowed_env` | Names of environment variables that commands may see. |
 | `compactor.strategy` | How the conversation is shortened: `two_phase` (default), `prune_only` (never calls the model) or `noop` (never shortens). |
@@ -135,14 +163,14 @@ A project is a separate configuration, kept side by side with the default one: i
 |---|---|
 | `domyn setup --project work` | Creates the project `work` in `~/.domyn/projects/work` with the setup wizard, or changes it if it exists. |
 | `domyn run --project work` | Starts a session with it. The banner shows the project's name. |
-| `domyn export <folder>` | Saves the configuration, with the skills and instruction files it uses, into a new folder: a project that works on any machine. With `--project work`, it exports that project. `/export <folder>` does the same from inside a session. |
+| `domyn export <folder>` | Saves the configuration, with the skills and instruction files it uses, into a new folder: a project that works on any machine. Every folder its skills and instructions are read from is copied into `resources/` (the built-ins into `resources/builtin-skills`), with only what is read from it, each file where it was in that folder. A skill that needs a file outside the folder it is read through stops the export, naming the file. With `--project work`, it exports that project. `/export <folder>` does the same from inside a session. |
 | `domyn setup --import <folder>` | Creates a new project from an exported folder, named after the folder unless `--project` gives another name. The wizard shows each exported setting and asks whether to keep it. |
 
 `--project` also takes the path of a project folder anywhere on disk: anything containing `/` or starting with `.` or `~`, such as `--project ./shared`.
 
 An export also holds a hidden `.info` file saying what made it: the version of domyn-agents, the date, the Python version and the platform, and the version of `domyn-platform-sdk` when it is installed. Nothing in it names your machine or you. `domyn setup --import` compares that version with its own and, when they differ or the export does not say, prints a warning before the wizard. The import goes on either way, but the exported configuration and built-in skills are as that version wrote them.
 
-When you choose not to keep the exported skills during an import, the wizard lists them, ticked, and below them, unticked, the built-in skills the export does not include, so you can add any of them. The built-ins you tick are installed into the project's `builtin-skills` folder; the exported ones stay as they came, edits included. To replace them with this version's, run `domyn setup --project <name>` afterwards.
+When you choose not to keep the exported skills during an import, the wizard lists them, ticked, and below them, unticked, the built-in skills the export does not include, so you can add any of them. The built-ins you tick are installed into the project's built-in skills folder, `resources/builtin-skills`; the exported ones stay as they came, edits included. To replace them with this version's, run `domyn setup --project <name>` afterwards.
 
 A project reads nothing from `~/.domyn` except API keys: a key is read from the project's own `credentials` file first, then from `~/.domyn/credentials`, so a key saved once serves every project, and a project can use a different one by setting its own. Its conversations and approvals are its own. An export names nothing outside its own folder: the files the configuration reads (skills, instruction files, the code of tools and hooks) are copied in, and a path that cannot be, such as a tool bundle's workspace, refuses the export, saying which. `domyn setup --import` refuses an export that names anything outside itself, so an edited export cannot make your machine read a file of yours. A project used by its path (`--project ./folder`) is checked every time: if it names files outside its folder, domyn lists them and asks before using it, and `domyn run` also shows the code of its tools and hooks, with what each imports, and asks before running it. Without a terminal to ask on, such a project is refused. A project used by name (`--project <name>`, a folder under `~/.domyn/projects` that setup made or imported) is trusted and used as it is. An export never includes API keys, approvals or conversation history: when the configuration needs a key, the export says which environment variable to set.
 

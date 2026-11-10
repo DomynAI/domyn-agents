@@ -143,13 +143,12 @@ class TestResolvingABackend:
             bundle("shell", root=tmp_path, backend="firecracker")
 
     def test_a_tool_bundle_refuses_too(self, tmp_path: Path) -> None:
+        from domyn.agents.resources import LocalDirResource
         from domyn.agents.tools.builtin import BuiltinBundleConfig
 
-        config = BuiltinBundleConfig(
-            name="cli_tools", bundles=["shell"], workspace=str(tmp_path), sandbox="docker"
-        )
+        config = BuiltinBundleConfig(name="cli_tools", bundles=["shell"], sandbox="docker")
         with pytest.raises(BackendUnavailableError):
-            config.build()
+            config.build(resource=LocalDirResource(id="w", paths=[str(tmp_path)]))
 
 
 class TestBackendFailuresAreDistinguishable:

@@ -41,6 +41,7 @@ from domyn.agents.integrations.domyn_platform_sdk import (
 )
 from domyn.agents.interfaces.cli.config import (
     AUTO_CONTEXT_WINDOW,
+    CLI_RESOURCE_IDS,
     DECISION_LEVEL_BLURB,
     DECISION_LEVELS,
     DEFAULT_DECISION_KEY_ENV,
@@ -59,8 +60,10 @@ from domyn.agents.interfaces.cli.config import (
     credentials_path,
     current_decisions_from,
     current_settings_from,
+    declared_resources,
     describe_configuration_v1,
     describe_project,
+    editing_config,
     expand_project_dir,
     find_api_key,
     in_project_terms,
@@ -1476,6 +1479,33 @@ def run_setup(
 ) -> dict[str, Any] | None:
     """Walk the user through configuration and persist it as a ConfigurationV1 file.
 
+    The built-ins are installed where ``existing`` says (its ``builtin_skills``
+    resource), which is not the file on disk yet when it was just imported: see
+    `_run_setup` for the rest.
+    """
+    expanded = expand_project_dir(existing, active_project()) if existing else None
+    with editing_config(expanded):
+        return _run_setup(
+            console,
+            theme,
+            existing,
+            path=path,
+            provider_only=provider_only,
+            imported=imported,
+        )
+
+
+def _run_setup(
+    console: Console,
+    theme: Theme,
+    existing: dict[str, Any] | None = None,
+    *,
+    path: Path | None = None,
+    provider_only: bool = False,
+    imported: ProjectImport | None = None,
+) -> dict[str, Any] | None:
+    """Walk the user through configuration and persist it as a ConfigurationV1 file.
+
     Args:
         existing: the current config, as the raw dict ``read_raw_config``
             returns — not the wizard's ``ProviderConfig``/``AgentConfig``; see the
@@ -1679,6 +1709,7 @@ def run_setup(
         other_names = {
             str(a.get("name")) for a in (existing or {}).get("agents") or [] if isinstance(a, dict)
         } - {d.agent.name}
+        resource_ids = {*CLI_RESOURCE_IDS, *declared_resources(existing or {})}
         default_name = AgentConfig().name
         while True:
             name = _ask(
@@ -1695,6 +1726,9 @@ def run_setup(
                 )
             elif name in other_names:
                 problem = f"Another agent of this config is called {name} — try another name"
+            elif name in resource_ids:
+                # The loader refuses an agent named like a resource.
+                problem = f"{name} is the id of a resource of this config — try another name"
             else:
                 break
             console.print(

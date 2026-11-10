@@ -49,6 +49,7 @@ from domyn.agents.skills import (
 from domyn.agents.skills.external_files import missing_external_files
 from domyn.agents.skills.integration import attach_skills
 from domyn.agents.skills.layout import listed_path_is_linked
+from domyn.agents.skills.sources import local_source_paths
 
 # markup=False for the whole session: nothing here writes rich's square-bracket
 # tags, and everything here prints text from somewhere else — tool arguments, a
@@ -188,14 +189,27 @@ def apply_session_instructions(agent: Any) -> None:
     author's and is kept as it is.
     """
     declared = getattr(agent, "standing_instructions", None)
-    if isinstance(declared, instructions.InstructionRuntime) and isinstance(
-        declared.source, instructions.LocalDirInstructionsSource
-    ):
-        paths = resolve_instruction_dirs(declared.source.paths)
+    local = (
+        local_source_paths(declared.source)
+        if isinstance(declared, instructions.InstructionRuntime)
+        else None
+    )
+    if isinstance(declared, instructions.InstructionRuntime) and local is not None:
+        # A `resource` source over local folders is read as the folders it names, so
+        # the same rules apply to it as to a `local_dir` one; the folders its entries
+        # say to walk are walked still.
+        source = declared.source
+        walked_paths = getattr(source, "walked_paths", None)
+        walked = walked_paths() if callable(walked_paths) else list(getattr(source, "walk", []))
+        paths = resolve_instruction_dirs(local, walked)
         # A copy, not an edit: the declared runtime may be shared with
         # another agent built from the same config.
         agent.standing_instructions = declared.model_copy(
-            update={"source": instructions.LocalDirInstructionsSource(paths=paths)}
+            update={
+                "source": instructions.LocalDirInstructionsSource(
+                    paths=paths, walk=[one for one in walked if one in paths]
+                )
+            }
         )
 
 
@@ -344,14 +358,13 @@ def _missing_skills_warning(agent: Agent, index: SkillIndex | None = None) -> st
       runtime loaded; without it this part is skipped).
     """
     runtime = getattr(agent, "skills", None)
-    if not isinstance(runtime, SkillsRuntime) or not isinstance(
-        runtime.source, LocalDirSkillSource
-    ):
+    listed = local_source_paths(runtime.source) if isinstance(runtime, SkillsRuntime) else None
+    if listed is None:
         return None
 
     lines: list[str] = []
     # Links first, so a broken one is named once, as a link: the loader follows none.
-    linked = [path for path in runtime.source.paths if listed_path_is_linked(path.expanduser())]
+    linked = [path for path in listed if listed_path_is_linked(path.expanduser())]
     if linked:
         lines.append(
             "  Skills not loaded, the path is a symbolic link (links are not followed): "
@@ -360,7 +373,7 @@ def _missing_skills_warning(agent: Agent, index: SkillIndex | None = None) -> st
     # The autodiscovery folders are read from wherever domyn starts, so their absence is normal.
     missing = [
         path
-        for path in runtime.source.paths
+        for path in listed
         if path not in linked
         and not is_skill_autodiscovery(path)
         and not path.expanduser().exists()
@@ -595,9 +608,12 @@ def configure_session_agent(
     existing_skills = declared_skills if isinstance(declared_skills, SkillsRuntime) else None
     updated_skill_runtime = existing_skills
     if existing_skills:
-        if isinstance(existing_skills.source, LocalDirSkillSource):
+        local_skills = local_source_paths(existing_skills.source)
+        if local_skills is not None:
+            # A `resource` source over local folders becomes the folders it reads, so
+            # the session treats it as it treats a `local_dir` one.
             skill_runtime_params: dict[str, LocalDirSkillSource | SkillSelector | bool] = {
-                "source": LocalDirSkillSource(paths=unique_paths(existing_skills.source.paths))
+                "source": LocalDirSkillSource(paths=unique_paths(local_skills))
             }
             if options.expand_skills:
                 skill_runtime_params["selector"] = AllSkillsSelector()

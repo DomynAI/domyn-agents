@@ -6,7 +6,7 @@ dependencies, so that any package can import it.
 
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, Field
 
 
 class BaseAgent(BaseModel):
@@ -17,12 +17,12 @@ class BaseAgent(BaseModel):
 
     type: str = "BaseAgent"
 
-    name: str = Field(..., description="Name of the agent")
-    # declared after `name`: the validator reads it from the fields already validated
-    id: str | None = Field(
-        default=None,
-        validate_default=True,
-        description="Id of the agent; the agent's name when not given",
+    name: str = Field(
+        ...,
+        description=(
+            "Name of the agent, unique within a configuration: it is the agent's identity. "
+            "What an agent owns, such as files, is a resource with an id of its own."
+        ),
     )
     description: str = Field(..., description="Description of the agent")
 
@@ -31,11 +31,6 @@ class BaseAgent(BaseModel):
     parameters_string: ClassVar[str] = "arguments"
     stream: bool = False
     tools: list[Any] = Field(default_factory=list, description="Available tools")
-
-    @field_validator("id", mode="before")
-    @classmethod
-    def _default_id_to_name(cls, value: Any, info: ValidationInfo) -> Any:
-        return info.data.get("name") if value is None else value
 
     # auto-register sub types so AgentFactory can resolve them by `type`
     def __init_subclass__(cls, **kwargs):

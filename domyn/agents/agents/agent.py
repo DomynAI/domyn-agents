@@ -23,6 +23,7 @@ from domyn.agents.llm import BaseLLMProvider, LLMProviderFactory
 from domyn.agents.logger import get_logger
 from domyn.agents.memory.managers import BaseMemoryManager, MemoryExecutionMode
 from domyn.agents.planner_strategy import BasePlannerStrategy, PlannerStrategyFactory
+from domyn.agents.resources import Resource
 from domyn.agents.skills import LoadedSkills, SkillRequiredError, SkillsRuntime
 from domyn.agents.skills.integration import skill_tools
 from domyn.agents.skills.turn import build_skills_payload
@@ -164,6 +165,18 @@ class Agent(BaseAgent):
             "`tools`) because each carries a Workspace and, for shell, a "
             "CommandBackend that outlives a single call and must be closed. "
             "Excluded from serialization: runtime infrastructure, not user config."
+        ),
+    )
+
+    resources: list[Resource] = Field(
+        default_factory=list,
+        exclude=True,
+        description=(
+            "The resources this agent may use: the ones its `resources:` list names, "
+            "plus every one its tool bundles and skills and instructions sources are "
+            "bound to (a reference grants access), first appearance first. What a "
+            "platform reads for access no consumer names, such as a sandbox mount. "
+            "Excluded from serialization: the configuration names them by id."
         ),
     )
 
@@ -751,7 +764,6 @@ class Agent(BaseAgent):
             handoff_scope = HandoffScope(handoff_scope.lower())
 
         agent = cls(
-            id=cfg.get("id"),
             name=cfg["name"],
             description=cfg["description"],
             instruction=cfg["instruction"],
@@ -773,6 +785,7 @@ class Agent(BaseAgent):
             decisions=cfg.get("decisions"),
             stream=cfg.get("stream", False),
             builtin_tools=cfg.get("builtin_tools", []),
+            resources=cfg.get("resources", []),
         )
         return agent
 

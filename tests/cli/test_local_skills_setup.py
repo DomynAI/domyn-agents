@@ -90,8 +90,13 @@ def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _paths(config: dict[str, Any]) -> list[str]:
+    # As setup reads them back: its resources' paths, the built-ins' install folder as
+    # the folder of each skill in it, as the wizard edits them.
     skills = config["agents"][0].get("skills")
-    return [] if skills is None else skills["source"]["paths"]
+    if skills is None:
+        return []
+    local = cfg.as_local_source(config, "skills", skills)
+    return list(local["source"]["paths"])
 
 
 def _run(
@@ -281,7 +286,7 @@ class TestWhatTheConfigHolds:
         _run(console, theme, _answers(""), target=Path("config.yaml"))
 
         on_disk = yaml.safe_load(Path("config.yaml").read_text())
-        assert on_disk["agents"][0]["skills"]["source"]["paths"] == AUTO
+        assert _paths(on_disk) == AUTO
 
 
 class TestWhatItLoads:

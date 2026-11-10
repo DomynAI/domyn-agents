@@ -120,17 +120,24 @@ SkillsRuntime(source=InMemorySkillSource(skills={
 }))
 ```
 
-In a [YAML configuration](configuration.md), `skills` is declared on the agent:
+In a [YAML configuration](configuration.md), the folders are declared as [`resources`](../reference/yaml-schema.md#resources) and `skills` on the agent names them:
 
 ```yaml
+resources:
+  - id: project
+    type: local_dir
+    paths: [.]
+
 agents:
   - name: Writer
     ...
     skills:
       source:
-        type: local_dir
-        paths: [./skills]
+        type: resource
+        resource: project        # reads ./skills
 ```
+
+A `local_dir` source, which lists folders itself, is for agents built in Python; a configuration file refuses it and says how to write the resource instead.
 
 Skill files are read again on every turn, so an edited skill applies from the next message. In a [team](orchestration.md), each agent has its own skills.
 
@@ -190,7 +197,7 @@ SkillsRuntime(source=LocalDirSkillSource(paths=["./skills"]), selector=LLMSelect
 
 ```yaml
     skills:
-      source: {type: local_dir, paths: [./skills]}
+      source: {type: resource, resource: project}
       selector: {type: llm, max_expansions: 2}
 ```
 
@@ -202,7 +209,7 @@ With every selector, the whole index stays in the request, so the model can stil
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `source` | `LocalDirSkillSource` \| `InMemorySkillSource` | required | Where the skills come from. In YAML: `type: local_dir` with `paths`, or `type: memory` with `skills`. |
+| `source` | `ResourceSkillSource` \| `LocalDirSkillSource` \| `InMemorySkillSource` | required | Where the skills come from. In YAML: `type: resource` with `resource` (an id, or a list in order, of [`resources`](../reference/yaml-schema.md#resources); an entry may be `{id, path}` to read another folder in that one) and `path` (the folder read in each, `skills` by default), or `type: memory` with `skills`. `LocalDirSkillSource(paths=...)` is for Python only. |
 | `selector` | selector | `IndexSelector` | See [Choosing skills before the turn](#choosing-skills-before-the-turn). |
 | `index_sections` | `bool` | `False` | Lists each skill's sections in the index. Useful when the model should ask for one section without opening the skill first; costs context on every request. |
 | `budget` | `SkillBudget` | see below | Limits on how much skill text enters the request. |
@@ -230,7 +237,7 @@ With every selector, the whole index stays in the request, so the model can stil
 
 ```yaml
     skills:
-      source: {type: local_dir, paths: [./skills]}
+      source: {type: resource, resource: project}
       search: {provider: small_model, timeout_s: 5}
 ```
 

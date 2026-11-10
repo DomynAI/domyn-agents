@@ -1238,6 +1238,10 @@ llm_providers:
 planner_strategies:
   - name: tools
     type: tool_use
+resources:
+  - id: expert_skills
+    type: local_dir
+    paths: ["{skills_dir}"]
 agents:
   - name: SqlExpert
     description: sql specialist
@@ -1246,8 +1250,9 @@ agents:
     planner_strategy: tools
     skills:
       source:
-        type: local_dir
-        paths: ["{skills_dir}"]
+        type: resource
+        resource: expert_skills
+        path: .
   - name: Orchestrator
     description: coordinator
     instruction: delegate

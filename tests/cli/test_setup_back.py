@@ -179,7 +179,7 @@ class TestAStepAskedAgain:
 
         result = _run(console, theme, answers, tmp_path)
 
-        paths = result["agents"][0]["skills"]["source"]["paths"]
+        paths = cfg.source_paths(result, result["agents"][0]["skills"], "skills")
         assert paths == [str(mine / "review")]
 
 

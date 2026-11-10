@@ -89,7 +89,10 @@ class TestFilesOutside:
         [
             (_instructions("~/.ssh/id_rsa"), "~/.ssh/id_rsa"),
             (_instructions(f"{P}/../../.ssh/id_rsa"), "/../../.ssh/id_rsa"),
-            ({"tool_bundles": [{"name": "b", "workspace": "~"}]}, "workspace"),
+            (
+                {"resources": [{"id": "workspace", "type": "local_dir", "paths": ["~"]}]},
+                "workspace",
+            ),
         ],
         ids=["home", "climbing", "workspace"],
     )
@@ -135,7 +138,9 @@ class TestFilesOutside:
     def test_on_a_terminal_they_are_asked_about_every_time(
         self, tmp_path: Path, answer: list[str]
     ) -> None:
-        folder = _project(tmp_path, tool_bundles=[{"name": "b", "workspace": "/srv/w"}])
+        folder = _project(
+            tmp_path, resources=[{"id": "workspace", "type": "local_dir", "paths": ["/srv/w"]}]
+        )
 
         answer.append("yes")
         _select(folder)
@@ -203,7 +208,9 @@ class TestTheCommands:
         assert "Not used" in " ".join(result.output.split())
 
     def test_export_refuses_it_too(self, tmp_path: Path) -> None:
-        folder = _project(tmp_path, tool_bundles=[{"name": "b", "workspace": "~"}])
+        folder = _project(
+            tmp_path, resources=[{"id": "workspace", "type": "local_dir", "paths": ["~"]}]
+        )
 
         result = CliRunner().invoke(
             app, ["export", str(tmp_path / "out"), "--project", str(folder)]

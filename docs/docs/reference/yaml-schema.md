@@ -8,7 +8,7 @@ description: "Every key of a YAML application file, with its type and default"
 
 Every key of a YAML application file. How to write and run one is in [YAML configuration](../guides/configuration.md).
 
-Any string value can contain `${NAME}`, replaced with the environment variable `NAME` when the file is loaded; an unset variable stops the load with an error. Relative paths (`path`, `workspace`) are resolved against the current directory.
+Any string value can contain `${NAME}`, replaced with the environment variable `NAME` when the file is loaded; an unset variable stops the load with an error. Relative paths (`path`, a resource's `paths`) are resolved against the current directory.
 
 ## Top level
 
@@ -20,6 +20,7 @@ Any string value can contain `${NAME}`, replaced with the environment variable `
 | `planner_strategies` | list | `[]` | See [`planner_strategies`](#planner_strategies). |
 | `context_managers` | list | `[]` | Context managers referenced by name from `planner_strategies`. Each needs `name` and `type`, and the `react` ones more keys. See [Planner strategies](../guides/planner-strategies.md). |
 | `tools` | list | `[]` | See [`tools`](#tools). |
+| `resources` | list | `[]` | See [`resources`](#resources). |
 | `tool_bundles` | list | `[]` | See [`tool_bundles`](#tool_bundles). |
 | `mcp_servers` | list | `[]` | See [`mcp_servers`](#mcp_servers). |
 | `oauth_providers` | list | `[]` | See [`oauth_providers`](#oauth_providers). |
@@ -89,13 +90,27 @@ Two more types exist: `rest`, an HTTP endpoint called as a tool, and `delegate`,
 
 An entry whose `type` is unknown, or that cannot be built from its keys, is skipped with a warning in the log naming the tool and its type, and the agents that list it are loaded without it.
 
-## `tool_bundles`
+## `resources`
+
+Places files live, each with an id the rest of the file refers to. A resource does nothing on its own: a tool bundle, a skills source or an instructions source that names it uses it. The id never comes from an agent's name, so renaming an agent does not move its files.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `name` | `str` | required | Name agents refer to in `tool_bundles`. |
-| `bundles` | list of `files` \| `shell` | `[files, shell]` | Which tools: `files` (`read_file`, `list_dir`, `glob_files`, `grep`, `write_file`, `append_file`, `edit_file`), `shell` (`run_command`, `check_command`, `list_commands`, `stop_command`). |
-| `workspace` | `str` | the current directory | The directory the tools can reach. |
+| `id` | `str` | required | Unique in the file, and different from every agent's name. |
+| `type` | `local_dir` | required | The kind of place. Applications register types of their own. |
+| `paths` | `str` or list of `str` | required | `local_dir`: folders on this machine, in order. The first is the primary one: a tool bundle's workspace, where writes go. The others are read too, and the earlier one wins when two hold the same file. A folder that does not exist is a warning when the file loads. |
+| `read_only` | `bool` | `false` | Enforced by the resource: the `files` tools refuse to write to it, and a resource type that is mounted (on a platform) is mounted read-only. A `local_dir` cannot keep commands from writing: a `shell` bound to it still runs them, each asking for approval. |
+
+The load stops with an error naming what to change for: two resources with one id, a resource id equal to an agent's name, an id no resource declares, a bundle bound to no resource or to one that is not a folder on this machine, and a skills or instructions source of `type: local_dir` (what an agent reads is always a resource). A folder that does not exist is a warning when it is an absolute path; a relative one names a folder of wherever the process runs, which may well lack it.
+
+## `tool_bundles`
+
+A bundle names no folder: each agent binds it to a resource, `{use: <bundle>, workspace: <resource id>}`, so one bundle serves agents that work in different places.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `name` | `str` | required | Name agents refer to with `use`. |
+| `bundles` | list of `files` \| `shell` \| `browser` | `[files, shell]` | Which tools: `files` (`read_file`, `list_dir`, `glob_files`, `grep`, `write_file`, `append_file`, `edit_file`), `shell` (`run_command`, `check_command`, `list_commands`, `stop_command`), `browser`. |
 | `sandbox` | `local` | `local` | Where commands run. |
 | `isolate_environment` | `bool` | `true` | Commands see only a fixed set of environment variables (`PATH`, `HOME`, …), plus `allowed_env`. |
 | `allowed_env` | list of `str` | `[]` | Further environment variables commands may see. |
@@ -159,14 +174,15 @@ See [Hooks](../guides/hooks.md).
 | `memory_manager` | mapping | none | Long-term memory: `type` (`filesystem` or `remote`), `execution_mode` (`automatic` or `agentic`) and the manager's options. See [Conversations and memory](../guides/conversations-and-memory.md). |
 | `stream` | `bool` | `false` | Stream the reply. See [Events and streaming](../guides/events-and-streaming.md). |
 | `tools` | list of `str` | `[]` | Names of entries of `tools`, or of tools registered in Python. |
-| `tool_bundles` | list of `str` | `[]` | Names of entries of `tool_bundles`. |
+| `tool_bundles` | list of `{use, workspace}` | `[]` | Each entry mounts the bundle `use` names, working in the resource `workspace` names. A bare bundle name is refused: it names no folder. |
+| `resources` | list of `str` | `[]` | Ids of resources the agent may use beyond those its bundles and sources name. Optional: naming a resource anywhere on the agent already grants it. An application reads the whole set from `Agent.resources`. |
 | `mcp_servers` | list of `str` | `[]` | Names of entries of `mcp_servers`. |
 | `sub_agents` | list of `str` | `[]` | The agents of its team. See [Orchestration](../guides/orchestration.md). |
 | `context_visibility` | `standard` \| `peers` \| `global` | `standard` | What history the agent sees. See [Orchestration](../guides/orchestration.md). |
 | `handoff_scope` | `explicit` \| `direct_peers` \| `global` | `explicit` | Which agents it may hand off to. See [Orchestration](../guides/orchestration.md). |
 | `hooks` | list of `str` | `[]` | Names of `pre_agent_call`, `post_agent_call` and `on_agent_event` hooks. |
-| `skills` | mapping | none | `source: {type: local_dir, paths: [...]}`. See [Skills](../guides/skills.md). |
-| `standing_instructions` | mapping | none | `source: {type: local_dir, paths: [...]}`. See [Standing instructions](../guides/standing-instructions.md). |
+| `skills` | mapping | none | `source: {type: resource, resource: <id or list>, path: skills}` reads the `path` folder (default `skills`) under every folder of the resources named, earlier first. An entry of the list may be `{id, path}` to read another folder in that resource. `type: memory` holds the skills in the file. See [Skills](../guides/skills.md). |
+| `standing_instructions` | mapping | none | `source: {type: resource, resource: <id or list>}` reads `SOUL.md` and `AGENTS.md` under every folder of the resources named (`path` for a subfolder); an entry `{id, walk: true}` reads its subfolders too, domyn's own state folders skipped. See [Standing instructions](../guides/standing-instructions.md). |
 | `type` | `agent` \| `delegate` | `agent` | `delegate` for an agent that runs in another process. See [Remote agents](../guides/remote-agents.md). |
 
 Keys that are not recognized are ignored without an error.

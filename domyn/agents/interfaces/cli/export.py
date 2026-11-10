@@ -1,7 +1,8 @@
 """``domyn export``: a copy of the CLI configuration someone else can run.
 
 The result is a folder laid out like ``~/.domyn`` — ``config.yaml``, ``builtin-skills/``,
-``skills/``, ``instructions/`` — that holds everything the configuration reads from disk, with every path to a copied file rewritten as ``${DOMYN_PROJECT_DIR}/...``,
+``resources/``, ``code/`` — that holds everything the configuration reads from disk,
+with every path to a copied file rewritten as ``${DOMYN_PROJECT_DIR}/...``,
 and a ``.info`` recording the version of domyn that wrote it (which an
 import compares with its own), when, and on what.
 That is the layout of a **project**: used with ``--project <its path>``, or moved to
@@ -33,18 +34,20 @@ anchor is kept, which is what keeps those relative references true in the copy.
 
 ``~/.domyn/builtin-skills`` (what ``domyn setup`` installs) is ``builtin-skills/``,
 so the export, used as a project, has its built-ins where setup installs them. Every
-other anchor is ``skills/<folder name>/``, with a suffix when the name is taken. The
+other anchor is ``resources/<folder name>/``, with a suffix when the name is taken:
+listed skill folders, and the roots of a resource read through a subpath, alike.
+Everything a resource reads that is not a built-in is under ``resources/``. The
 config's paths are rewritten one by one, so their order, which settles a name clash,
 is kept.
 
 The ``.domyn/skills`` and ``.agents/skills`` autodiscovery entries are
 **snapshotted** and **merged**: the skills in those folders of the folder the export
-runs in are copied straight into ``skills/``, categories kept
-(``.domyn/skills/<category>/<name>`` → ``skills/<category>/<name>``), and listed one
+runs in are copied straight into ``resources/skills/``, categories kept
+(``.domyn/skills/<category>/<name>`` → ``resources/skills/<category>/<name>``), and listed one
 by one where the first entry was, so the export carries what a run here would load. A
 name both folders hold is settled before copying, as the loader settles it: the
 earlier folder's skill (``.domyn``'s, in the order setup writes) is copied, the other
-is named in the report. A place already taken in ``skills/`` gets a suffix, unless
+is named in the report. A place already taken in ``resources/skills/`` gets a suffix, unless
 what holds it is the same skill, reached through another listed path (named on its
 own, or inside a listed folder), or an identical copy of it from elsewhere (every
 file the same, byte for byte, and nothing more): that one is copied once, and listed
@@ -75,7 +78,6 @@ from __future__ import annotations
 import ast
 import contextlib
 import copy
-import filecmp
 import importlib.metadata
 import importlib.util
 import os
@@ -102,7 +104,6 @@ from domyn.agents.instructions.discovery import (
 )
 from domyn.agents.interfaces.cli import config as cli_config
 from domyn.agents.interfaces.cli.config import (
-    BUILTIN_SKILLS_DIRNAME,
     CONFIG_FILENAME,
     PROJECT_DIR_VAR,
     PROVIDER_HINTS,
@@ -111,17 +112,21 @@ from domyn.agents.interfaces.cli.config import (
     is_skill_autodiscovery,
     project_dir,
     projects_dir,
-    skills_install_dir,
 )
 from domyn.agents.interfaces.cli.theme import Theme
 from domyn.agents.loader import interpolate_env_vars
-from domyn.agents.skills import LocalDirSkillSource, parse_skill_file
+from domyn.agents.skills import parse_skill_file
 from domyn.agents.skills.external_files import expand_files, resolve_external_files
 from domyn.agents.skills.layout import own_skill_file, walk_skill_tree
 from domyn.agents.tools.builtin.session import StateFolders
 
-SKILLS_DIR = "skills"
-INSTRUCTIONS_DIR = "instructions"
+AUTODISCOVERY_EXPORT = "autodiscovery_export"
+"""What the autodiscovery resource found when the export was made, copied: read beside
+it, which goes on reading the folder the project runs in."""
+
+RESOURCES_DIR = "resources"
+"""Where every folder the configuration's skills and instructions are read from is
+copied, one folder each (`_Exporter._place_roots`)."""
 
 CODE_DIR = "code"
 """Where the Python files of ``tools`` and ``hooks`` entries are copied."""
@@ -131,9 +136,10 @@ INFO_FILENAME = ".info"
 version of domyn made it, when, and on what. Not a configuration: nothing
 loads it, and an import reads it and does not copy it."""
 
-EXPORT_FORMAT_VERSION = 1
+EXPORT_FORMAT_VERSION = 2
 """The version of what an export is: its folder layout (``builtin-skills/``,
-``skills/``, ``instructions/``, ``code/``), how its config names those files, and the
+``resources/`` with ``resources/skills/`` and ``resources/instructions/``, ``code/``;
+version 1 had ``skills/`` and ``instructions/`` at the top), how its config names those files, and the
 keys of `INFO_FILENAME`. Raised when any of them changes in a way an import has to
 know about."""
 
@@ -199,63 +205,40 @@ class ExportReport:
 
 
 @dataclass
-class _InstructionSource:
-    """A folder or file an agent's ``standing_instructions`` reads."""
+class _Root:
+    """One folder (or file) a skills or instructions source reads, and what it reads
+    there: one entry of a ``local_dir`` resource's or source's ``paths``."""
 
+    holder: dict[str, Any]
+    """The mapping whose ``paths`` lists it: a ``local_dir`` resource or source."""
+    index: int
+    """Its place in that list."""
     path: Path
-    """Resolved: a folder, or one file."""
-    files: list[Path]
-    """What it contributes: its ``SOUL.md`` and ``AGENTS.md``, or the file itself."""
-
-
-@dataclass
-class _MergedSkill:
-    """One skill of the merged autodiscovery folders."""
-
-    root: Path
-    """Its folder, or its file for a loose ``.md``."""
-    folder: Path
-    """The autodiscovery folder it comes from."""
-    name: str
-    files: list[Path]
-    """Its ``SKILL.md`` and what its ``external_files`` declare."""
-    place: PurePosixPath = field(default_factory=PurePosixPath)
-    """Where it is copied, relative to ``skills/``: categories kept."""
-
-
-@dataclass
-class _MergedSkills:
-    """The autodiscovery folders of one agent, merged into ``skills/``.
-
-    A skill whose name an earlier folder already has is not in it: the loader would
-    read the earlier one, so that is the one exported.
-    """
-
-    folders: tuple[Path, ...]
-    skills: list[_MergedSkill]
-
-
-@dataclass
-class _SkillsEntry:
-    """One listed skills path that exists, and what it needs copied."""
-
-    agent: int
-    listed: Path
-    """Resolved: a folder of skills, a skill folder, or a loose ``.md``."""
+    """Resolved."""
     files: set[Path]
+    """What its sources read under it, every one inside `folder`."""
+    instructions: list[Path] = field(default_factory=list)
+    """Those of `files` that are instruction files, for the report."""
     anchor: Path = field(default=Path())
+    """The outermost root folder holding it (`_place_roots`)."""
+
+    @property
+    def folder(self) -> Path:
+        """The folder it is: itself, or the folder of a root that is one file."""
+        return self.path.parent if self.path.is_file() else self.path
 
 
 class _Exporter:
-    def __init__(self, raw: dict[str, Any], cwd: Path, install_dir: Path) -> None:
+    def __init__(self, raw: dict[str, Any], cwd: Path) -> None:
         self.config = copy.deepcopy(raw)
         self.cwd = cwd
-        self.install_dir = install_dir.expanduser().resolve()
         self.copies: dict[Path, Path] = {}
         """Destination, relative to the export → source file."""
         self.skill_files: set[Path] = set()
         """Every skill file read, resolved: whose ``external_files`` the copy must keep
         inside the export (`_refuse_paths_outside`)."""
+        self.outside: list[str] = []
+        """Files a source needs from outside the folder it reads them through."""
         self.report = ExportReport(dest=Path())
         self.places = PrivatePlaces.now()
 
@@ -283,209 +266,18 @@ class _Exporter:
             return
         previous = self.copies.setdefault(dest, source)
         if previous != source:
-            # Anchors are disjoint and instruction folders uniquely named, so two
+            # Root folders are merged when nested and uniquely named otherwise, so two
             # sources for one destination is a bug here, not a property of the config.
             raise ExportError(f"two files would be exported as {dest}: {previous} and {source}")
 
     def _unique(self, parent: str, name: str, taken: set[str]) -> str:
-        candidate, n = f"{parent}/{name or 'skills'}", 2
+        candidate, n = f"{parent}/{name}", 2
         while candidate in taken:
-            candidate, n = f"{parent}/{name or 'skills'}-{n}", n + 1
+            candidate, n = f"{parent}/{name}-{n}", n + 1
         taken.add(candidate)
         return candidate
 
-    # -- skills -----------------------------------------------------------
-
-    def _autodiscovery_folder(self, written: Any) -> Path | None:
-        """The folder an autodiscovery entry reads here, or ``None`` when there is
-        nothing to export: missing (the normal state of most folders) or a link (named)."""
-        listed = self._listed_path(written, "skills")
-        if listed is None:
-            return None
-        if listed.is_symlink():
-            self.report.dropped.append(f"{written} (a symbolic link, which export does not follow)")
-            return None
-        if not listed.is_dir():
-            return None
-        return listed.resolve()
-
-    def _merged_skills(self, folders: tuple[Path, ...]) -> _MergedSkills | None:
-        """The skills of the autodiscovery folders, in their order.
-
-        A name already taken by an earlier folder is left out, as the loader would
-        never read it, and so is a skill whose place (``category/name``) an earlier
-        one already has.
-        """
-        names: dict[str, Path] = {}
-        places: dict[Path, Path] = {}
-        skills: list[_MergedSkill] = []
-        for folder in folders:
-            for skill_root, skill_file in _listed_skills(folder):
-                name = _skill_name(skill_file, skill_root)
-                place = skill_root.relative_to(folder)
-                earlier = names.get(name) or places.get(place)
-                if earlier is not None:
-                    self.report.dropped.append(
-                        f"{skill_root} (skill {name!r}: {earlier} has the same name and "
-                        "takes precedence, so only that one is exported)"
-                    )
-                    continue
-                names[name] = places[place] = skill_root
-                declared = {skill_file, *self._external_files(skill_file)}
-                if skill_root.is_dir():
-                    self._name_undeclared(skill_root, declared)
-                skills.append(_MergedSkill(skill_root, folder, name, sorted(declared)))
-        return _MergedSkills(folders, skills) if skills else None
-
-    def _occupied(self, dest: PurePosixPath) -> bool:
-        """Whether something is already exported at ``dest`` or under it."""
-        target = Path(dest)
-        return any(k == target or target in k.parents for k in self.copies)
-
-    def _copy_merged(self, group: _MergedSkills, walked: set[str], bases: dict[Path, str]) -> None:
-        """Copy the merged skills into ``skills/``, each at ``category/name`` as in its
-        folder, and set the place each one is listed by.
-
-        A skill another listed path also reaches (named on its own, or inside a listed
-        folder) is the same files: it keeps the place that path's copy gives it
-        (`_place_in_anchor`) and is copied once. So does one whose place already holds
-        an identical copy from elsewhere (`_identical_copy_at`): the same files, byte
-        for byte, and nothing else in its folder.
-
-        Anything else can already be there: a different skill another entry copied to
-        the same place, or the copy of another listed folder of skills (``walked``),
-        whose entry would then load the skill a second time. The first moves the skill to ``name-2`` in its
-        category, the second its category to ``category-2``; either is named. The skill
-        is still listed ahead of them, so it wins its name as it did.
-
-        A file the skill shares from beside or above it (a category's ``shared.py``,
-        ``../../shared.py``) keeps its position relative to the skill, anywhere in the
-        export (`_shared_place_problem`). One whose place another file already has
-        keeps the first. A refusal is named, and the skill is unavailable in the export,
-        as the loader reports.
-        """
-        for skill in group.skills:
-            if (reused := self._place_in_anchor(skill, bases)) is not None:
-                skill.place = reused
-                continue
-            original = PurePosixPath(skill.root.relative_to(skill.folder).as_posix())
-            if self._identical_copy_at(skill, original):
-                skill.place = original
-                continue
-            place = original
-            top = place.parts[0]
-            n = 2
-            while f"{SKILLS_DIR}/{top}" in walked and len(place.parts) > 1:
-                top = f"{place.parts[0]}-{n}"
-                n += 1
-            place = PurePosixPath(top, *place.parts[1:])
-            n = 2
-            while self._occupied(PurePosixPath(SKILLS_DIR) / place) or (
-                len(place.parts) == 1 and f"{SKILLS_DIR}/{place}" in walked
-            ):
-                stem, suffix = (
-                    (original.stem, original.suffix)
-                    if skill.root.is_file()
-                    else (
-                        original.name,
-                        "",
-                    )
-                )
-                place = place.with_name(f"{stem}-{n}{suffix}")
-                n += 1
-            if place != original:
-                self.report.warnings.append(
-                    f"Skill {skill.name!r} was copied to {SKILLS_DIR}/{place}, because "
-                    f"{SKILLS_DIR}/{original} was already taken"
-                )
-            skill.place = place
-            anchor = skill.root if skill.root.is_dir() else skill.root.parent
-            dest_anchor = PurePosixPath(SKILLS_DIR) / (
-                place if skill.root.is_dir() else place.parent
-            )
-            for source_file in skill.files:
-                relative = Path(os.path.relpath(source_file, anchor)).as_posix()
-                dest = posixpath.normpath(f"{dest_anchor}/{relative}")
-                if (problem := _shared_place_problem(dest)) is not None:
-                    self.report.warnings.append(
-                        f"Skill {skill.name!r} will not work in the export: its file "
-                        f"{source_file} would have to be copied to {dest}, {problem}"
-                    )
-                    continue
-                earlier = self.copies.get(Path(dest))
-                if earlier is not None and earlier != source_file:
-                    self.report.warnings.append(
-                        f"Skill {skill.name!r}: its file {source_file} would be copied to "
-                        f"{dest}, where {earlier} already is; the skill uses that one instead"
-                    )
-                    continue
-                self._copy(source_file, Path(dest))
-
-    def _identical_copy_at(self, skill: _MergedSkill, place: PurePosixPath) -> bool:
-        """Whether ``skills/<place>`` already holds this skill, copied from another source.
-
-        Pairwise identical: every file of the skill, shared ones above its folder
-        included, has an exported file at the position it would be copied to, with the
-        same bytes; and the skill's own place holds no file the skill does not have, so
-        a copy with an extra script, or one missing a file, is a different skill.
-        """
-        is_dir = skill.root.is_dir()
-        anchor = skill.root if is_dir else skill.root.parent
-        dest_anchor = PurePosixPath(SKILLS_DIR) / (place if is_dir else place.parent)
-        wanted = {
-            Path(
-                posixpath.normpath(f"{dest_anchor}/{Path(os.path.relpath(f, anchor)).as_posix()}")
-            ): f
-            for f in skill.files
-        }
-        own = Path(SKILLS_DIR) / place
-        there = {dest for dest in self.copies if dest == own or own in dest.parents}
-        if not there or there != {dest for dest in wanted if dest == own or own in dest.parents}:
-            return False
-        return all(
-            dest in self.copies and filecmp.cmp(self.copies[dest], source, shallow=False)
-            for dest, source in wanted.items()
-        )
-
-    def _place_in_anchor(self, skill: _MergedSkill, bases: dict[Path, str]) -> PurePosixPath | None:
-        """The place, relative to ``skills/``, of a merged skill whose files all sit in
-        an anchor another entry copies, after copying any of them that entry did not
-        need; ``None`` for a skill in no such anchor.
-
-        Copied at the same position below the anchor's folder, so a file both reach is
-        one destination with one source, and the skill's shared files keep their place.
-        """
-        for anchor, base in bases.items():
-            if not all(f.is_relative_to(anchor) for f in [skill.root, *skill.files]):
-                continue
-            for source_file in skill.files:
-                self._copy(source_file, Path(base) / source_file.relative_to(anchor))
-            inside = PurePosixPath(base, skill.root.relative_to(anchor).as_posix())
-            return inside.relative_to(SKILLS_DIR)
-        return None
-
-    def _skills_entry(self, agent: int, written: Any) -> _SkillsEntry | None:
-        """A listed path other than an autodiscovery entry (`_merged_skills`)."""
-        listed = self._listed_path(written, "skills")
-        if listed is None:
-            return None
-        if listed.is_symlink():
-            self.report.dropped.append(f"{written} (a symbolic link, which export does not follow)")
-            return None
-        if not listed.exists():
-            self.report.dropped.append(f"{written} (does not exist)")
-            return None
-        listed = listed.resolve()
-        files: set[Path] = set()
-        for skill_root, skill_file in _listed_skills(listed):
-            declared = {skill_file, *self._external_files(skill_file)}
-            files.update(declared)
-            if skill_root.is_dir():
-                self._name_undeclared(skill_root, declared)
-        if not files:
-            self.report.dropped.append(f"{written} (no skill found in it)")
-            return None
-        return _SkillsEntry(agent, listed, files)
+    # -- what the sources read ---------------------------------------------
 
     def _name_undeclared(self, skill_root: Path, declared: set[Path]) -> None:
         """Warn about what a skill's folder holds beyond its declared files."""
@@ -535,117 +327,28 @@ class _Exporter:
                 found.append(file)
         return found
 
-    def _export_skills(self) -> None:
-        local_dir_type = LocalDirSkillSource.model_fields["type"].default
-        entries: list[_SkillsEntry] = []
-        sources: list[tuple[int, list[_SkillsEntry | _MergedSkills]]] = []
-        merged: dict[tuple[Path, ...], _MergedSkills | None] = {}
-        for index, agent in enumerate(self.config.get("agents") or []):
-            skills = agent.get("skills") if isinstance(agent, dict) else None
-            source = skills.get("source") if isinstance(skills, dict) else None
-            if not isinstance(source, dict):
-                continue
-            if source.get("type") != local_dir_type:
-                self.report.warnings.append(
-                    f"Agent {agent.get('name')!r} loads its skills from a "
-                    f"{source.get('type')!r} source, not from files: nothing to copy, the "
-                    "configuration keeps it as it is"
-                )
-                continue
-            # In the config's order, which settles a name clash. The autodiscovery
-            # entries become one merged folder, listed where the first of them was.
-            written_paths = list(source.get("paths") or [])
-            folders = tuple(
-                folder
-                for written in written_paths
-                if is_skill_autodiscovery(str(written))
-                and (folder := self._autodiscovery_folder(written)) is not None
-            )
-            listed: list[_SkillsEntry | _MergedSkills] = []
-            placed = False
-            for written in written_paths:
-                if is_skill_autodiscovery(str(written)):
-                    if not placed and folders:
-                        if folders not in merged:
-                            merged[folders] = self._merged_skills(folders)
-                        if (group := merged[folders]) is not None:
-                            listed.append(group)
-                        placed = True
-                    continue
-                if (entry := self._skills_entry(index, written)) is not None:
-                    entries.append(entry)
-                    listed.append(entry)
-            sources.append((index, listed))
+    def _skill_files(self, under: Path, folder: Path) -> set[Path]:
+        """The skill files under ``under`` and what their ``external_files`` declare.
 
-        bases = self._place_anchors(entries)
-        for entry in entries:
-            base = bases[entry.anchor]
-            for source_file in entry.files:
-                self._copy(source_file, Path(base) / source_file.relative_to(entry.anchor))
-        # The folders another entry's copy is listed by, and so walked when loading.
-        walked = set(bases.values())
-        for group in merged.values():
-            if group is not None:
-                self._copy_merged(group, walked, bases)
-
-        for index, listed in sources:
-            paths: list[str] = []
-            for item in listed:
-                if isinstance(item, _MergedSkills):
-                    # One entry per skill, in order: `skills/` itself also holds the
-                    # other listed folders, which would load a second time.
-                    for skill in item.skills:
-                        path = _in_project(f"{SKILLS_DIR}/{skill.place}")
-                        if path not in paths:
-                            paths.append(path)
-                    continue
-                else:
-                    relative = item.listed.relative_to(item.anchor).as_posix()
-                    base = bases[item.anchor]
-                    path = _in_project(base if relative == "." else f"{base}/{relative}")
-                if path not in paths:
-                    paths.append(path)
-            self.config["agents"][index]["skills"]["source"]["paths"] = paths
-            self.report.skill_paths.extend(p for p in paths if p not in self.report.skill_paths)
-
-    def _place_anchors(self, entries: list[_SkillsEntry]) -> dict[Path, str]:
-        """Give every entry its anchor, and every anchor its folder in the export.
-
-        An anchor inside another one is merged into it, so a file is copied once
-        whichever entries reach it.
+        A declared file outside ``folder``, the root it is read through, is recorded in
+        `outside`: the export would have no place for it that keeps the skill working.
         """
-        for entry in entries:
-            anchor = Path(
-                os.path.commonpath(
-                    [entry.listed if entry.listed.is_dir() else entry.listed.parent]
-                    + [f.parent for f in entry.files]
-                )
-            )
-            if anchor == self.install_dir or self.install_dir in anchor.parents:
-                anchor = self.install_dir
-            entry.anchor = anchor
-
-        outer: list[Path] = []
-        # Outermost first, then in the config's order: which of two same-named folders
-        # gets the suffix must not change from one export to the next.
-        in_order = list(dict.fromkeys(e.anchor for e in entries))
-        for anchor in sorted(in_order, key=lambda p: len(p.parts)):
-            if not any(o == anchor or o in anchor.parents for o in outer):
-                outer.append(anchor)
-        for entry in entries:
-            entry.anchor = next(o for o in outer if o == entry.anchor or o in entry.anchor.parents)
-
-        bases: dict[Path, str] = {}
-        taken: set[str] = set()
-        for anchor in outer:
-            if anchor == self.install_dir:
-                # Setup's directory, where a project's setup installs too.
-                bases[anchor] = BUILTIN_SKILLS_DIRNAME
-            else:
-                bases[anchor] = self._unique(SKILLS_DIR, _folder_name(anchor), taken)
-        return bases
-
-    # -- standing instructions --------------------------------------------
+        if under.is_symlink() or not under.exists():
+            return set()
+        files: set[Path] = set()
+        for skill_root, skill_file in _listed_skills(under.resolve()):
+            declared = {skill_file, *self._external_files(skill_file)}
+            for file in sorted(declared):
+                if not file.resolve().is_relative_to(folder):
+                    self.outside.append(
+                        f"{file} (needed by the skill at {skill_root}, outside {folder}, "
+                        "the folder it is read through)"
+                    )
+                    declared.discard(file)
+            files.update(declared)
+            if skill_root.is_dir():
+                self._name_undeclared(skill_root, declared)
+        return files
 
     def _instruction_files(self, folder: Path) -> list[Path]:
         """What a folder contributes, as `LocalDirInstructionsSource` reads it: the
@@ -661,69 +364,248 @@ class _Exporter:
         )
         return [f for f in (soul, agents) if f is not None and f.is_file()]
 
-    def _export_instructions(self) -> None:
-        # Every source, in the config's order: a listed folder or file, and the files
-        # `.domyn` / `.agents` of the folder exported from hold (`LOCAL_INSTRUCTION_DIRS`).
-        home = cli_config.GLOBAL_DIR.expanduser().resolve()
-        sources: dict[Path, _InstructionSource] = {}
-        rewritten: list[tuple[dict[str, Any], list[Path | str]]] = []
+    def _read_instruction_files(self, under: Path, walk: bool) -> list[Path]:
+        """The ``SOUL.md`` and ``AGENTS.md`` a root contributes, as the loader reads it:
+        walked when its entry says ``walk``, and nothing when that is ``~/.domyn``."""
+        if under.is_symlink():
+            return []
+        if walk:
+            home = cli_config.GLOBAL_DIR.expanduser().resolve()
+            if not under.is_dir() or under.resolve() == home:
+                return []
+            found = find_instruction_files(under.resolve())
+            return [file.resolve() for file in found.paths]
+        if under.is_file():
+            return [under.resolve()]
+        if under.is_dir():
+            return [file.resolve() for file in self._instruction_files(under)]
+        return []
+
+    def _reads(self) -> dict[int, tuple[dict[str, Any], list[tuple[str, str, bool]]]]:
+        """Every list of paths a skills or instructions source reads, by identity, with
+        what is read under each path: ``(key, subpath, walk)``.
+
+        The list of each ``local_dir`` resource a ``type: resource`` source names. A
+        resource two sources read is one entry, read for both. Any other source has no
+        files to copy, and is said so; a ``local_dir`` source, which no configuration
+        loads, refuses the export.
+        """
+        declared = cli_config.declared_resources(self.config)
+        reads: dict[int, tuple[dict[str, Any], list[tuple[str, str, bool]]]] = {}
+
+        def read(holder: dict[str, Any], use: tuple[str, str, bool]) -> None:
+            if isinstance(holder.get("paths"), str):
+                holder["paths"] = [holder["paths"]]
+            uses = reads.setdefault(id(holder), (holder, []))[1]
+            if use not in uses:
+                uses.append(use)
+
         for agent in self.config.get("agents") or []:
-            runtime = agent.get("standing_instructions") if isinstance(agent, dict) else None
-            source = runtime.get("source") if isinstance(runtime, dict) else None
-            if not (isinstance(source, dict) and source.get("type") == "local_dir"):
+            if not isinstance(agent, dict):
                 continue
-            items: list[Path | str] = []
-            for written in source.get("paths") or []:
-                local = Path(str(written)) in LOCAL_INSTRUCTION_DIRS
-                listed = self._listed_path(written, "instructions")
+            for key in ("skills", "standing_instructions"):
+                runtime = agent.get(key)
+                source = runtime.get("source") if isinstance(runtime, dict) else None
+                if not isinstance(source, dict):
+                    continue
+                kind = source.get("type", "local_dir")
+                if kind == "local_dir":
+                    raise ExportError(
+                        f"Agent {agent.get('name')!r} reads its {key} from a 'local_dir' "
+                        "source, which a configuration no longer accepts: declare the "
+                        "folders as a resource and name it, or run `domyn setup` again"
+                    )
+                if kind == "resource":
+                    for resource_id, subpath, walk in cli_config.source_refs(source, key):
+                        resource = declared.get(resource_id)
+                        if isinstance(resource, dict) and resource.get("type") == "local_dir":
+                            read(resource, (key, subpath, walk))
+                        else:
+                            self.report.warnings.append(
+                                f"Agent {agent.get('name')!r} reads its {key} from resource "
+                                f"{resource_id!r}, which is not a local folder: nothing to copy"
+                            )
+                else:
+                    self.report.warnings.append(
+                        f"Agent {agent.get('name')!r} loads its {key} from a {kind!r} source, "
+                        "not from files: nothing to copy, the configuration keeps it as it is"
+                    )
+        return reads
+
+    def _roots(
+        self, reads: dict[int, tuple[dict[str, Any], list[tuple[str, str, bool]]]]
+    ) -> list[_Root]:
+        """Every path each list of `_reads` holds, with the files read under it.
+
+        A path that is a link, or that names nothing here, is left out, the latter
+        quietly (``.domyn/skills`` is missing from most folders); `_rewrite` drops it
+        from its list. Every file kept is inside the path's folder (`_skill_files`)."""
+        roots: list[_Root] = []
+        for holder, uses in reads.values():
+            for index, written in enumerate(list(holder.get("paths") or [])):
+                listed = self._listed_path(written, "a resource path")
                 if listed is None:
                     continue
-                if local:
-                    # Most folders have neither: normal, left out quietly. Exported from
-                    # `$HOME`, `./.domyn` is `~/.domyn`, which is not an instructions
-                    # folder (`resolve_instruction_dirs`).
-                    if listed.is_symlink() or not listed.is_dir() or listed.resolve() == home:
-                        continue
-                    found = find_instruction_files(listed.resolve())
-                    for file in found.paths:
-                        file = file.resolve()
-                        sources.setdefault(file, _InstructionSource(file, [file]))
-                        items.append(file)
+                if listed.is_symlink():
+                    self.report.dropped.append(
+                        f"{written} (a symbolic link, which export does not follow)"
+                    )
                     continue
                 if not listed.exists():
-                    self.report.dropped.append(f"{written} (instructions: does not exist)")
+                    if not (
+                        is_skill_autodiscovery(str(written))
+                        or Path(str(written)) in LOCAL_INSTRUCTION_DIRS
+                    ):
+                        self.report.dropped.append(f"{written} (does not exist)")
                     continue
-                listed = listed.resolve()
-                if listed not in sources:
-                    files = [listed] if listed.is_file() else self._instruction_files(listed)
-                    if not files:
-                        self.report.dropped.append(
-                            f"{written} (instructions: no SOUL.md or AGENTS.md in it)"
-                        )
+                path = listed.resolve()
+                folder = path.parent if path.is_file() else path
+                files: set[Path] = set()
+                instructions: list[Path] = []
+                for key, subpath, walk in uses:
+                    under = path if subpath == "." else path / subpath
+                    if key == "skills":
+                        files.update(self._skill_files(under, folder))
+                    else:
+                        found = self._read_instruction_files(under, walk)
+                        files.update(found)
+                        instructions.extend(f for f in found if f not in instructions)
+                if not files:
+                    self.report.dropped.append(f"{written} (nothing is read from it)")
+                    continue
+                roots.append(_Root(holder, index, path, files, instructions))
+        return roots
+
+    # -- placing and copying ------------------------------------------------
+
+    def _place_roots(self, roots: list[_Root]) -> dict[Path, str]:
+        """Each root's anchor — the outermost root folder holding it — and each anchor's
+        folder in the export, ``resources/<its name>``.
+
+        A root inside another root's folder (``.domyn`` beside ``.``) is copied as part of
+        it, so its files keep their place relative to the other's. Names follow the
+        folder (a folder called ``skills`` takes its parent's name, a leading dot is
+        dropped), with ``-2``… when taken.
+        """
+        outer: list[Path] = []
+        # Outermost first, then in the config's order: which of two same-named folders
+        # gets the suffix must not change from one export to the next.
+        in_order = list(dict.fromkeys(root.folder for root in roots))
+        for folder in sorted(in_order, key=lambda p: len(p.parts)):
+            if not any(o == folder or o in folder.parents for o in outer):
+                outer.append(folder)
+        for root in roots:
+            root.anchor = next(o for o in outer if o == root.folder or o in root.folder.parents)
+        taken: set[str] = set()
+        return {
+            anchor: self._unique(RESOURCES_DIR, _folder_name(anchor), taken) for anchor in outer
+        }
+
+    def _export_resources(self) -> None:
+        """Copy what every skills and instructions source reads, by position, and point
+        each path at its copy (see the module docstring)."""
+        reads = self._reads()
+        roots = self._roots(reads)
+        if self.outside:
+            raise ExportError(
+                "skills need files outside the folder they are read through, which the "
+                "export could not carry without breaking them:\n"
+                + "".join(f"  - {line}\n" for line in self.outside)
+                + "Move the files inside that folder, or list the folder holding both."
+            )
+        bases = self._place_roots(roots)
+        for root in roots:
+            for file in sorted(root.files):
+                dest = Path(bases[root.anchor]) / file.relative_to(root.anchor)
+                self._copy(file, dest)
+                if (
+                    file in root.instructions
+                    and dest.as_posix() not in self.report.instruction_files
+                ):
+                    self.report.instruction_files.append(dest.as_posix())
+        self._rewrite(reads, roots, bases)
+
+    def _rewrite(
+        self,
+        reads: dict[int, tuple[dict[str, Any], list[tuple[str, str, bool]]]],
+        roots: list[_Root],
+        bases: dict[Path, str],
+    ) -> None:
+        """Every list of paths, rewritten in place: each path that was copied, as its copy,
+        in its order; one that was not, left out.
+
+        Except the autodiscovery resource (`_snapshot_autodiscovery`): it keeps its
+        paths, and its copies become a resource beside it."""
+        rewritten: dict[int, tuple[dict[str, Any], list[str]]] = {}
+        for holder, _ in reads.values():
+            rewritten.setdefault(id(holder), (holder, []))
+        for root in sorted(roots, key=lambda r: r.index):
+            relative = root.path.relative_to(root.anchor).as_posix()
+            base = bases[root.anchor]
+            path = _in_project(base if relative == "." else f"{base}/{relative}")
+            paths = rewritten[id(root.holder)][1]
+            if path not in paths:
+                paths.append(path)
+        snapshot: list[str] = []
+        for holder, paths in rewritten.values():
+            if _is_autodiscovery(self.config, holder):
+                snapshot = paths
+            else:
+                holder["paths"] = paths
+        # Last: a snapshot an earlier export left is rewritten above, then added to.
+        self._snapshot_autodiscovery(snapshot)
+        cli_config.drop_empty_resources(self.config)
+        for agent in self.config.get("agents") or []:
+            if isinstance(agent, dict):
+                for written in (
+                    cli_config.source_paths(self.config, agent.get("skills"), "skills") or []
+                ):
+                    if written not in self.report.skill_paths:
+                        self.report.skill_paths.append(written)
+
+    def _snapshot_autodiscovery(self, copies: list[str]) -> None:
+        """Keep ``autodiscovery`` reading the folder the project runs in, and add what
+        it found here, copied, as `AUTODISCOVERY_EXPORT`, read beside it.
+
+        Skills name the snapshot just after the live folders, so the folder a session
+        starts in wins a name; instructions just before them, so its brief is still the
+        last one read. An export of a project that already has a snapshot adds to it,
+        and the sources already name it.
+        """
+        if not copies:
+            return
+        declared = cli_config.declared_resources(self.config)
+        existing = declared.get(AUTODISCOVERY_EXPORT)
+        if existing is not None:
+            paths = existing.get("paths") or []
+            paths = [paths] if isinstance(paths, str) else list(paths)
+            existing["paths"] = [*paths, *(c for c in copies if c not in paths)]
+            return
+        self.config.setdefault("resources", []).append(
+            {"id": AUTODISCOVERY_EXPORT, "type": "local_dir", "paths": copies}
+        )
+        for agent in self.config.get("agents") or []:
+            if not isinstance(agent, dict):
+                continue
+            for key in ("skills", "standing_instructions"):
+                runtime = agent.get(key)
+                source = runtime.get("source") if isinstance(runtime, dict) else None
+                if not isinstance(source, dict) or source.get("type") != "resource":
+                    continue
+                entries = source.get("resource")
+                entries = [entries] if isinstance(entries, str | dict) else list(entries or [])
+                for at, entry in enumerate(entries):
+                    entry_id = entry if isinstance(entry, str) else (entry or {}).get("id")
+                    if entry_id != cli_config.CLI_AUTODISCOVERY_RESOURCE:
                         continue
-                    sources[listed] = _InstructionSource(listed, files)
-                items.append(listed)
-            rewritten.append((source, items))
-
-        places = _place_instruction_sources(list(sources.values()))
-        for item in sources.values():
-            for file in item.files:
-                copied = f"{places[item.path]}/{file.name}"
-                self._copy(file.resolve(), Path(copied))
-                self.report.instruction_files.append(copied)
-
-        for source, items in rewritten:
-            paths: list[str] = []
-            for entry in items:
-                if isinstance(entry, str):
-                    path = entry
-                elif entry.is_file():
-                    path = _in_project(f"{places[entry]}/{entry.name}")
-                else:
-                    path = _in_project(places[entry])
-                if path not in paths:
-                    paths.append(path)
-            source["paths"] = paths
+                    copy_entry = (
+                        AUTODISCOVERY_EXPORT
+                        if isinstance(entry, str)
+                        else {**entry, "id": AUTODISCOVERY_EXPORT}
+                    )
+                    entries.insert(at + 1 if key == "skills" else at, copy_entry)
+                    break
+                source["resource"] = entries
 
     # -- secrets and what is not copied -----------------------------------
 
@@ -816,8 +698,7 @@ class _Exporter:
     # -- the whole thing --------------------------------------------------
 
     def plan(self) -> None:
-        self._export_skills()
-        self._export_instructions()
+        self._export_resources()
         self._export_code()
         self._scrub_secrets()
         self._refuse_paths_outside()
@@ -981,12 +862,22 @@ def _copy_into(
 def config_paths(config: dict[str, Any]) -> list[tuple[str, Any]]:
     """Every value in ``config`` that names a file or folder, with where it is.
 
-    The places the loader reads a path from: the ``local_dir`` skills and instructions
-    of every agent, the code of ``tools`` and ``hooks``, a tool bundle's workspace and
-    browser, an OAuth provider's token store. A browser ``binary`` without a ``/`` is
+    The places the loader reads a path from: every ``local_dir`` resource, the
+    ``local_dir`` skills and instructions of every agent, the code of ``tools`` and
+    ``hooks``, a tool bundle's browser, an OAuth provider's token store. A browser ``binary`` without a ``/`` is
     a program looked up on ``PATH``, not a path.
     """
     found: list[tuple[str, Any]] = []
+    for resource in config.get("resources") or []:
+        if isinstance(resource, dict) and resource.get("type") == "local_dir":
+            paths = resource.get("paths") or []
+            for path in [paths] if isinstance(paths, str) else paths:
+                # The folder domyn runs in, `.` (a workspace naming none always meant it)
+                # and a project's `.domyn` and `.agents` (autodiscovery): not places the
+                # configuration carries with it.
+                if _working_folder(path):
+                    continue
+                found.append((f"resource {resource.get('id')!r}", path))
     for agent in config.get("agents") or []:
         if not isinstance(agent, dict):
             continue
@@ -1004,8 +895,6 @@ def config_paths(config: dict[str, Any]) -> list[tuple[str, Any]]:
         if not isinstance(bundle, dict):
             continue
         name = bundle.get("name")
-        if bundle.get("workspace"):
-            found.append((f"tool bundle {name!r} workspace", bundle["workspace"]))
         browser = bundle.get("browser")
         if isinstance(browser, dict):
             if browser.get("executable_path"):
@@ -1021,6 +910,22 @@ def config_paths(config: dict[str, Any]) -> list[tuple[str, Any]]:
                 (f"OAuth provider {oauth.get('name')!r} storage_dir", oauth["storage_dir"])
             )
     return found
+
+
+def _working_folder(path: Any) -> bool:
+    """Whether a path names the folder domyn runs in, or the project folders read in it
+    (``.domyn``, ``.agents``): relative to wherever a session starts, so nothing an
+    export carries, nor a place outside a project."""
+    written = str(path).rstrip("/")
+    return written in (".", "") or Path(written) in LOCAL_INSTRUCTION_DIRS
+
+
+def _is_autodiscovery(config: dict[str, Any], holder: dict[str, Any]) -> bool:
+    """Whether ``holder`` is the config's autodiscovery resource, read in the folder a
+    session starts in."""
+    return holder is cli_config.declared_resources(config).get(
+        cli_config.CLI_AUTODISCOVERY_RESOURCE
+    )
 
 
 def _inside_project(value: Any) -> bool:
@@ -1113,81 +1018,14 @@ def _listed_skills(listed: Path) -> list[tuple[Path, Path]]:
 
 
 def _folder_name(anchor: Path) -> str:
-    """What an anchor is called inside ``skills/``.
+    """What a root folder is called inside ``resources/``.
 
-    A folder called ``skills`` is named after the folder holding it, or the export
-    would read ``skills/skills``. A leading dot is dropped, so a copy never lands in a
-    folder the search tools skip.
+    A folder called ``skills`` is named after the folder holding it (``.domyn/skills``
+    is ``domyn``): a name saying where the skills came from tells two of them apart. A
+    leading dot is dropped, so a copy never lands in a folder the search tools skip.
     """
-    name = anchor.parent.name if anchor.name == SKILLS_DIR else anchor.name
-    return name.lstrip(".") or SKILLS_DIR
-
-
-def _place_instruction_sources(sources: list[_InstructionSource]) -> dict[Path, str]:
-    """Each source's folder in the export, with the least nesting that keeps them all.
-
-    No two files with the same name (``AGENTS.md`` and ``AGENT.md`` counting as one, as
-    a folder contributes only the first): all of them in ``instructions/``. Otherwise
-    each source gets a folder of its own, named by the fewest trailing parts of its
-    path (a file's: its folder's) that tell them apart — ``dir/a`` and ``dir/b`` are
-    ``instructions/a`` and ``instructions/b``, ``x/a`` and ``y/a`` are
-    ``instructions/x/a`` and ``instructions/y/a`` — without leading dots, so nothing
-    lands in a folder the search tools skip. Nothing is lost either way: every
-    ``SOUL.md`` and ``AGENTS.md`` is read, not just the first.
-    """
-    agents_names = {n.upper() for n in LocalDirInstructionsSource.agents_filenames}
-
-    def slot(file: Path) -> str:
-        return "AGENTS.md" if file.name.upper() in agents_names else file.name
-
-    slots = [slot(f) for source in sources for f in source.files]
-    if len(slots) == len(set(slots)):
-        return {source.path: INSTRUCTIONS_DIR for source in sources}
-
-    def folder_of(source: _InstructionSource) -> Path:
-        return source.path if source.path.is_dir() else source.path.parent
-
-    folders = list(dict.fromkeys(folder_of(s) for s in sources))
-    names: dict[Path, str] = {}
-    for k in range(1, max(len(f.parts) for f in folders) + 1):
-        candidate = {
-            f: "/".join(part.lstrip(".") or "_" for part in f.parts[1:][-k:]) for f in folders
-        }
-        if len(set(candidate.values())) == len(folders):
-            names = candidate
-            break
-    return {s.path: f"{INSTRUCTIONS_DIR}/{names[folder_of(s)]}" for s in sources}
-
-
-def _shared_place_problem(dest: str) -> str | None:
-    """Why a file a skill shares cannot be exported at ``dest`` (relative to the
-    export), or ``None``.
-
-    Anywhere inside the export will do, except what the project itself reads there:
-    its ``config.yaml``, the ``instructions/`` folder, whose files are those of the
-    config, and ``builtin-skills/``, which the project's setup rewrites from scratch.
-    """
-    if dest == ".." or dest.startswith("../") or posixpath.isabs(dest):
-        return "outside the exported folder"
-    top = PurePosixPath(dest).parts[0]
-    if dest == CONFIG_FILENAME:
-        return "where the project's own configuration goes"
-    if dest == INFO_FILENAME:
-        return "where the export records the version that made it"
-    if top == INSTRUCTIONS_DIR:
-        return f"inside {INSTRUCTIONS_DIR}/, which holds the config's instruction files"
-    if top == BUILTIN_SKILLS_DIRNAME:
-        return f"inside {BUILTIN_SKILLS_DIRNAME}/, which setup rewrites from scratch"
-    return None
-
-
-def _skill_name(skill_file: Path, skill_root: Path) -> str:
-    """The name the loader gives a skill: its frontmatter's, else its folder's or file's."""
-    try:
-        descriptor, _ = parse_skill_file(skill_file)
-        return descriptor.name
-    except (OSError, ValueError):
-        return skill_root.stem
+    name = anchor.parent.name if anchor.name == "skills" else anchor.name
+    return name.lstrip(".") or "skills"
 
 
 def _hidden_below(path: Path, folder: Path) -> bool:
@@ -1212,12 +1050,11 @@ def export_configuration(
     dest: Path,
     *,
     cwd: Path | None = None,
-    install_dir: Path | None = None,
 ) -> ExportReport:
     """Write the configuration ``raw`` and every file it reads into a new folder ``dest``.
 
     ``cwd`` is what a relative path in ``raw`` is read against (the working directory,
-    as the loader reads it), and ``install_dir`` is where ``domyn setup`` installs skills.
+    as the loader reads it).
 
     ``dest`` must not exist, or be an empty folder. It is built beside itself and
     moved into place, so a failure leaves nothing behind. ``raw`` is not modified.
@@ -1228,11 +1065,7 @@ def export_configuration(
             f"{dest} already exists and is not an empty folder. Choose a new folder name."
         )
 
-    exporter = _Exporter(
-        raw,
-        cwd=(cwd or Path.cwd()).absolute(),
-        install_dir=install_dir or skills_install_dir(),
-    )
+    exporter = _Exporter(raw, cwd=(cwd or Path.cwd()).absolute())
     exporter.plan()
 
     dest.parent.mkdir(parents=True, exist_ok=True)

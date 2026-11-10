@@ -50,12 +50,14 @@ from domyn.agents.interfaces.cli.config import (
     LOCAL_SKILLS_DIRS,
     apply_context_window,
     approvals_paths,
+    as_local_source,
     build_approval_policy,
     config_path,
     describe_configuration_v1,
     is_configuration_v1_usable,
     print_config_description,
     read_raw_config,
+    set_agent_source,
     skill_workspace_roots,
     unique_paths,
 )
@@ -90,8 +92,9 @@ from domyn.agents.planner_strategy.context_management.budget import (
     ContextUsage,
 )
 from domyn.agents.runner import PushResult, Runner
-from domyn.agents.skills import LocalDirSkillSource, SkillNotFoundError, SkillsRuntime
+from domyn.agents.skills import SkillNotFoundError, SkillsRuntime
 from domyn.agents.skills.integration import attach_skills
+from domyn.agents.skills.sources import local_source_paths
 
 if TYPE_CHECKING:
     from domyn.agents.conversation_manager import ConversationInfo
@@ -1394,10 +1397,7 @@ class Repl:
         declared_skills = getattr(self._agent, "skills", None)
         skills_runtime = declared_skills if isinstance(declared_skills, SkillsRuntime) else None
         skill_source = getattr(skills_runtime, "source", None) if skills_runtime else None
-        if isinstance(skill_source, LocalDirSkillSource):
-            runtime_skill_dirs = skill_source.paths
-        else:
-            runtime_skill_dirs = []
+        runtime_skill_dirs = local_source_paths(skill_source) or []
 
         updated = run_setup(self._console, self._theme, self._config, provider_only=True)
         if updated is None:
@@ -1573,7 +1573,7 @@ class Repl:
         if raw is None or not agents or not isinstance(agents[0], dict):
             self._say(f"Could not read the agent from {self._config_file}.")
             return
-        skills = agents[0].get("skills")
+        skills = as_local_source(raw, "skills", agents[0].get("skills"))
         on = skill_autodiscovery(skills)
         if on is None:
             self._say(
@@ -1604,11 +1604,7 @@ class Repl:
             self._say(f"  Skill autodiscovery is already {choice}.")
             return
 
-        updated = with_skill_autodiscovery(skills, enabled)
-        if updated is None:
-            agents[0].pop("skills", None)
-        else:
-            agents[0]["skills"] = updated
+        set_agent_source(raw, agents[0], "skills", with_skill_autodiscovery(skills, enabled))
         self._config_file.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
         if not await self._reload_if_changed(announce=False):
             return
