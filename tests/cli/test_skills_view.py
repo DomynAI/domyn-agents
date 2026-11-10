@@ -105,8 +105,12 @@ class TestTheListIsGroupedByDirectory:
 
         out = await _render(_runtime(project, personal), width=400)
 
-        assert out.index(str(project)) < out.index("commit-message") < out.index(str(personal))
-        assert out.index(str(personal)) < out.index("journal")
+        assert (
+            out.index(project.as_posix())
+            < out.index("commit-message")
+            < out.index(personal.as_posix())
+        )
+        assert out.index(personal.as_posix()) < out.index("journal")
 
     @pytest.mark.asyncio
     async def test_directories_are_shown_as_absolute_paths(self, layout: tuple[Path, Path]) -> None:
@@ -158,7 +162,7 @@ class TestTheListIsGroupedByDirectory:
 
         out = await _render(_runtime(project, personal), width=400)
 
-        assert f"also searched: {personal} (none found)" in out
+        assert f"also searched: {personal.as_posix()} (none found)" in out
 
 
 class TestTheListLayout:

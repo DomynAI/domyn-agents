@@ -192,7 +192,7 @@ class TestTheLineArrivesAsWritten:
         if bash is None:
             pytest.skip("no bash on this machine")
         if os.name != "nt":
-            monkeypatch.setattr(backends, "_WINDOWS_CREATION_FLAGS", 0)
+            monkeypatch.setattr(local_backend, "_WINDOWS_CREATION_FLAGS", 0)
         return GitBashBackend(workspace, isolate_environment=False, bash=Path(bash))
 
     @pytest.mark.asyncio

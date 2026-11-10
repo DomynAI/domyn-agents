@@ -1312,6 +1312,9 @@ class TestTheLastCompactionIsNotGivenUp:
         monkeypatch.setattr(processes, "LOG_HEAD_BYTES", 20_000)
         monkeypatch.setattr(processes, "LOG_TAIL_BYTES", 50_000)
 
+    @pytest.mark.skipif(
+        os.name == "nt", reason="Git Bash puts its own folders ahead of the shim on PATH"
+    )
     @pytest.mark.asyncio
     async def test_a_lock_released_between_its_two_looks_is_taken(
         self, backend: LocalBackend, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
