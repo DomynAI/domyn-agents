@@ -439,8 +439,15 @@ class ToolUseContextManager(ContextManager):
                                 name=event.author,
                             )
                         )
-                    elif messages and messages[-1].tool_calls:
-                        # Close parent's tool_call pair (OpenAI strict: PAIRING + CONTIGUITY)
+                    elif (
+                        messages
+                        and messages[-1].tool_calls
+                        and messages[-1].tool_calls[0].function.name == event.author
+                    ):
+                        # Close parent's tool_call pair (OpenAI strict: PAIRING + CONTIGUITY).
+                        # Only the call to this agent: a sub-agent paused on its own
+                        # call and given a new message starts again right after that
+                        # call, which its result closes, not this start.
                         parent_call = messages[-1].tool_calls[0]
                         messages.append(
                             LLMMessage(

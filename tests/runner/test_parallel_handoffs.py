@@ -490,6 +490,79 @@ class TestWhatRunsAlongside:
 
     @pytest.mark.parametrize("planner", PLANNERS)
     @pytest.mark.asyncio
+    async def test_a_batch_ending_on_a_tool_runs_the_same(self, planner: str) -> None:
+        log: list[str] = []
+        alpha, _ = _sub("Alpha", planner, log, delay=0.3)
+        main = _Script(
+            label="main",
+            log=log,
+            replies=[
+                [("Alpha", '{"task": "find a"}'), ("slow_read", '{"path": "x"}')],
+                "Done.",
+            ],
+        )
+        root = Agent(
+            name="MainAgent",
+            description="the agent",
+            instruction="delegate",
+            llm_provider=main,
+            planner=_planner(planner, parallel_handoffs=True),
+            sub_agents=[alpha],
+            tools=[_slow_read(log, 0.3)],
+        )
+
+        started = time.monotonic()
+        events = await _run(Runner(), root, f"c_tool_last_{planner}")
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 0.55, f"took {elapsed:.2f}s: the sub-agent and the tool took turns"
+        assert _answered_by_main(events)
+        assert sorted(main.answered(1)) == ["main_1_0", "main_1_1"]
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_a_call_needing_approval_after_a_waiting_sub_agent_runs_once_it_returns(
+        self, planner: str
+    ) -> None:
+        log: list[str] = []
+        alpha, _ = _sub("Alpha", planner, log, writes=True)
+        main = _Script(
+            label="main",
+            log=log,
+            replies=[
+                [("Alpha", '{"task": "find a"}'), ("write", '{"path": "main.txt"}')],
+                "Done.",
+            ],
+        )
+        root = Agent(
+            name="MainAgent",
+            description="the agent",
+            instruction="delegate",
+            llm_provider=main,
+            planner=_planner(planner, parallel_handoffs=True),
+            sub_agents=[alpha],
+            tools=[_write_tool(log)],
+        )
+        runner = Runner()
+        conversation = f"c_held_after_{planner}"
+
+        first = await _run(runner, root, conversation)
+        second = await _run(runner, root, conversation, _approve())
+        third = await _run(runner, root, conversation, _approve())
+
+        assert first[-1].author == "Alpha"
+        # Alpha's call ran and Alpha returned; then the caller's own call asks.
+        assert second[-1].event_type == ExecutionEventType.TOOL_NEEDS_FEEDBACK
+        assert second[-1].author == "MainAgent"
+        assert log.index("write alpha.txt") < log.index("write main.txt")
+        assert _answered_by_main(third)
+        assert sorted(main.answered(1)) == ["main_1_0", "main_1_1"]
+        assert not (await _state(runner.conversation_manager, conversation)).get(
+            WAITING_BRANCHES_KEY
+        )
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
     async def test_a_sub_agent_after_a_call_needing_approval_waits_for_the_answer(
         self, planner: str
     ) -> None:
@@ -655,6 +728,33 @@ class TestWhenASubAgentDoesNotEnd:
         # each of its calls is answered by the start of its sub-agent.
         assert _answered_by_main(events)
         assert sorted(main.answered(len(main.shown) - 1)) == ["main_1_0", "main_1_1"]
+
+
+class TestAMessageInsteadOfTheAnswer:
+    """A sub-agent paused on its own call and given a new message instead of the
+    answer: its next request closes that call once, with the result saying it did
+    not run. Its new start used to close it too, so the call had two results."""
+
+    @pytest.mark.parametrize("parallel", [False, True])
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_the_waiting_call_has_one_result(self, planner: str, parallel: bool) -> None:
+        log: list[str] = []
+        root, _, (alpha, _) = _team(
+            planner, log, parallel=parallel, delays=(0.0, 0.0), writes=(True, False)
+        )
+        runner = Runner()
+        conversation = f"c_one_result_{planner}_{parallel}"
+        await _run(runner, root, conversation)
+
+        await _run(runner, root, conversation, _ask("never mind"))
+
+        assert alpha.answered(1) == ["Alpha_1_0"]
+        request = alpha.shown[1]
+        position = next(i for i, m in enumerate(request) if m.tool_calls)
+        assert request[position + 1].tool_call_id == "Alpha_1_0"
+        assert "was not executed" in str(request[position + 1].content)
+        assert "never mind" in " ".join(str(m.content or "") for m in request)
 
 
 class TestOffIsAsBefore:
