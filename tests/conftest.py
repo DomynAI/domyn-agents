@@ -3,6 +3,7 @@
 import contextlib
 import os
 import signal
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -29,6 +30,8 @@ def _stop_background_commands(root: Path, pattern: str) -> int:
     and still in the recorded group first, as ``build_kill`` does, so a reused
     group id is never signalled.
     """
+    if os.name == "nt":
+        return _stop_background_commands_windows(root, pattern)
     stopped = 0
     for pgid_file in root.glob(pattern):
         with contextlib.suppress(OSError, ValueError):
@@ -39,6 +42,36 @@ def _stop_background_commands(root: Path, pattern: str) -> int:
             os.killpg(pgid, signal.SIGKILL)
             stopped += 1
     return stopped
+
+
+def _stop_background_commands_windows(root: Path, pattern: str) -> int:
+    """The same on Windows, where there are no process groups to signal.
+
+    ``run.pid`` holds the wrapper's pid as Git Bash numbers it (an MSYS pid);
+    Git Bash maps it to the Windows one in ``/proc/<pid>/winpid``, and
+    ``taskkill /T`` ends that process and everything it started. One Git Bash
+    for every directory found, since only it can read that mapping.
+    """
+    pid_files = [path.parent / "run.pid" for path in root.glob(pattern)]
+    pids = []
+    for pid_file in pid_files:
+        with contextlib.suppress(OSError, ValueError):
+            pids.append(int(pid_file.read_text().strip()))
+    if not pids:
+        return 0
+    with contextlib.suppress(Exception):
+        from domyn.agents.tools.builtin.git_bash import find_git_bash
+
+        script = "for p in {}; do w=$(cat /proc/$p/winpid 2>/dev/null) && taskkill //F //T //PID $w; done".format(
+            " ".join(str(pid) for pid in pids)
+        )
+        subprocess.run(
+            [str(find_git_bash()), "-c", script],
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+    return len(pids)
 
 
 @pytest.fixture(autouse=True)
