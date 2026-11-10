@@ -513,10 +513,25 @@ class BrowserSessions:
         # The empty config is piped, never written: a file in the workspace is
         # one a cloned repo can replace with a symlink, which `>` follows, and
         # one every conversation shares, which `>` empties before refilling.
+        mkdir = f"mkdir -p {shlex.quote(f'{self.browser_dir}/{sid}')} && "
+        if self.backend.name != "git_bash":
+            return f"{mkdir}printf '{{}}' | AGENT_BROWSER_DEFAULT_TIMEOUT={action_ms} " + " ".join(
+                shlex.quote(a) for a in argv
+            )
+        # Windows: agent-browser.exe is a Windows program, with no /dev/stdin to
+        # open. The empty config is a file mktemp makes, under a name nobody could
+        # plant, in the user's temp folder rather than the workspace, given as a
+        # Windows path and removed after. MSYS_NO_PATHCONV, or Git Bash rewrites
+        # every argument that looks like a POSIX path: text typed as `/start`
+        # would reach the page as `C:/Program Files/Git/start`. In a subshell, so
+        # a line appended after this one (close's `; rm`) runs as before.
+        quoted = [shlex.quote(a) for a in argv]
+        quoted[quoted.index("/dev/stdin")] = '"$(cygpath -w "$c")"'
         return (
-            f"mkdir -p {shlex.quote(f'{self.browser_dir}/{sid}')} && "
-            f"printf '{{}}' | AGENT_BROWSER_DEFAULT_TIMEOUT={action_ms} "
-            + " ".join(shlex.quote(a) for a in argv)
+            f"{mkdir}( c=$(mktemp) && printf '{{}}' > \"$c\" && "
+            f"MSYS_NO_PATHCONV=1 AGENT_BROWSER_DEFAULT_TIMEOUT={action_ms} "
+            + " ".join(quoted)
+            + '; s=$?; rm -f "$c"; exit $s )'
         )
 
     async def _ensure_chrome(self) -> None:
@@ -538,7 +553,8 @@ class BrowserSessions:
                 o.engine != "chrome"
                 or o.cdp_url
                 or o.executable_path
-                or self.backend.name != "local"
+                # This machine's commands: Git Bash is how they run on Windows.
+                or self.backend.name not in ("local", "git_bash")
                 or os.environ.get("AGENT_BROWSER_EXECUTABLE_PATH")
                 or browser_install.chrome_platform() is None
             ):

@@ -38,6 +38,7 @@ _EXECUTABLES = {
     "mac-x64": "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
     "linux64": "chrome-linux64/chrome",
     "linux-arm64": "chrome-linux-arm64/chrome",
+    "win64": "chrome-win64/chrome.exe",
 }
 
 # Where a Chrome the user already has is usually found. agent-browser looks for
@@ -67,6 +68,10 @@ def chrome_platform() -> str | None:
         return "mac-arm64" if arm else "mac-x64"
     if system.startswith("linux"):
         return "linux-arm64" if arm else ("linux64" if machine in ("x86_64", "amd64") else None)
+    if system == "win32":
+        # No Windows on ARM build exists: there the x64 one runs emulated, as the
+        # rest of the runtime does.
+        return "win64"
     return None
 
 
@@ -115,6 +120,17 @@ def downloaded_chrome(browsers_dir: Path | None = None) -> str | None:
 
 def system_chrome() -> str | None:
     """A Chrome or Chromium the user already has, or ``None``."""
+    if sys.platform == "win32":
+        # Per machine or per user: Program Files, or the user's AppData.
+        for base in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+            folder = os.environ.get(base)
+            path = (
+                Path(folder) / "Google" / "Chrome" / "Application" / "chrome.exe"
+                if folder
+                else None
+            )
+            if path is not None and path.is_file():
+                return str(path)
     for path in _SYSTEM_CHROME.get("darwin" if sys.platform == "darwin" else "linux", ()):
         if os.access(path, os.X_OK):
             return path

@@ -79,7 +79,9 @@ class TestThePlatform:
             ("linux", "x86_64", "linux64"),
             ("linux", "aarch64", "linux-arm64"),
             ("linux", "riscv64", None),
-            ("win32", "AMD64", None),
+            ("win32", "AMD64", "win64"),
+            # No Windows on ARM build: the x64 one, emulated.
+            ("win32", "ARM64", "win64"),
         ],
     )
     def test_it_names_the_build_to_download(self, monkeypatch, system, machine, expected):

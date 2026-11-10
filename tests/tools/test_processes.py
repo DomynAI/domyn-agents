@@ -415,8 +415,12 @@ class TestTheToolsTogether:
             *(
                 # Longer than the yield, or it finishes inside the window and
                 # leaves no record at all — which is the state this test needs.
+                # Longer on Windows, where starting one costs a second in Git Bash.
                 tools["run_command"].execute(
-                    command="sleep 2", timeout=1, state={}, conversation_id="c1"
+                    command=f"sleep {6 if os.name == 'nt' else 2}",
+                    timeout=1,
+                    state={},
+                    conversation_id="c1",
                 )
                 for _ in range(processes.MAX_PROCESSES)
             )
@@ -900,10 +904,18 @@ class TestTheYieldIsHonoured:
         yield of one second waited two. Found by a `sleep 2` asked to yield after
         1s: it ran to completion inside the wait and never produced a handle."""
         loop = asyncio.get_running_loop()
+        # What starting a command costs, measured, so only the wait is compared:
+        # in Git Bash every process is slow to start, and a fixed bound on the
+        # whole call measured that instead (1.8s for a 0.5s yield on Windows).
+        started = loop.time()
+        await _launch(backend, "sleep 30", yield_s=0)
+        overhead = loop.time() - started
+
         started = loop.time()
         _, state = await _launch(backend, "sleep 30", yield_s=0.5)
         assert state.running
-        assert loop.time() - started < 1.5, "it waited longer than it was asked to"
+        waited = loop.time() - started - overhead
+        assert waited < 1.0, f"it waited {waited:.2f}s longer than starting costs, asked 0.5s"
 
 
 class TestWhenTheWaitingIsGone:
