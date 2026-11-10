@@ -22,8 +22,8 @@ from domyn.agents.instructions import AgentInstructions, InstructionRuntime
 from domyn.agents.llm import BaseLLMProvider, LLMProviderFactory
 from domyn.agents.logger import get_logger
 from domyn.agents.memory.managers import (
-    MEMORY_HOOK_NAME,
     BaseMemoryManager,
+    MemoryAsset,
     MemoryExecutionMode,
 )
 from domyn.agents.planner_strategy import BasePlannerStrategy, PlannerStrategyFactory
@@ -178,7 +178,7 @@ class Agent(BaseAgent):
         if self.memory_manager:
             if self.memory_manager.execution_mode == MemoryExecutionMode.AGENTIC:
                 memory_tool = FunctionTool(
-                    name="remember",
+                    name=MemoryAsset.REMEMBER_TOOL,
                     description="Store relevant information to the agent's memory for future use. Use this proactively whenever the user reveals information about themselves, their preferences, interests, or opinions — even if mentioned in passing.",
                     func=self.memory_manager.remember,  # type: ignore
                     config_params=[
@@ -190,7 +190,7 @@ class Agent(BaseAgent):
             elif self.memory_manager.execution_mode == MemoryExecutionMode.AUTOMATIC:
                 # Its HOOK_END carries the fact it stored, for an interface to show.
                 memory_post_hook = FunctionHook(
-                    name=MEMORY_HOOK_NAME,
+                    name=MemoryAsset.UPDATE_HOOK,
                     fun=self.memory_manager.update_memory,  # type: ignore
                     trigger=HookPhase.POST_AGENT_CALL,
                     type=HookType.LISTENER,
@@ -205,7 +205,7 @@ class Agent(BaseAgent):
             return []
         return [
             FunctionTool(
-                name="recall",
+                name=MemoryAsset.RECALL_TOOL,
                 description=(
                     "Read what is remembered about the user. Without arguments it returns the "
                     "most recent facts; with a query, the ones that match it; with the cursor "
@@ -215,7 +215,7 @@ class Agent(BaseAgent):
                 config_params=[ConfigParam(name="agent", value=self)],
             ),
             FunctionTool(
-                name="forget",
+                name=MemoryAsset.FORGET_TOOL,
                 description=(
                     "Remove one remembered fact, by the id shown with it. Use it when the user "
                     "asks you to forget something or says a fact is no longer true."
