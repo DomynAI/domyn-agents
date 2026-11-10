@@ -20,6 +20,7 @@ import yaml
 from domyn.agents import load_application_from_file
 from domyn.agents.decisions import DecisionMode, SystemOneProvider, runtime_of
 from domyn.agents.interfaces.cli import Theme, setup
+from domyn.agents.interfaces.cli import config as cli_config
 from domyn.agents.interfaces.cli import select as select_mod
 from domyn.agents.interfaces.cli.config import (
     DECISION_LEVELS,
@@ -366,7 +367,9 @@ class TestTheApiKey:
     def test_a_pasted_key_goes_to_credentials_and_the_yaml_names_the_variable(
         self, monkeypatch, tmp_path
     ):
-        monkeypatch.setattr(setup, "credentials_path", lambda: tmp_path / "credentials")
+        # `read_credentials` resolves the file through the config module: patching the
+        # name `setup` imported would leave it reading the developer's real one.
+        monkeypatch.setattr(cli_config, "credentials_path", lambda: tmp_path / "credentials")
         saved = {}
         monkeypatch.setattr(
             setup,

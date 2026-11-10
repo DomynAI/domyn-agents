@@ -4,8 +4,9 @@ Reachable as ``domyn setup`` and as ``/model`` / ``/config`` inside a session, s
 settings can be changed without leaving the conversation — the thing that makes a
 CLI feel usable rather than merely functional.
 
-On a re-run each section — model, instructions, tools, skills — first shows what the
-config holds and asks whether to keep it (`_keep`); a yes skips its questions, so
+On a re-run each section — model, instructions, tools, skills, and the decision model
+when the config declares one — first shows what the config holds and asks whether to
+keep it (`_keep`); a yes skips its questions, so
 changing one section costs an Enter for each of the others. Every prompt shows the
 current value and accepts empty input to keep it. The one exception is
 the instructions path, where empty removes it (`_choose_instructions`); the question
@@ -207,6 +208,7 @@ class _Draft:
     keep_instructions: bool = False
     keep_tools: bool = False
     keep_skills: bool = False
+    keep_decisions: bool = False
     provider_type: str = ""
     model_name: str = ""
     url: str = ""
@@ -1488,7 +1490,7 @@ def run_setup(
     Returns the saved config (the dict actually written), or ``None`` if the
     user aborted.
 
-    On a re-run each section (model, instructions, tools, skills) first shows what
+    On a re-run each section (model, instructions, tools, skills, and a declared decision model) first shows what
     the config holds and asks whether to keep it; a yes skips its questions. Not on
     a ``provider_only`` run, whose point is changing the model, and not for a model
     the config leaves incomplete. Keeping the skills does not reinstall
@@ -1740,8 +1742,32 @@ def run_setup(
             console, theme, d.agent.skills, first_setup=first_skills
         )
 
+    current_decisions = current_decisions_from(existing)
+    # Only a file that declares a decision model has one to keep; without one the
+    # level question alone is asked, defaulting to none.
+    ask_keep_decisions = ask_keep and bool((existing or {}).get("decision_providers"))
+
+    def keep_decisions(d: _Draft) -> None:
+        key_env = current_decisions.api_key_env
+        key_state = (
+            "set"
+            if key_env and (os.environ.get(key_env) or read_credentials().get(key_env))
+            else "missing"
+        )
+        d.keep_decisions = _keep(
+            console,
+            theme,
+            "decision model",
+            [
+                f"level: {current_decisions.level}",
+                f"endpoint: {_scrub_url(current_decisions.base_url)}",
+                f"model: {current_decisions.model}",
+                f"API key: {f'{key_env} ({key_state})' if key_env else 'none'}",
+            ],
+        )
+
     def ask_decisions(d: _Draft) -> None:
-        d.decisions = _ask_decisions(console, theme, current_decisions_from(existing))
+        d.decisions = _ask_decisions(console, theme, current_decisions)
 
     def asks_model(d: _Draft) -> bool:
         return not d.keep_model
@@ -1794,7 +1820,10 @@ def run_setup(
         _Step("skills", choose_listed_skills, lambda d: not d.keep_skills),
         _Step("custom skills", choose_custom_skills, lambda d: not d.keep_skills),
         _Step("skill autodiscovery", choose_local_skills, lambda d: not d.keep_skills),
-        _Step("decisions", ask_decisions),
+        _Step("keep decisions", keep_decisions, lambda d: ask_keep_decisions),
+        # Kept, `draft.decisions` stays `None`, which leaves the file's decision model
+        # exactly as written, hand-tuned thresholds included (`_apply_decisions`).
+        _Step("decisions", ask_decisions, lambda d: not d.keep_decisions),
     ]
     steps = model_steps if provider_only else [*model_steps, *section_steps]
 
