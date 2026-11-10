@@ -16,6 +16,7 @@ The `domyn` command is installed with the package (see [Installation](../getting
 | [`domyn skills`](#domyn-skills) | List the skills the configuration loads |
 | [`domyn skill`](#domyn-skill) | Show a skill, or stop loading it |
 | [`domyn export`](#domyn-export) | Save the configuration, with its skills and instructions, into a new folder to share |
+| [`domyn clean`](#domyn-clean) | Delete old conversations and the files the agent created for them |
 | [`domyn connect`](#domyn-connect) | Connect an agent to the Domyn platform as a relay worker |
 
 The commands available inside a `domyn run` session, such as `/model` or `/resume`, are listed in [Sessions and commands](../cli/sessions.md).
@@ -137,6 +138,26 @@ Saves the configuration into the new folder `FOLDER`, with the skills and standi
 | `--project` | `str` | | Exports a project instead of the default configuration. |
 
 A skill is copied as its `SKILL.md` plus the files its `external_files` lists; anything else in its folder is left out and named in the report. API keys, approvals and conversation history are never copied: a key written in the configuration is replaced by a `${VAR}` reference, and the report names the variables to set. `FOLDER` must not exist, or be empty. The folder also gets a hidden `.info` file with the version of domyn-agents, the date, the Python version and the platform, which `domyn setup --import` checks. `/export FOLDER` does the same from inside a session.
+
+## `domyn clean`
+
+```bash
+domyn clean (--older-than DAYS | --all) [--dry-run] [--yes] [--project NAME]
+```
+
+Deletes past conversations from the history, and the files the agent created for them: the virtual environment and `output/` folder of each one, under `conversations/<id>/`. Both grow without limit otherwise, and the environments are the larger part. The history file is compacted afterwards, so the space is given back. A deleted conversation cannot be resumed.
+
+It works on one history: the default one in `~/.domyn`, or a [project](../cli/configuration.md#projects)'s with `--project`. It says which folder it is about to clean, and asks before deleting.
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--older-than` | `int` | | Deletes the conversations not used for this many days. A folder with no conversation in the history is deleted too, once it is as old. |
+| `--all` | flag | off | Deletes every conversation. One of `--older-than` and `--all` is required. |
+| `--dry-run` | flag | off | Says what would be deleted, and deletes nothing. |
+| `--yes`, `-y` | flag | off | Does not ask first. Without a terminal to ask on, the command refuses to run without it. |
+| `--project` | `str` | | Cleans a project's history instead of the default one. |
+
+Memory, approvals, background-process logs and browser files are not touched.
 
 ## `domyn connect`
 

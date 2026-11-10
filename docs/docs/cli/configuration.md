@@ -176,11 +176,16 @@ The setting is read when voice is turned on, so a change takes effect at the nex
 |---|---|
 | `config.yaml` | The session's configuration |
 | `credentials` | API keys pasted into the wizard, readable only by you |
-| `conversations.db` | Every saved conversation |
+| `conversations.db` | Every saved conversation, whatever folder you run `domyn` from |
+| `conversations/` | One folder per conversation that ran a command, with its Python environment and `output/` files |
+| `processes/` | The output of commands left running in the background, one folder per command |
+| `browser/` | Text of long pages the [browser tools](#the-browser) saved to read in parts |
 | `approvals.yaml` | Approvals that last "always" |
 | `projects/` | Your [projects](#projects), and approvals that last for one project |
 | `builtin-skills/` | The built-in [skills](../guides/skills.md) you chose in `domyn setup`, copied from the package. Every `domyn setup` deletes and rewrites it, so keep your own skills elsewhere, such as `./.domyn/skills` |
 | `models/` | The speech model [`/voice`](sessions.md#talking-instead-of-typing) downloads the first time |
+
+A [project](#projects) has the same layout in its own folder, and what a session leaves behind goes there instead of `~/.domyn`. Nothing is written to the folder you start `domyn` in. To remove old conversations and their environments, use [`domyn clean`](../reference/cli.md#domyn-clean).
 
 `~/.domyn` is not a folder for [standing instructions](../guides/standing-instructions.md): a `SOUL.md` or `AGENTS.md` there is not read, unless you give its path to `domyn setup`.
 

@@ -107,6 +107,8 @@ Every conversation is saved to `~/.domyn/conversations.db`. `/clear` starts a ne
 
 A resumed conversation is drawn again as it looked: your messages, the answers and the tool calls, up to the last 20 turns, with a line counting the earlier ones that are not shown. The agent still receives the whole conversation. A `── resumed here ──` line marks where the new part begins. The conversation id printed when a session ends is the only way to name one directly, so keep it if you want to come back to it. An id from a project's conversations needs no `--project`: if the default history does not have it, the projects under `~/.domyn/projects` are searched and the one holding it is used, which the session says. A conversation started from a file is resumed with the same file, `domyn run agent.yaml --resume <conversation_id>`; the command printed at the end already includes it.
 
+Conversations stay until you delete them, and each one that ran a command keeps a Python environment on disk. To give the space back, run [`domyn clean`](../reference/cli.md#domyn-clean) from a shell: `domyn clean --older-than 30` deletes the ones not used for a month, and `--dry-run` shows what would go first.
+
 ## Context window
 
 Every model can read only a limited amount of text at once, its **context window**. `/context` shows how much of it the conversation uses.
