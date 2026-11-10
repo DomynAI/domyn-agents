@@ -143,8 +143,20 @@ def _skip_key_pressed() -> bool:
     at it, so this always returns ``False`` there and the banner plays out on its
     own. Pure ``select`` on a pipe would *also* report readable (EOF), which is
     exactly why the TTY check comes first.
+
+    On Windows ``select`` takes sockets only; the console has its own pair, which
+    asks whether a key is waiting and reads it, so it is not left for the REPL.
     """
-    if not (bool(getattr(sys.stdin, "isatty", lambda: False)()) and os.name == "posix"):
+    if not bool(getattr(sys.stdin, "isatty", lambda: False)()):
+        return False
+    if sys.platform == "win32":
+        import msvcrt
+
+        if not msvcrt.kbhit():
+            return False
+        msvcrt.getwch()
+        return True
+    if os.name != "posix":
         return False
 
     import select

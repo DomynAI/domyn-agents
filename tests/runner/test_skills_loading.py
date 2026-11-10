@@ -398,7 +398,8 @@ class TestARequiredSkillBlocksTheTurn:
         folder.mkdir()
         (folder / "SKILL.md").write_text(
             "---\nname: refund-policy\ndescription: d\nenforcement: required\n"
-            "external_files:\n  - rules.py\n---\nbody\n"
+            "external_files:\n  - rules.py\n---\nbody\n",
+            encoding="utf-8",
         )
         sub = _agent("SubAgent", skills=SkillsRuntime(source=LocalDirSkillSource(paths=[tmp_path])))
         main = _agent("MainAgent", sub_agents=[sub])

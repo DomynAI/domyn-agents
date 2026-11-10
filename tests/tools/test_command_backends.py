@@ -16,6 +16,7 @@ something, the exit code coming back — only exist in the real thing.
 # rely on real annotations at construction time.
 import asyncio
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -57,8 +58,11 @@ class TestLocalBackend:
 
     @pytest.mark.asyncio
     async def test_it_runs_in_the_workspace(self, workspace: Workspace) -> None:
-        result = await build_backend("local", workspace).run("pwd", timeout=10)
-        assert str(workspace.root) in result.stdout
+        # Git Bash prints /c/Users/…; its -W gives C:/Users/…. Elsewhere -W fails.
+        result = await build_backend("local", workspace).run(
+            "pwd -W 2>/dev/null || pwd", timeout=10
+        )
+        assert workspace.root.as_posix() in result.stdout
 
     @pytest.mark.asyncio
     async def test_a_timeout_is_reported_not_raised(self, workspace: Workspace) -> None:
@@ -85,6 +89,7 @@ class TestLocalBackend:
         assert result.timed_out
         assert elapsed < 20, f"waited {elapsed:.0f}s for the tree to die"
 
+    @pytest.mark.skipif(os.name == "nt", reason="pgrep reads a POSIX process table")
     @pytest.mark.asyncio
     async def test_nothing_is_left_running(self, workspace: Workspace) -> None:
         """The promise the old code made in a comment and did not keep.
@@ -173,6 +178,43 @@ async def test_local_backend_never_runs_cmd_exe(workspace: Workspace) -> None:
     assert result.exit_code is None
     assert result.backend_error is not None
     assert "Git Bash" in result.backend_error
+
+
+class TestTheLineArrivesAsWritten:
+    """Git Bash started from a Windows program re-reads its command line with
+    rules of its own (single quotes as quotes, globbing), so the line travels in
+    the environment. Run here with this machine's bash, so it is checked
+    everywhere; the Windows-only process flags are off where they do not exist."""
+
+    @pytest.fixture
+    def backend(self, workspace: Workspace, monkeypatch: pytest.MonkeyPatch) -> GitBashBackend:
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("no bash on this machine")
+        if os.name != "nt":
+            monkeypatch.setattr(backends, "_WINDOWS_CREATION_FLAGS", 0)
+        return GitBashBackend(workspace, isolate_environment=False, bash=Path(bash))
+
+    @pytest.mark.asyncio
+    async def test_quotes_and_globs_are_untouched(self, backend: GitBashBackend) -> None:
+        result = await backend.run("""printf '%s|' 'a b' "c'd" '*' 'x"y'; echo""", timeout=10)
+
+        assert result.exit_code == 0, result.stderr
+        assert result.stdout.strip() == """a b|c'd|*|x"y|"""
+
+    @pytest.mark.asyncio
+    async def test_the_command_does_not_see_its_own_carrier(self, backend: GitBashBackend) -> None:
+        result = await backend.run('echo "[${DOMYN_COMMAND-unset}]"', timeout=10)
+
+        assert result.stdout.strip() == "[unset]"
+
+    @pytest.mark.asyncio
+    async def test_exit_code_stdin_and_streams_are_the_commands(
+        self, backend: GitBashBackend
+    ) -> None:
+        result = await backend.run("cat; echo err >&2; exit 3", timeout=10, stdin="in\n")
+
+        assert (result.exit_code, result.stdout, result.stderr) == (3, "in\n", "err\n")
 
 
 class TestWithoutGitBash:

@@ -115,10 +115,12 @@ def _fake_skill(root: Path, name: str, external_files: list[str], files: dict[st
     folder.mkdir(parents=True, exist_ok=True)
     listed = "".join(f"  - {entry}\n" for entry in external_files)
     block = f"external_files:\n{listed}" if external_files else ""
-    (folder / "SKILL.md").write_text(f"---\nname: {name}\ndescription: d\n{block}---\nbody\n")
+    (folder / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: d\n{block}---\nbody\n", encoding="utf-8"
+    )
     for relative, text in files.items():
         (folder / relative).parent.mkdir(parents=True, exist_ok=True)
-        (folder / relative).write_text(text)
+        (folder / relative).write_text(text, encoding="utf-8")
     return folder
 
 
@@ -178,8 +180,8 @@ class TestOnlyWhatIsListedIsCopied:
         self, fake_root: Path, tmp_path: Path
     ) -> None:
         _fake_skill(fake_root, "one", ["../shared.py", "../../top.py"], {})
-        (fake_root / "cat" / "shared.py").write_text("s")
-        (fake_root / "top.py").write_text("t")
+        (fake_root / "cat" / "shared.py").write_text("s", encoding="utf-8")
+        (fake_root / "top.py").write_text("t", encoding="utf-8")
 
         install_skills(["one"], tmp_path / "out")
 
@@ -188,7 +190,7 @@ class TestOnlyWhatIsListedIsCopied:
     def test_a_file_two_skills_list_is_copied_once(self, fake_root: Path, tmp_path: Path) -> None:
         _fake_skill(fake_root, "one", ["../shared.py"], {})
         _fake_skill(fake_root, "two", ["../shared.py"], {})
-        (fake_root / "cat" / "shared.py").write_text("s")
+        (fake_root / "cat" / "shared.py").write_text("s", encoding="utf-8")
 
         paths = install_skills(["one", "two"], tmp_path / "out")
 
@@ -200,8 +202,8 @@ class TestOnlyWhatIsListedIsCopied:
     ) -> None:
         _fake_skill(fake_root, "one", ["../a.py"], {})
         _fake_skill(fake_root, "two", ["../b.py"], {})
-        (fake_root / "cat" / "a.py").write_text("a")
-        (fake_root / "cat" / "b.py").write_text("b")
+        (fake_root / "cat" / "a.py").write_text("a", encoding="utf-8")
+        (fake_root / "cat" / "b.py").write_text("b", encoding="utf-8")
 
         install_skills(["two"], tmp_path / "out")
 
@@ -220,16 +222,16 @@ class TestABrokenListIsRefused:
     def test_it_raises_before_the_old_directory_is_touched(
         self, fake_root: Path, tmp_path: Path, entry: str, why: str
     ) -> None:
-        (fake_root.parent / "outside.py").write_text("o")
+        (fake_root.parent / "outside.py").write_text("o", encoding="utf-8")
         _fake_skill(fake_root, "one", [entry], {})
         out = tmp_path / "out"
         out.mkdir()
-        (out / "keep.txt").write_text("keep")
+        (out / "keep.txt").write_text("keep", encoding="utf-8")
 
         with pytest.raises(SkillInstallError, match=why):
             install_skills(["one"], out)
 
-        assert (out / "keep.txt").read_text() == "keep"
+        assert (out / "keep.txt").read_text(encoding="utf-8") == "keep"
         assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".")] == []
 
     def test_one_bad_skill_stops_an_install_that_includes_it(
@@ -259,7 +261,7 @@ class TestWhatTheWizardNamesMatchesWhatIsWritten:
         self, fake_root: Path, tmp_path: Path
     ) -> None:
         _fake_skill(fake_root, "one", ["scripts/", "../shared.py"], {"scripts/a.py": "a"})
-        (fake_root / "cat" / "shared.py").write_text("s")
+        (fake_root / "cat" / "shared.py").write_text("s", encoding="utf-8")
         install_skills(["one"], tmp_path / "out")
 
         assert unrecognized_entries(tmp_path / "out") == []
@@ -267,7 +269,7 @@ class TestWhatTheWizardNamesMatchesWhatIsWritten:
     def test_a_file_in_no_skills_list_is_named(self, fake_root: Path, tmp_path: Path) -> None:
         _fake_skill(fake_root, "one", [], {})
         install_skills(["one"], tmp_path / "out")
-        (tmp_path / "out" / "cat" / "one" / "extra.py").write_text("x")
+        (tmp_path / "out" / "cat" / "one" / "extra.py").write_text("x", encoding="utf-8")
 
         assert unrecognized_entries(tmp_path / "out") == [Path("cat/one/extra.py")]
 
@@ -312,12 +314,12 @@ class TestAdding:
     ) -> None:
         _fake_skill(fake_root, "one", ["../shared.py"], {})
         _fake_skill(fake_root, "two", ["../shared.py"], {})
-        (fake_root / "cat" / "shared.py").write_text("package")
+        (fake_root / "cat" / "shared.py").write_text("package", encoding="utf-8")
         out = tmp_path / "out"
         install_skills(["one"], out)
-        (out / "cat" / "one" / "SKILL.md").write_text("edited")
-        (out / "cat" / "shared.py").write_text("exported")
-        (out / "mine.md").write_text("not a built-in")
+        (out / "cat" / "one" / "SKILL.md").write_text("edited", encoding="utf-8")
+        (out / "cat" / "shared.py").write_text("exported", encoding="utf-8")
+        (out / "mine.md").write_text("not a built-in", encoding="utf-8")
 
         paths = add_skills(["two"], out)
 
@@ -328,8 +330,8 @@ class TestAdding:
             "cat/two/SKILL.md",
             "mine.md",
         ]
-        assert (out / "cat" / "one" / "SKILL.md").read_text() == "edited"
-        assert (out / "cat" / "shared.py").read_text() == "exported"
+        assert (out / "cat" / "one" / "SKILL.md").read_text(encoding="utf-8") == "edited"
+        assert (out / "cat" / "shared.py").read_text(encoding="utf-8") == "exported"
 
     def test_a_broken_list_touches_nothing(self, fake_root: Path, tmp_path: Path) -> None:
         _fake_skill(fake_root, "good", [], {})
@@ -409,12 +411,12 @@ class TestInstalling:
     def test_an_unknown_name_raises_before_anything_changes(self, tmp_path: Path) -> None:
         dest = tmp_path / "skills"
         dest.mkdir()
-        (dest / "keep.txt").write_text("x")
+        (dest / "keep.txt").write_text("x", encoding="utf-8")
 
         with pytest.raises(ValueError, match="nope"):
             install_skills(["charts", "nope"], dest)
 
-        assert (dest / "keep.txt").read_text() == "x"
+        assert (dest / "keep.txt").read_text(encoding="utf-8") == "x"
 
 
 class TestReplacingTheDirectory:
@@ -434,16 +436,16 @@ class TestReplacingTheDirectory:
         dest = tmp_path / "skills"
         install_skills(["brainstorming"], dest)
         skill_file = dest / "productivity" / "brainstorming" / "SKILL.md"
-        skill_file.write_text("my edit")
+        skill_file.write_text("my edit", encoding="utf-8")
 
         install_skills(["brainstorming"], dest)
 
-        assert skill_file.read_text() != "my edit"
+        assert skill_file.read_text(encoding="utf-8") != "my edit"
 
     def test_a_file_that_is_not_ours_is_deleted_too(self, tmp_path: Path) -> None:
         dest = tmp_path / "skills"
         (dest / "mine").mkdir(parents=True)
-        (dest / "mine" / "SKILL.md").write_text("x")
+        (dest / "mine" / "SKILL.md").write_text("x", encoding="utf-8")
 
         install_skills(["charts"], dest)
 
@@ -485,14 +487,14 @@ class TestReplacingTheDirectory:
     ) -> None:
         target = tmp_path / "my-skills-repo"
         target.mkdir()
-        (target / "precious.md").write_text("x")
+        (target / "precious.md").write_text("x", encoding="utf-8")
         link = tmp_path / "skills"
         link.symlink_to(target)
 
         with pytest.raises(SkillInstallError, match="symbolic link"):
             install_skills(["charts"], link)
 
-        assert (target / "precious.md").read_text() == "x"
+        assert (target / "precious.md").read_text(encoding="utf-8") == "x"
         assert link.is_symlink()
 
 
@@ -509,15 +511,15 @@ class TestWhatAReplaceWouldDeleteThatIsNotOurs:
         dest = tmp_path / "skills"
         install_skills(["charts"], dest)
         (dest / "mine").mkdir()
-        (dest / "mine" / "SKILL.md").write_text("x")
-        (dest / "mine" / "extra.md").write_text("x")
+        (dest / "mine" / "SKILL.md").write_text("x", encoding="utf-8")
+        (dest / "mine" / "extra.md").write_text("x", encoding="utf-8")
 
         assert unrecognized_entries(dest) == [Path("mine")]
 
     def test_a_stray_file_inside_a_known_skill_is_named(self, tmp_path: Path) -> None:
         dest = tmp_path / "skills"
         install_skills(["charts"], dest)
-        (dest / "visualization" / "charts" / "notes.txt").write_text("x")
+        (dest / "visualization" / "charts" / "notes.txt").write_text("x", encoding="utf-8")
 
         assert unrecognized_entries(dest) == [Path("visualization/charts/notes.txt")]
 
@@ -525,7 +527,9 @@ class TestWhatAReplaceWouldDeleteThatIsNotOurs:
         """Content is never compared, or every upgrade would look like a hand edit."""
         dest = tmp_path / "skills"
         install_skills(["charts"], dest)
-        (dest / "visualization" / "charts" / "SKILL.md").write_text("an older version")
+        (dest / "visualization" / "charts" / "SKILL.md").write_text(
+            "an older version", encoding="utf-8"
+        )
 
         assert unrecognized_entries(dest) == []
 

@@ -151,13 +151,15 @@ class TestImportingAnExport:
         assert declared and all(p.startswith(f"{P}/") for p in declared)
         assert all((project / p.removeprefix(f"{P}/")).exists() for p in declared)
         souls = [p for p in declared if p.endswith("/SOUL.md")]
-        assert [(project / p.removeprefix(f"{P}/")).read_text() for p in souls] == ["be terse\n"]
+        assert [(project / p.removeprefix(f"{P}/")).read_text(encoding="utf-8") for p in souls] == [
+            "be terse\n"
+        ]
         # The config is the wizard's to write.
         assert not (project / cfg.CONFIG_FILENAME).exists()
 
     def test_private_and_hidden_files_are_left_behind(self, exported: Path, tmp_path: Path) -> None:
-        (exported / cfg.PrivateFiles.CREDENTIALS).write_text("KEY=secret\n")
-        (exported / ".env").write_text("KEY=secret\n")
+        (exported / cfg.PrivateFiles.CREDENTIALS).write_text("KEY=secret\n", encoding="utf-8")
+        (exported / ".env").write_text("KEY=secret\n", encoding="utf-8")
         project = tmp_path / "new"
 
         import_project(exported, project)
@@ -206,7 +208,7 @@ class TestRefused:
         # read, run or work in a place its author chose.
         source = tmp_path / "hand-made"
         source.mkdir()
-        (source / cfg.CONFIG_FILENAME).write_text(yaml.safe_dump(config))
+        (source / cfg.CONFIG_FILENAME).write_text(yaml.safe_dump(config), encoding="utf-8")
         project = tmp_path / "new"
 
         with pytest.raises(ProjectImportError, match="outside itself"):
@@ -216,11 +218,11 @@ class TestRefused:
     def test_a_project_that_already_holds_files(self, exported: Path, tmp_path: Path) -> None:
         project = tmp_path / "new"
         project.mkdir()
-        (project / "notes.txt").write_text("mine")
+        (project / "notes.txt").write_text("mine", encoding="utf-8")
 
         with pytest.raises(ProjectImportError, match="not an empty folder"):
             import_project(exported, project)
-        assert (project / "notes.txt").read_text() == "mine"
+        assert (project / "notes.txt").read_text(encoding="utf-8") == "mine"
 
     def test_a_folder_with_no_config(self, tmp_path: Path) -> None:
         (tmp_path / "empty").mkdir()
@@ -238,7 +240,7 @@ class TestTheExportInfo:
     def test_the_export_says_what_made_it_and_names_nothing_of_the_machine(
         self, exported: Path, tmp_path: Path
     ) -> None:
-        text = (exported / export_mod.INFO_FILENAME).read_text()
+        text = (exported / export_mod.INFO_FILENAME).read_text(encoding="utf-8")
         info = yaml.safe_load(text)
 
         assert info["export_format_version"] == export_mod.EXPORT_FORMAT_VERSION
@@ -279,7 +281,8 @@ class TestTheExportInfo:
         self, exported: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         (exported / export_mod.INFO_FILENAME).write_text(
-            "domyn_agents_version: 0.1.0\nexported_at: '2026-01-02T03:04:05+00:00'\n"
+            "domyn_agents_version: 0.1.0\nexported_at: '2026-01-02T03:04:05+00:00'\n",
+            encoding="utf-8",
         )
         monkeypatch.setattr(import_mod, "installed_version", lambda: "9.9.9")
 
@@ -299,7 +302,7 @@ class TestTheExportInfo:
         if info is None:
             path.unlink()
         else:
-            path.write_text(info)
+            path.write_text(info, encoding="utf-8")
 
         imported = import_project(exported, tmp_path / "new")
 
@@ -392,7 +395,9 @@ class TestTheProjectSkillsPicker:
         project, skills = imported
         builtin_path, folder = skills["source"]["paths"]
         exported_file = Path(builtin_path) / "SKILL.md"
-        exported_file.write_text(exported_file.read_text() + "\nedited\n", encoding="utf-8")
+        exported_file.write_text(
+            exported_file.read_text(encoding="utf-8") + "\nedited\n", encoding="utf-8"
+        )
         extra = next(skill for skill in list_builtin_skills() if skill.name != BUILTIN.name)
         picker["keep"] = {BUILTIN.name, "essay", "poem", extra.name}
 
@@ -403,7 +408,7 @@ class TestTheProjectSkillsPicker:
         assert result["source"]["paths"] == [builtin_path, str(added), folder]
         assert (added / "SKILL.md").is_file()
         # Added, not reinstalled: the exported built-in keeps its edit.
-        assert exported_file.read_text().endswith("\nedited\n")
+        assert exported_file.read_text(encoding="utf-8").endswith("\nedited\n")
 
     def test_an_export_with_no_skills_still_offers_the_built_ins(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, picker: dict[str, Any]
@@ -461,8 +466,8 @@ class TestTheImportedInstructions:
     def project(self, tmp_path: Path) -> Path:
         project = tmp_path / "new"
         (project / "instructions").mkdir(parents=True)
-        (project / "instructions" / "SOUL.md").write_text("imported soul\n")
-        (project / "instructions" / "AGENTS.md").write_text("imported brief\n")
+        (project / "instructions" / "SOUL.md").write_text("imported soul\n", encoding="utf-8")
+        (project / "instructions" / "AGENTS.md").write_text("imported brief\n", encoding="utf-8")
         return project
 
     @pytest.fixture
@@ -470,8 +475,8 @@ class TestTheImportedInstructions:
         """A folder with a soul and a brief of its own."""
         more = tmp_path / "more"
         more.mkdir()
-        (more / "SOUL.md").write_text("another soul\n")
-        (more / "AGENTS.md").write_text("another brief\n")
+        (more / "SOUL.md").write_text("another soul\n", encoding="utf-8")
+        (more / "AGENTS.md").write_text("another brief\n", encoding="utf-8")
         return more
 
     @pytest.fixture(autouse=True)
@@ -524,7 +529,7 @@ class TestTheImportedInstructions:
     ) -> None:
         project = tmp_path / "bare"
         project.mkdir()
-        (project / "SOUL.md").write_text("a file like any other\n")
+        (project / "SOUL.md").write_text("a file like any other\n", encoding="utf-8")
 
         assert _choose_and_save(None, project) is None
         assert (project / "SOUL.md").is_file()
@@ -561,7 +566,7 @@ class TestTheCommand:
         assert keep.asked == ["model", "instructions", "tools", "skills", "memory settings"]
         # Named after the imported folder, under ~/.domyn/projects.
         project = cfg.project_dir(exported.name)
-        saved = yaml.safe_load((project / cfg.CONFIG_FILENAME).read_text())
+        saved = yaml.safe_load((project / cfg.CONFIG_FILENAME).read_text(encoding="utf-8"))
         assert saved["llm_providers"][0]["model_name"] == "imported-model"
         builtin_path, mine_path = _skill_paths(saved)
         assert builtin_path.startswith(f"{P}/{BUILTINS}/")
@@ -586,9 +591,9 @@ class TestTheCommand:
         # in, and the import says so.
         (exported / "code").mkdir()
         (exported / "code" / "tool.py").write_text("import os\n", encoding="utf-8")
-        config = yaml.safe_load((exported / cfg.CONFIG_FILENAME).read_text())
+        config = yaml.safe_load((exported / cfg.CONFIG_FILENAME).read_text(encoding="utf-8"))
         config["tools"] = [{"name": "t", "type": "function", "path": f"{P}/code/tool.py"}]
-        (exported / cfg.CONFIG_FILENAME).write_text(yaml.safe_dump(config))
+        (exported / cfg.CONFIG_FILENAME).write_text(yaml.safe_dump(config), encoding="utf-8")
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(cli_setup, "_keep", _keep_but())
 
@@ -629,7 +634,7 @@ class TestTheCommand:
 
         assert result.exit_code == 0, result.output
         project = cfg.project_dir(exported.name)
-        saved = yaml.safe_load((project / cfg.CONFIG_FILENAME).read_text())
+        saved = yaml.safe_load((project / cfg.CONFIG_FILENAME).read_text(encoding="utf-8"))
         assert "standing_instructions" not in saved["agents"][0]
         assert not (project / "instructions").exists()
         # Never as a first setup: the export listed what it found.
@@ -648,7 +653,7 @@ class TestTheCommand:
         result = CliRunner().invoke(app, ["setup", "--import", str(exported)])
 
         assert result.exit_code == 0, result.output
-        saved = yaml.safe_load((project / cfg.CONFIG_FILENAME).read_text())
+        saved = yaml.safe_load((project / cfg.CONFIG_FILENAME).read_text(encoding="utf-8"))
         declared = _instruction_paths(saved["agents"][0].get("standing_instructions"))
         assert declared and all(p.startswith(f"{P}/instructions/") for p in declared)
         assert all((project / p.removeprefix(f"{P}/")).is_file() for p in declared)
@@ -673,7 +678,7 @@ class TestTheCommand:
 
         assert result.exit_code == 0, result.output
         project = cfg.project_dir(exported.name)
-        saved = yaml.safe_load((project / cfg.CONFIG_FILENAME).read_text())
+        saved = yaml.safe_load((project / cfg.CONFIG_FILENAME).read_text(encoding="utf-8"))
         declared = _instruction_paths(saved["agents"][0]["standing_instructions"])
         assert declared
         assert all((project / p.removeprefix(f"{P}/")).exists() for p in declared)
@@ -694,13 +699,13 @@ class TestTheCommand:
         monkeypatch.chdir(tmp_path)
         existing = cfg.project_dir(exported.name)
         existing.mkdir(parents=True)
-        (existing / cfg.CONFIG_FILENAME).write_text("mine")
+        (existing / cfg.CONFIG_FILENAME).write_text("mine", encoding="utf-8")
 
         result = CliRunner().invoke(app, ["setup", "--import", str(exported)])
 
         assert result.exit_code == 1
         assert "not an empty folder" in " ".join(result.output.split())
-        assert (existing / cfg.CONFIG_FILENAME).read_text() == "mine"
+        assert (existing / cfg.CONFIG_FILENAME).read_text(encoding="utf-8") == "mine"
 
     def test_a_folder_name_that_is_no_project_name_is_refused(
         self, exported: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -9,7 +9,7 @@ import pytest
 import domyn.agents
 
 RESOURCES = Path(domyn.agents.__file__).parent / "skills" / "builtin" / "resources"
-TYPOGRAPHY = json.loads((RESOURCES / "typography.json").read_text())
+TYPOGRAPHY = json.loads((RESOURCES / "typography.json").read_text(encoding="utf-8"))
 FONTS = RESOURCES / "assets" / "fonts"
 
 

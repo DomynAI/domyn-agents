@@ -72,9 +72,11 @@ from reportlab.platypus import (
 from reportlab.platypus import Image as PictureFlowable
 
 RESOURCES = Path(__file__).resolve().parents[3] / "resources"
-PALETTE = json.loads((RESOURCES / "palette.json").read_text())
-TYPOGRAPHY = json.loads((RESOURCES / "typography.json").read_text())
-LAYOUT = json.loads(Path(__file__).resolve().with_name("pdf_layout.json").read_text())
+PALETTE = json.loads((RESOURCES / "palette.json").read_text(encoding="utf-8"))
+TYPOGRAPHY = json.loads((RESOURCES / "typography.json").read_text(encoding="utf-8"))
+LAYOUT = json.loads(
+    Path(__file__).resolve().with_name("pdf_layout.json").read_text(encoding="utf-8")
+)
 
 __all__ = [
     "LAYOUT",

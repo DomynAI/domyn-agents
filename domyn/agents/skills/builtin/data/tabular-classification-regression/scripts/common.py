@@ -125,7 +125,7 @@ def load_dataset(args: argparse.Namespace, task: str) -> Dataset:
     meta_path = data_utils.output_dir(args.out) / META_FILE
     if not meta_path.exists():
         sys.exit(f"{meta_path} not found: run make_split.py with --out {args.out} first.")
-    meta = json.loads(meta_path.read_text())
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
     if meta["task"] != task:
         sys.exit(f"{args.out} was split for {meta['task']}: use the {meta['task']}_* scripts.")
     for key, value in meta["settings"].items():
@@ -348,7 +348,7 @@ class Dataset:
         path = self.out / SPLIT_FILE
         meta_path = self.out / META_FILE
         if meta_path.exists():
-            meta = json.loads(meta_path.read_text())
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
             now = {
                 "task": self.task,
                 "data": str(self.args.data.resolve()),
@@ -424,7 +424,7 @@ class Dataset:
         if self.task == "classification":
             meta["classes"] = sorted(self.y.unique().tolist())
             meta["class_counts"] = {k: int(v) for k, v in self.y.value_counts().items()}
-        (self.out / META_FILE).write_text(json.dumps(meta, indent=2))
+        (self.out / META_FILE).write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     def subset(self, name: str) -> tuple[pd.DataFrame, pd.Series]:
         mask = (self.part == name).to_numpy()

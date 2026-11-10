@@ -80,7 +80,7 @@ class TestShow:
         printed = " ".join(str(c.args[0]) for c in console.print.call_args_list if c.args)
         assert "legacy-model" not in printed
 
-        on_disk = yaml.safe_load(cfg.config_path().read_text())
+        on_disk = yaml.safe_load(cfg.config_path().read_text(encoding="utf-8"))
         assert "provider" in on_disk  # left untouched on disk
 
 
@@ -104,7 +104,7 @@ class TestRun:
         ):
             setup_command(show=False)
 
-        on_disk = yaml.safe_load(cfg.config_path().read_text())
+        on_disk = yaml.safe_load(cfg.config_path().read_text(encoding="utf-8"))
         assert on_disk["entrypoint"] == "Assistant"
 
     def test_aborting_exits_nonzero(self) -> None:

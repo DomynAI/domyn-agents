@@ -10,6 +10,7 @@ mode bits, the atomic replace, the corrupt-file path — and a mocked filesystem
 would test the mock.
 """
 
+import os
 import stat
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,9 @@ class TestItActuallyPersists:
         assert entry["subject"] == "git status"
         assert entry["granted_at"], "a standing permission has to say when it was given"
 
+    @pytest.mark.skipif(
+        os.name == "nt", reason="Windows has no mode bits: the profile's ACL guards it"
+    )
     @pytest.mark.asyncio
     async def test_it_is_owner_only(self, path: Path) -> None:
         await FileApprovalStore(path).grant(_request("git status"))
@@ -125,7 +129,8 @@ class TestTheCliProjectScope:
         repo = tmp_path / "cloned"
         (repo / ".domyn").mkdir(parents=True)
         (repo / ".domyn" / "approvals.yaml").write_text(
-            "version: 1\ngrants:\n- {value: '*', kind: pattern, user_id: local-user}\n"
+            "version: 1\ngrants:\n- {value: '*', kind: pattern, user_id: local-user}\n",
+            encoding="utf-8",
         )
         policy = self._policy_in(repo, monkeypatch)
         assert not (
@@ -283,6 +288,7 @@ class TestItFailsSafe:
         await store.grant(_request("git status"))  # must not raise
         assert not await store.is_granted(_request("git status"))
 
+    @pytest.mark.skipif(os.name == "nt", reason="a mode-500 folder is still writable on Windows")
     @pytest.mark.asyncio
     async def test_an_unwritable_directory_does_not_crash_the_session(self, tmp_path: Path) -> None:
         locked = tmp_path / "locked"

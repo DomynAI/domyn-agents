@@ -140,7 +140,9 @@ async def window_from_models_listing(
 
 @cache
 def _catalogue() -> Mapping[str, Mapping[str, int]]:
-    windows: Mapping[str, Mapping[str, int]] = json.loads(_CATALOGUE.read_text())["windows"]
+    windows: Mapping[str, Mapping[str, int]] = json.loads(_CATALOGUE.read_text(encoding="utf-8"))[
+        "windows"
+    ]
     return windows
 
 

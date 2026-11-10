@@ -31,7 +31,7 @@ def named_paths(text: str) -> set[str]:
 
 
 def ids(path: Path) -> str:
-    return str(path.parent.relative_to(BUILTIN))
+    return path.parent.relative_to(BUILTIN).as_posix()
 
 
 @pytest.mark.parametrize("skill_md", SKILLS, ids=ids)
@@ -55,7 +55,7 @@ def test_no_directory_is_left_to_guess(skill_md: Path) -> None:
 
 
 def test_the_skills_that_use_resources_are_covered() -> None:
-    covered = {ids(p) for p in SKILLS if named_paths(p.read_text())}
+    covered = {ids(p) for p in SKILLS if named_paths(p.read_text(encoding="utf-8"))}
     assert {
         "productivity/presentations",
         "productivity/documents",

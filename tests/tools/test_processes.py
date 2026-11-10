@@ -1004,9 +1004,9 @@ class TestADirectoryNameIsNotAHandle:
     async def test_a_planted_directory_runs_nothing(self, tmp_path: Path) -> None:
         planted = tmp_path / processes.HOME / "c1" / "x$(touch${IFS}PWNED)"
         planted.mkdir(parents=True)
-        (planted / "out.log").write_text("")
-        (planted / "run.started").write_text("0")
-        (planted / "cmd.sh").write_text("ls")
+        (planted / "out.log").write_text("", encoding="utf-8")
+        (planted / "run.started").write_text("0", encoding="utf-8")
+        (planted / "cmd.sh").write_text("ls", encoding="utf-8")
         tools = {t.name: t for t in bundle("shell", root=tmp_path)}
 
         listed = await tools["list_commands"].execute(state={}, conversation_id="c1")
@@ -1156,6 +1156,9 @@ class TestTheLogCannotGrowForever:
         assert survivors == "0", f"{survivors} helpers left behind"
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="watches the process group from Python, which sees no MSYS groups"
+)
 class TestTheHelpersLeaveWhenTheirDirectoryCannotBeWritten:
     """The watchdog and the compactor learnt that the command was over from one
     file, ``run.exit``, in a directory that can be removed under them: pytest
@@ -1189,10 +1192,10 @@ class TestTheHelpersLeaveWhenTheirDirectoryCannotBeWritten:
         path = directory / "run.pgid"
 
         async def written() -> bool:
-            return path.exists() and path.read_text().strip() != ""
+            return path.exists() and path.read_text(encoding="utf-8").strip() != ""
 
         assert await _until(written), "the wrapper never recorded its group"
-        return int(path.read_text())
+        return int(path.read_text(encoding="utf-8"))
 
     @staticmethod
     async def _emptied(pgid: int) -> bool:
@@ -1327,7 +1330,8 @@ class TestTheLastCompactionIsNotGivenUp:
             'case "$last" in */compact.lock) '
             f"[ -e {shlex.quote(str(failed))} ] || {{ : > {shlex.quote(str(failed))}; exit 1; }} ;; "
             "esac\n"
-            f'exec {shlex.quote(real)} "$@"\n'
+            f'exec {shlex.quote(real)} "$@"\n',
+            encoding="utf-8",
         )
         (shim / "mkdir").chmod(0o755)
         monkeypatch.setenv("PATH", f"{shim}{os.pathsep}{os.environ['PATH']}")

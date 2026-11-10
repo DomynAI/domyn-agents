@@ -7,6 +7,8 @@ gracefully not happen.
 import io
 import os
 import re
+import sys
+import types
 
 import pytest
 from rich.console import Console
@@ -32,6 +34,8 @@ def _console(width: int, height: int = 60) -> tuple[Console, io.StringIO]:
     and a CI runner without ``COLORTERM`` gets 8- or 16-colour output. These
     tests are about what we ask for, not about what the machine running them can
     display — left unpinned they assert the capabilities of the terminal.
+    ``legacy_windows`` too: off a real console, rich takes a Windows runner for
+    a legacy one and gives a console sized 150 by 60 only 149 columns.
     """
     buffer = io.StringIO()
     return (
@@ -39,6 +43,7 @@ def _console(width: int, height: int = 60) -> tuple[Console, io.StringIO]:
             file=buffer,
             force_terminal=True,
             color_system="truecolor",
+            legacy_windows=False,
             width=width,
             height=height,
         ),
@@ -184,6 +189,7 @@ class TestSkipKey:
         monkeypatch.setattr(banner_mod.os, "name", "nt")
         assert banner_mod._skip_key_pressed() is False
 
+    @pytest.mark.skipif(os.name == "nt", reason="select takes sockets only on Windows")
     def test_a_ready_tty_key_is_detected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A key already buffered on a TTY counts as a skip."""
         read_fd, write_fd = os.pipe()
@@ -197,6 +203,7 @@ class TestSkipKey:
         finally:
             os.close(write_fd)
 
+    @pytest.mark.skipif(os.name == "nt", reason="select takes sockets only on Windows")
     def test_an_idle_tty_is_not_a_skip(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """No key buffered means no skip, even on a TTY."""
         read_fd, write_fd = os.pipe()
@@ -208,6 +215,23 @@ class TestSkipKey:
                 assert banner_mod._skip_key_pressed() is False
         finally:
             os.close(write_fd)
+
+    @pytest.mark.parametrize("waiting", [True, False])
+    def test_a_windows_console_key_is_read_from_the_console(
+        self, monkeypatch: pytest.MonkeyPatch, waiting: bool
+    ) -> None:
+        """On Windows the console says whether a key waits, and the key is read so
+        it is not left for the REPL."""
+        read: list[str] = []
+        fake = types.SimpleNamespace(kbhit=lambda: waiting, getwch=lambda: read.append("x") or "x")
+        stdin = io.StringIO("")
+        stdin.isatty = lambda: True  # type: ignore[method-assign]
+        monkeypatch.setattr(banner_mod.sys, "stdin", stdin)
+        monkeypatch.setattr(banner_mod.sys, "platform", "win32")
+        monkeypatch.setitem(sys.modules, "msvcrt", fake)
+
+        assert banner_mod._skip_key_pressed() is waiting
+        assert read == (["x"] if waiting else [])
 
     def test_wait_returns_true_only_when_a_key_arrives(
         self, monkeypatch: pytest.MonkeyPatch

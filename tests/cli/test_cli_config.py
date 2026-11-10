@@ -40,10 +40,10 @@ class TestConfigLocation:
         repository's ``./.domyn/config.yaml`` must not choose the session's model,
         tools or skills."""
         (cfg.GLOBAL_DIR).mkdir(parents=True)
-        (cfg.GLOBAL_DIR / cfg.CONFIG_FILENAME).write_text("entrypoint: Global\n")
+        (cfg.GLOBAL_DIR / cfg.CONFIG_FILENAME).write_text("entrypoint: Global\n", encoding="utf-8")
         cwd = tmp_path / "repo"
         (cwd / ".domyn").mkdir(parents=True)
-        (cwd / ".domyn" / cfg.CONFIG_FILENAME).write_text("entrypoint: Project\n")
+        (cwd / ".domyn" / cfg.CONFIG_FILENAME).write_text("entrypoint: Project\n", encoding="utf-8")
         monkeypatch.chdir(cwd)
 
         assert cfg.config_path() == cfg.GLOBAL_DIR / cfg.CONFIG_FILENAME
@@ -63,6 +63,9 @@ class TestConfigLocation:
 
 
 class TestSecrets:
+    @pytest.mark.skipif(
+        os.name == "nt", reason="Windows has no mode bits: the profile's ACL guards it"
+    )
     def test_credentials_file_is_owner_only(self) -> None:
         path = cfg.write_credential("OPENAI_API_KEY", "sk-x")
         assert oct(path.stat().st_mode)[-3:] == "600"
