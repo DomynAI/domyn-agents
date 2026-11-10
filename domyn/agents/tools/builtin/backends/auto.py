@@ -18,7 +18,7 @@ from domyn.agents.tools.builtin.backends.base import (
 )
 from domyn.agents.tools.builtin.backends.docker import DockerBackend, DockerBackendOptions
 from domyn.agents.tools.builtin.backends.docker.cli import DockerCli
-from domyn.agents.tools.builtin.backends.local import LocalBackend
+from domyn.agents.tools.builtin.backends.local import this_machine
 from domyn.agents.tools.builtin.session import HOME_DIRNAME, state_dir_from_environment
 from domyn.agents.tools.builtin.workspace import Workspace
 
@@ -57,7 +57,7 @@ class AutoBackend(DockerBackend):
         super().__init__(
             workspace, options=docker, allowed_env=allowed, state_dir=self._state_dir, cli=cli
         )
-        self._local = LocalBackend(
+        self._local = this_machine(
             workspace,
             isolate_environment=isolate_environment,
             allowed_env=allowed,

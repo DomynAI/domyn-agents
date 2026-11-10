@@ -47,6 +47,7 @@ from domyn.agents.tools.builtin.backends import (
     CommandResult,
     DockerBackend,
     DockerBackendOptions,
+    GitBashBackend,
     LocalBackend,
     build_backend,
 )
@@ -194,12 +195,12 @@ def bundle(
             ):
                 tools.extend(image_tools(space, llm_provider, backend=resolved))
         elif name == "shell":
-            resolved = resolved or LocalBackend(space, allowed_env=allowed_env)
+            resolved = resolved or build_backend("local", space, allowed_env=allowed_env)
             tools.extend(shell_tools(space, backend=resolved))
         elif name == "browser":
             # The same backend as the shell, so the browser is wherever the commands are:
             # in a container image, agent-browser and Chrome are there too.
-            resolved = resolved or LocalBackend(space, allowed_env=allowed_env)
+            resolved = resolved or build_backend("local", space, allowed_env=allowed_env)
             browser_list, sessions = browser_tools(backend=resolved, options=browser)
             tools.extend(browser_list)
         else:
@@ -301,6 +302,7 @@ __all__ = [
     "CommandResult",
     "DockerBackend",
     "DockerBackendOptions",
+    "GitBashBackend",
     "LocalBackend",
     "Workspace",
     "WorkspaceError",
