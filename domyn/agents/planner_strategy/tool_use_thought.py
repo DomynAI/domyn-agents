@@ -54,7 +54,6 @@ from domyn.agents.planner_strategy.tool_use import (
     _parse_tool_call_args,
     malformed_args_feedback,
     parse_tool_call_args_with_errors,
-    tool_batches,
 )
 from domyn.agents.planner_strategy.utils import (
     FORWARD_VERBATIM_FEEDBACK_HARD_FALLBACK,
@@ -443,10 +442,8 @@ class ToolUseWithThoughtPlannerStrategy(ToolUsePlannerStrategy):
 
             # ── Process tool calls ────────────────────────────────────────────
             if has_tool_calls:
-                batches = (
-                    tool_batches(agent, getattr(response, "tool_calls", None) or [])
-                    if self.parallel_tool_calls
-                    else {}
+                batches = self.batches(
+                    agent, getattr(response, "tool_calls", None) or [], interaction_context
                 )
                 for i, tool_call in enumerate(response.tool_calls):
                     # ── Extract and emit thought ──────────────────────────────────────
@@ -495,8 +492,14 @@ class ToolUseWithThoughtPlannerStrategy(ToolUsePlannerStrategy):
                             event_type=ExecutionEventType.AGENT_CALL,
                             author=agent.name,
                             action=agent_action,
+                            metadata=(
+                                {METADATA_TOOL_BATCH: batches[tool_call.id]}
+                                if tool_call.id in batches
+                                else {}
+                            ),
                         )
-                        return
+                        if tool_call.id not in batches:
+                            return
                     elif tool_name == self.context_manager.stop_tool_name and self.use_stop:
                         yield BaseEvent(
                             event_type=ExecutionEventType.AGENT_END,

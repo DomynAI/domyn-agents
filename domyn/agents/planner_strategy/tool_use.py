@@ -23,7 +23,7 @@ Response contract
 import json
 import traceback
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Collection
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -134,7 +134,9 @@ def repair_control_characters(raw: str) -> str | None:
     return "".join(out) if changed else None
 
 
-def tool_batches(agent: Any, tool_calls: list[LLMToolCall]) -> dict[str, dict[str, Any]]:
+def tool_batches(
+    agent: Any, tool_calls: list[LLMToolCall], handoffs: Collection[str] = ()
+) -> dict[str, dict[str, Any]]:
     """The ``METADATA_TOOL_BATCH`` of each call that belongs to a batch, by call id.
 
     A batch is a run of two or more consecutive calls to tools the agent has: those
@@ -143,12 +145,15 @@ def tool_batches(agent: Any, tool_calls: list[LLMToolCall]) -> dict[str, dict[st
     tool). The runner holds them until the last and runs them together; a call
     outside any batch is run on arrival, as before. Calls with no id cannot be told
     apart, so a response with one is not batched at all.
+
+    ``handoffs`` names the sub-agents that may join a batch, as their ``AGENT_CALL``:
+    given only under ``parallel_handoffs``, so without it a hand-off still ends one.
     """
     if any(not tc.id for tc in tool_calls):
         return {}
     runs: list[list[str]] = [[]]
     for tc in tool_calls:
-        if agent.get_tool_by_name(tc.function.name):
+        if agent.get_tool_by_name(tc.function.name) or tc.function.name in handoffs:
             runs[-1].append(tc.id)
         elif runs[-1]:
             runs.append([])
@@ -447,6 +452,19 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
     time. On, the calls are marked as a batch (``METADATA_TOOL_BATCH``) and the
     runner runs them together; off, each runs as it arrives, after the one before
     it. See ``Runner._run_tool_calls``."""
+
+    def batches(
+        self, agent: Any, tool_calls: list[LLMToolCall], context: InteractionContext
+    ) -> dict[str, dict[str, Any]]:
+        """``tool_batches`` for this planner's options, shared by both loops."""
+        if not self.parallel_tool_calls:
+            return {}
+        handoffs = (
+            {a.name for a in context.handoff_targets_description}
+            if self.parallel_handoffs
+            else set()
+        )
+        return tool_batches(agent, tool_calls, handoffs)
 
     @field_validator("context_manager", mode="wrap")
     @classmethod
@@ -805,10 +823,8 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
 
             # ── Process tool calls ────────────────────────────────────────────
             if has_tool_calls:
-                batches = (
-                    tool_batches(agent, getattr(response, "tool_calls", None) or [])
-                    if self.parallel_tool_calls
-                    else {}
+                batches = self.batches(
+                    agent, getattr(response, "tool_calls", None) or [], interaction_context
                 )
                 for tool_call in response.tool_calls:
                     args = parsed_tool_args.get(tool_call.id, {})
@@ -836,6 +852,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                         a.name for a in interaction_context.handoff_targets_description
                     ]:
                         agent_action = AgentAction(
+                            call_id=tool_call.id,
                             name=tool_name,
                             parameters=args,
                         )
@@ -843,8 +860,14 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             event_type=ExecutionEventType.AGENT_CALL,
                             author=agent.name,
                             action=agent_action,
+                            metadata=(
+                                {METADATA_TOOL_BATCH: batches[tool_call.id]}
+                                if tool_call.id in batches
+                                else {}
+                            ),
                         )
-                        return
+                        if tool_call.id not in batches:
+                            return
                     elif tool_name == self.context_manager.stop_tool_name and self.use_stop:
                         yield BaseEvent(
                             event_type=ExecutionEventType.AGENT_END,

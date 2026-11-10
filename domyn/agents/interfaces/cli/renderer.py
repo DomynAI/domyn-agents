@@ -63,7 +63,7 @@ from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 
-from domyn.agents.core import BaseEvent, ExecutionEventType
+from domyn.agents.core import METADATA_TOOL_BATCH, BaseEvent, ExecutionEventType
 from domyn.agents.interfaces.cli.calls import as_written, summary
 from domyn.agents.interfaces.cli.markdown import MarkdownStream, render_markdown
 
@@ -167,6 +167,9 @@ class EventRenderer:
         self._spinner = spinner
         self._streaming = False
         self._shown_thoughts: set[str] = set()
+        # Sub-agents started together (`parallel_handoffs`): their calls are
+        # interleaved in the trace, so each line of theirs names who made it.
+        self._branches: set[str] = set()
         self._streamed = ""
         self._wrote_work = False
         # Messages this front-end has already put on screen itself, waiting to be
@@ -259,6 +262,12 @@ class EventRenderer:
         # answer a second time under its own marker.
         was_streaming = self._streaming
         self._close_stream()
+
+        if kind is ExecutionEventType.AGENT_CALL and event.metadata.get(METADATA_TOOL_BATCH):
+            self._branches.add(str(getattr(event.action, "name", "")))
+        elif kind is ExecutionEventType.RESPONSE and event.author not in self._branches:
+            # The caller answering: the sub-agents it started have all ended.
+            self._branches.clear()
 
         if kind is ExecutionEventType.RESPONSE:
             self._render_response(event, already_streamed=was_streaming)
@@ -798,7 +807,13 @@ class EventRenderer:
         self._wrote_work = True
         # Two spans, not a base style: the arguments would inherit the name's bold.
         line = Text()
-        line.append(f"{_WORK}{sym.tool_call} {action.name}", style=self._theme.style("tool_name"))
+        if event.author in self._branches:
+            line.append(f"{_WORK}{event.author} ", style=self._theme.style("handoff"))
+            line.append(f"{sym.tool_call} {action.name}", style=self._theme.style("tool_name"))
+        else:
+            line.append(
+                f"{_WORK}{sym.tool_call} {action.name}", style=self._theme.style("tool_name")
+            )
         shown = (
             summary(str(action.name), params) if isinstance(params, Mapping) else as_written(params)
         )
