@@ -289,7 +289,7 @@ def build_transport(config: dict) -> RunnerTransport:
     Raises ``ValueError`` for unknown types.
     """
     # Ensure built-in transports are imported so they self-register.
-    import domyn.agents.runner.sse_transport
+    import domyn.agents.runner.sse_transport  # noqa: F401
     import domyn.agents.runner.websocket_transport  # noqa: F401
 
     transport_type: str = config.get("type", "websocket")

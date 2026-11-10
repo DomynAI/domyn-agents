@@ -94,7 +94,6 @@ from domyn.agents.tools.builtin.browser_sessions import INSTALL_HINT
 if TYPE_CHECKING:
     from rich.console import Console
 
-    from domyn.agents.interfaces.cli.config import AgentConfig
     from domyn.agents.interfaces.cli.project_import import ProjectImport
     from domyn.agents.interfaces.cli.theme import Theme
 
@@ -939,8 +938,11 @@ def _choose_builtin_skills(
         )
         return current
 
-    declared = [Path(str(path)) for path in source.get("paths") or []]
-    elsewhere = [path for path in declared if not _inside(path, install_dir)]
+    written = [str(entry) for entry in source.get("paths") or []]
+    declared = [Path(entry) for entry in written]
+    # The entries this step does not own go back as the user wrote them: str() of
+    # a Path would spell `my-skills/review` as `my-skills\review` on Windows.
+    elsewhere = [entry for entry in written if not _inside(Path(entry), install_dir)]
 
     catalog = list_builtin_skills()
     names = [skill.name for skill in catalog]
@@ -1023,7 +1025,7 @@ def _choose_builtin_skills(
         highlight=False,
     )
 
-    paths = [str(path) for path in installed_paths] + [str(path) for path in elsewhere]
+    paths = [str(path) for path in installed_paths] + elsewhere
     updated = dict(current or {})
     if paths:
         updated["source"] = {**source, "type": "local_dir", "paths": paths}

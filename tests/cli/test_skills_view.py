@@ -89,6 +89,7 @@ def layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]
     project.mkdir(parents=True)
     personal.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # HOME on Windows
     monkeypatch.chdir(work)
     return project, personal
 

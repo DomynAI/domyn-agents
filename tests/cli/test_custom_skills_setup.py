@@ -145,6 +145,7 @@ class TestTheQuestion:
         theme: Theme,
     ) -> None:
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # HOME on Windows
 
         result = _run(console, theme, _answers("~/my-skills/review/.."))
 

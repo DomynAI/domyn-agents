@@ -50,11 +50,6 @@ _MAX_BODY_WIDTH = 100
 _INDENT = 2
 
 
-def _display_path(path: Path) -> str:
-    """The absolute, resolved path: unambiguous, and pasteable into any shell or editor."""
-    return str(path.expanduser().resolve())
-
-
 class _Group:
     def __init__(self, label: str, root: Path | None) -> None:
         self.label = label
@@ -65,11 +60,11 @@ class _Group:
         if skill.path is None:
             return None
         if self.root is None:
-            return _display_path(skill.path)
+            return skill.path.expanduser().resolve().as_posix()
         relative = skill.path.expanduser().resolve().relative_to(self.root)
         # A group whose root is the skill's own file (a loose skill listed singly):
         # the relative path is "." and says nothing; the file's name does.
-        return str(relative) if str(relative) != "." else skill.path.name
+        return relative.as_posix() if str(relative) != "." else skill.path.name
 
 
 def _group(skills: list[SkillDescriptor], roots: list[Path], fallback: str) -> list[_Group]:
@@ -79,7 +74,10 @@ def _group(skills: list[SkillDescriptor], roots: list[Path], fallback: str) -> l
     still get the shortest file label. Skills with no file, or one outside every
     root, share a trailing group labelled by the source itself.
     """
-    groups = [_Group(_display_path(root), root.expanduser().resolve()) for root in roots]
+    groups = [
+        _Group(root.expanduser().resolve().as_posix(), root.expanduser().resolve())
+        for root in roots
+    ]
     other = _Group(fallback, None)
     for skill in skills:
         owner: _Group | None = None
@@ -312,7 +310,7 @@ async def _show_one(console: Console, theme: Theme, runtime: SkillsRuntime, name
         facts.add_column(style=meta)
         facts.add_column(overflow="fold")
         if descriptor.path is not None:
-            facts.add_row("file", Text(_display_path(descriptor.path)))
+            facts.add_row("file", Text(descriptor.path.expanduser().resolve().as_posix()))
         if descriptor.sections:
             listed = Text()
             for i, title in enumerate(descriptor.sections):

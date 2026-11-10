@@ -112,7 +112,9 @@ class TestAFolder:
         _write(tmp_path / "notes" / "x" / "AGENTS.md", "Project notes.")
         result = _run(console, theme, str(tmp_path / "notes"))
 
-        _, agent, _ = cfg.current_settings_from(yaml.safe_load(Path("config.yaml").read_text()))
+        _, agent, _ = cfg.current_settings_from(
+            yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
+        )
 
         assert agent.standing_instructions == result["agents"][0]["standing_instructions"]
 

@@ -2,6 +2,7 @@
 
 import contextlib
 import os
+import shlex
 import signal
 import subprocess
 from collections.abc import Iterator
@@ -49,29 +50,37 @@ def _stop_background_commands_windows(root: Path, pattern: str) -> int:
 
     ``run.pid`` holds the wrapper's pid as Git Bash numbers it (an MSYS pid);
     Git Bash maps it to the Windows one in ``/proc/<pid>/winpid``, and
-    ``taskkill /T`` ends that process and everything it started. One Git Bash
-    for every directory found, since only it can read that mapping.
+    ``taskkill /T`` ends that process and everything it started.
+
+    The pid is checked to still be that wrapper first, by its command line
+    (``bash .domyn/processes/<conversation>/<handle>/run.sh``), as the POSIX
+    path checks the group: a pid is reused once its command has ended, and
+    ``taskkill /T`` on a reused one ends whatever tree it now heads. Measured:
+    without the check, the cleanup ended the CI step's own shell, pytest with it.
     """
-    pid_files = [path.parent / "run.pid" for path in root.glob(pattern)]
-    pids = []
-    for pid_file in pid_files:
+    targets = []
+    for pgid_file in root.glob(pattern):
         with contextlib.suppress(OSError, ValueError):
-            pids.append(int(pid_file.read_text().strip()))
-    if not pids:
+            pid = int((pgid_file.parent / "run.pid").read_text().strip())
+            run_sh = "/".join([*pgid_file.parent.parts[-2:], "run.sh"])
+            targets.append((pid, run_sh))
+    if not targets:
         return 0
+    lines = [
+        f'if tr "\\0" " " < /proc/{pid}/cmdline 2>/dev/null | grep -qF -- {shlex.quote(run_sh)} '
+        f"&& w=$(cat /proc/{pid}/winpid 2>/dev/null); then taskkill //F //T //PID $w; fi"
+        for pid, run_sh in targets
+    ]
     with contextlib.suppress(Exception):
         from domyn.agents.tools.builtin.git_bash import find_git_bash
 
-        script = "for p in {}; do w=$(cat /proc/$p/winpid 2>/dev/null) && taskkill //F //T //PID $w; done".format(
-            " ".join(str(pid) for pid in pids)
-        )
         subprocess.run(
-            [str(find_git_bash()), "-c", script],
+            [str(find_git_bash()), "-c", "\n".join(lines)],
             capture_output=True,
             timeout=60,
             check=False,
         )
-    return len(pids)
+    return len(targets)
 
 
 @pytest.fixture(autouse=True)

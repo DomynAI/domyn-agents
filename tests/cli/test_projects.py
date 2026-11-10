@@ -752,6 +752,7 @@ class TestTheBanner:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # HOME on Windows
 
         assert cfg.describe_project(tmp_path / "x" / "p") == "p (~/x/p)"
 

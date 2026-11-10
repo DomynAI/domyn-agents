@@ -142,7 +142,9 @@ class TestLinksInTheFilesFolder:
         result = self.prepare(source, out)
         assert result.returncode != 0
         assert "use a new --out folder" in result.stderr.lower(), result.stderr
-        assert outside.read_text() == self.SECRET, "the file outside was written over"
+        assert outside.read_text(encoding="utf-8") == self.SECRET, (
+            "the file outside was written over"
+        )
         assert sorted(tmp_path.rglob("*")) == before, "something was written"
 
     @pytest.mark.parametrize("name", ["run.sh", "table.csv"])

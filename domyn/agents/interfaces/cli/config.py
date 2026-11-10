@@ -494,7 +494,13 @@ def expand_project_dir(raw: dict[str, Any], folder: Path | None) -> dict[str, An
     for paths in _config_paths(expanded):
         for i, entry in enumerate(paths):
             if isinstance(entry, str) and entry.startswith(PROJECT_DIR_REF):
-                paths[i] = str(folder) + entry[len(PROJECT_DIR_REF) :]
+                rest = entry[len(PROJECT_DIR_REF) :]
+                if rest.startswith("/"):
+                    # Joined as a path, not as text: `C:\p` + `/skills/a` would be
+                    # a mixed spelling that no folder setup builds compares equal to.
+                    paths[i] = str(folder / rest.lstrip("/"))
+                else:
+                    paths[i] = str(folder) + rest
     return expanded
 
 

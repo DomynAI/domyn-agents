@@ -181,7 +181,7 @@ class TestTheChartsSkills:
         found = next(s for s in index.skills if s.name == skill)
         assert found.path is not None
         assert Path(found.path).resolve().parents[2] / "resources" / style.name == style
-        text = Path(found.path).read_text()
+        text = Path(found.path).read_text(encoding="utf-8")
         assert "../../resources/" in text and style.name in text
 
     @pytest.mark.asyncio
@@ -220,7 +220,7 @@ class TestThePalette:
     @pytest.mark.parametrize("module", [STYLE, PLOTLY_STYLE])
     def test_no_colour_is_written_into_the_modules(self, module: Path) -> None:
         """Every hex code lives in palette.json; the modules have none of their own."""
-        assert not re.findall(r"#[0-9A-Fa-f]{6}\b", module.read_text())
+        assert not re.findall(r"#[0-9A-Fa-f]{6}\b", module.read_text(encoding="utf-8"))
 
     @pytest.mark.parametrize("module", [STYLE, PLOTLY_STYLE])
     def test_they_keep_no_copy_of_a_palette_entry(self, module: Path) -> None:
@@ -229,7 +229,7 @@ class TestThePalette:
 
         names = {
             target.id
-            for node in ast.parse(module.read_text()).body
+            for node in ast.parse(module.read_text(encoding="utf-8")).body
             if isinstance(node, ast.Assign)
             for target in node.targets
             if isinstance(target, ast.Name)

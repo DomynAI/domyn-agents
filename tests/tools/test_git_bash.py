@@ -21,7 +21,7 @@ from domyn.agents.tools.builtin.git_bash import (
 
 def _file(path: Path, *, executable: bool = False) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("")
+    path.write_text("", encoding="utf-8")
     if executable:
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
     return path

@@ -239,6 +239,7 @@ class TestOneAnswerForWhereSkillsLive:
         (home_skills / "user-journeys").mkdir(parents=True)
         (home_skills / "user-journeys" / "SKILL.md").write_text(SKILL)
         monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))  # HOME on Windows
         project = tmp_path / "project"
         project.mkdir()
         monkeypatch.chdir(project)

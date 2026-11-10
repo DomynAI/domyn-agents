@@ -281,7 +281,7 @@ class TestWhatTheConfigHolds:
     ) -> None:
         _run(console, theme, _answers(""), target=Path("config.yaml"))
 
-        on_disk = yaml.safe_load(Path("config.yaml").read_text())
+        on_disk = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
         assert on_disk["agents"][0]["skills"]["source"]["paths"] == AUTO
 
 
@@ -453,6 +453,7 @@ class TestTheStartupWarning:
     ) -> None:
         (tmp_path / "home" / ".domyn" / "skills" / "x").mkdir(parents=True)
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))  # HOME on Windows
 
         assert _missing_skills_warning(_agent(llm_provider, [Path("~/.domyn/skills/x")])) is None
 

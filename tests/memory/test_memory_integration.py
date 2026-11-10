@@ -35,7 +35,9 @@ class MockLLMProvider(BaseLLMProvider):
 
 @pytest.fixture
 def temp_file():
-    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".jsonl") as f:
+    with tempfile.NamedTemporaryFile(
+        encoding="utf-8", mode="w", delete=False, suffix=".jsonl"
+    ) as f:
         temp_path = f.name
     yield temp_path
     if os.path.exists(temp_path):

@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import os
 import tempfile
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import Field, PrivateAttr
@@ -32,7 +33,7 @@ class FilesystemMemoryManager(BaseMemoryManager):
         )
         # TODO: deduplicate. Every write appends, so repeats crowd recall's recency_limit window.
         async with self._lock:
-            with open(self.file_path, "a") as f:
+            with open(self.file_path, "a", encoding="utf-8") as f:
                 f.write(memory.model_dump_json() + "\n")
 
     async def recall_memories(
@@ -46,7 +47,7 @@ class FilesystemMemoryManager(BaseMemoryManager):
         """Retrieve memories from the filesystem (safe across tasks in one event loop)."""
         async with self._lock:
             try:
-                with open(self.file_path) as f:
+                with open(self.file_path, encoding="utf-8") as f:
                     data = f.read()
 
                 # Parse memories, skipping malformed lines
@@ -77,7 +78,7 @@ class FilesystemMemoryManager(BaseMemoryManager):
         """Retrieve a single memory by ID (safe across tasks in one event loop)."""
         async with self._lock:
             try:
-                with open(self.file_path) as f:
+                with open(self.file_path, encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
                         if line:
@@ -96,9 +97,17 @@ class FilesystemMemoryManager(BaseMemoryManager):
         async with self._lock:
             try:
                 deleted = False
+                # The temporary file goes beside the memory file: os.replace cannot
+                # move across drives (C: temp, a project on D:) or file systems
+                # (/tmp as tmpfs), and within one file system it is atomic.
                 with (
-                    tempfile.NamedTemporaryFile(mode="w", delete=False) as temp_file,
-                    open(self.file_path) as original_file,
+                    tempfile.NamedTemporaryFile(
+                        encoding="utf-8",
+                        mode="w",
+                        delete=False,
+                        dir=Path(self.file_path).absolute().parent,
+                    ) as temp_file,
+                    open(self.file_path, encoding="utf-8") as original_file,
                 ):
                     for line in original_file:
                         line = line.strip()
@@ -128,8 +137,13 @@ class FilesystemMemoryManager(BaseMemoryManager):
         async with self._lock:
             try:
                 with (
-                    tempfile.NamedTemporaryFile(mode="w", delete=False) as temp_file,
-                    open(self.file_path) as original_file,
+                    tempfile.NamedTemporaryFile(
+                        encoding="utf-8",
+                        mode="w",
+                        delete=False,
+                        dir=Path(self.file_path).absolute().parent,
+                    ) as temp_file,
+                    open(self.file_path, encoding="utf-8") as original_file,
                 ):
                     for line in original_file:
                         line = line.strip()
@@ -158,7 +172,7 @@ class FilesystemMemoryManager(BaseMemoryManager):
         """Clear all memories for all users and all agents (safe across tasks in one event loop)."""
         async with self._lock:
             try:
-                with open(self.file_path, "w"):
+                with open(self.file_path, "w", encoding="utf-8"):
                     pass
             except FileNotFoundError:
                 pass

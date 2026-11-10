@@ -59,7 +59,7 @@ class TestItActuallyPersists:
     async def test_the_file_is_readable_by_a_human(self, path: Path) -> None:
         """A permissions file that only its writer can read cannot be audited."""
         await FileApprovalStore(path).grant(_request("git status"))
-        parsed = yaml.safe_load(path.read_text())
+        parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
         assert parsed["version"] == 1
         entry = parsed["grants"][0]
         assert entry["subject"] == "git status"
@@ -106,6 +106,7 @@ class TestTheCliProjectScope:
         home = tmp_path / "home"
         home.mkdir()
         monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))  # HOME on Windows
         monkeypatch.setattr(cfg, "GLOBAL_DIR", home / ".domyn")
         return home
 
@@ -240,14 +241,16 @@ class TestItFailsSafe:
     async def test_a_corrupt_file_grants_nothing(self, path: Path) -> None:
         """Extra prompts, not free passes — and above all not a crash on startup,
         which is what pushes people into deleting the file wholesale."""
-        path.write_text("this: is: not: valid: yaml: [[[")
+        path.write_text("this: is: not: valid: yaml: [[[", encoding="utf-8")
         store = FileApprovalStore(path)
         assert await store.granted() == []
         assert not await store.is_granted(_request("git status"))
 
     @pytest.mark.asyncio
     async def test_a_truncated_file_grants_nothing(self, path: Path) -> None:
-        path.write_text("version: 1\ngrants:\n  - value: 'a::b::c'\n    kind: exa")
+        path.write_text(
+            "version: 1\ngrants:\n  - value: 'a::b::c'\n    kind: exa", encoding="utf-8"
+        )
         assert await FileApprovalStore(path).granted() == []
 
     @pytest.mark.asyncio
@@ -263,7 +266,8 @@ class TestItFailsSafe:
                         "not even a mapping",
                     ],
                 }
-            )
+            ),
+            encoding="utf-8",
         )
         store = FileApprovalStore(path)
         assert len(await store.granted()) == 1
