@@ -20,12 +20,19 @@ from pathlib import Path
 
 import pytest
 
-from domyn.agents.tools.builtin import LocalBackend, Workspace, bundle, processes, shell
+from domyn.agents.tools.builtin import (
+    LocalBackend,
+    Workspace,
+    build_backend,
+    bundle,
+    processes,
+    shell,
+)
 
 
 @pytest.fixture
 def backend(tmp_path: Path) -> LocalBackend:
-    return LocalBackend(Workspace.at(tmp_path), isolate_environment=False)
+    return build_backend("local", Workspace.at(tmp_path), isolate_environment=False)
 
 
 async def _launch(backend: LocalBackend, command: str, *, yield_s: float = 0.15, **kw):  # type: ignore[no-untyped-def]
@@ -423,7 +430,7 @@ class TestTheToolsTogether:
         )
 
         # Wait for them to end, with nothing noticing that they have.
-        watcher = LocalBackend(Workspace.at(tmp_path), isolate_environment=False)
+        watcher = build_backend("local", Workspace.at(tmp_path), isolate_environment=False)
         last = list(processes.registry(state).values())[-1]
         assert await _until(lambda: _finished(watcher, last))
 
@@ -1202,7 +1209,7 @@ class TestTheHelpersLeaveWhenTheirDirectoryCannotBeWritten:
     async def test_removed_once_the_command_has_finished(self, workspace: Path) -> None:
         """What was found: the command over, the wrapper gone, the helpers
         asleep between two checks when the directory went."""
-        backend = LocalBackend(Workspace.at(workspace), isolate_environment=False)
+        backend = build_backend("local", Workspace.at(workspace), isolate_environment=False)
         record = processes.new_record("echo quick", "c1")
         await backend.run(processes.build_launch(record, yield_s=10), timeout=60)
         pgid = await self._group(workspace / record.dir)
@@ -1219,7 +1226,7 @@ class TestTheHelpersLeaveWhenTheirDirectoryCannotBeWritten:
         """Then the exit code cannot be written either, and the wrapper's own
         last compaction waited for that same lock: the wrapper spun too, and
         kept the helpers believing the command was still going."""
-        backend = LocalBackend(Workspace.at(workspace), isolate_environment=False)
+        backend = build_backend("local", Workspace.at(workspace), isolate_environment=False)
         record, state = await _launch(backend, "sleep 2")
         assert state.running
         pgid = await self._group(workspace / record.dir)
@@ -1239,7 +1246,7 @@ class TestTheHelpersLeaveWhenTheirDirectoryCannotBeWritten:
         another pass holds is worth waiting for."""
         if os.geteuid() == 0:
             pytest.skip("root creates files in a directory without write permission")
-        backend = LocalBackend(Workspace.at(workspace), isolate_environment=False)
+        backend = build_backend("local", Workspace.at(workspace), isolate_environment=False)
         record, state = await _launch(backend, "sleep 2")
         assert state.running
         directory = workspace / record.dir

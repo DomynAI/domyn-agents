@@ -28,6 +28,7 @@ from domyn.agents.tools.builtin import (
     CommandResult,
     LocalBackend,
     Workspace,
+    build_backend,
     bundle,
 )
 from domyn.agents.tools.builtin.browser_sessions import (
@@ -328,7 +329,7 @@ class TestTheCommandLine:
         stub.write_text('#!/bin/sh\ncat "$2"\n')
         stub.chmod(0o755)
 
-        backend = LocalBackend(Workspace(workspace))
+        backend = build_backend("local", Workspace(workspace))
         sessions = BrowserSessions(backend, BrowserOptions(binary=str(stub)))
         result = await backend.run(sessions.command(CID, "get", "url"), timeout=10)
 

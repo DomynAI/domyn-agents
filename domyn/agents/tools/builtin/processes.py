@@ -325,7 +325,9 @@ def _report(record: ProcessRecord, *, from_cursor: bool) -> str:
 _WRAPPER = """#!/usr/bin/env bash
 # Written by domyn-agents. Runs detached; nothing waits for it.
 echo $$ > "{dir}/run.pid"
-ps -o pgid= -p $$ | tr -d ' ' > "{dir}/run.pgid"
+# Git Bash's ps has no -o: there the group is in /proc/<pid>/pgid, which Linux
+# does not have and macOS has no /proc for, so those fall through to ps.
+{{ cat /proc/$$/pgid 2>/dev/null || ps -o pgid= -p $$; }} | tr -d ' ' > "{dir}/run.pgid"
 
 # The backstop for the guarantee detaching gives up, inside the group it
 # polices: when it fires, the session that started it may be long closed.
@@ -728,7 +730,7 @@ def build_kill(record: ProcessRecord, grace: int = DEFAULT_GRACE_S) -> str:
     return (
         f"PID=$(cat {d}/run.pid 2>/dev/null); PGID=$(cat {d}/run.pgid 2>/dev/null); "
         f'if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && '
-        f'[ "$(ps -o pgid= -p $PID | tr -d \' \')" = "$PGID" ]; then '
+        f'[ "$({{ cat /proc/$PID/pgid 2>/dev/null || ps -o pgid= -p $PID; }} | tr -d \' \')" = "$PGID" ]; then '
         f'kill -TERM -"$PGID" 2>/dev/null; sleep {grace}; kill -KILL -"$PGID" 2>/dev/null; '
         f'echo "[stopped by the agent at $(date -u +%Y-%m-%dT%H:%M:%SZ)]" >> {d}/out.log; '
         f"echo killed > {d}/run.killed; echo stopped; "

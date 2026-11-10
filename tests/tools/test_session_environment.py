@@ -245,9 +245,9 @@ class TestItReallyIsolates:
 class TestThroughTheBackend:
     @pytest.mark.asyncio
     async def test_commands_run_inside_the_conversation_environment(self, tmp_path: Path) -> None:
-        from domyn.agents.tools.builtin import LocalBackend
+        from domyn.agents.tools.builtin import build_backend
 
-        backend = LocalBackend(Workspace.at(tmp_path))
+        backend = build_backend("local", Workspace.at(tmp_path))
         result = await backend.run('echo "$VIRTUAL_ENV"', timeout=60, conversation_id="c1")
         assert "conversations/c1/venv" in result.stdout
 
@@ -255,9 +255,9 @@ class TestThroughTheBackend:
     async def test_isolation_can_be_turned_off(self, tmp_path: Path) -> None:
         """Wanted when the agent is meant to work *on* the project it was
         launched from."""
-        from domyn.agents.tools.builtin import LocalBackend
+        from domyn.agents.tools.builtin import build_backend
 
-        backend = LocalBackend(Workspace.at(tmp_path), isolate_environment=False)
+        backend = build_backend("local", Workspace.at(tmp_path), isolate_environment=False)
         result = await backend.run('echo "$VIRTUAL_ENV"', timeout=60, conversation_id="c1")
         assert "conversations/c1" not in result.stdout
 
@@ -265,9 +265,9 @@ class TestThroughTheBackend:
     async def test_no_conversation_means_the_ambient_environment(self, tmp_path: Path) -> None:
         """A caller outside a conversation — a script, a test — is not given a
         directory it never asked for."""
-        from domyn.agents.tools.builtin import LocalBackend
+        from domyn.agents.tools.builtin import build_backend
 
-        backend = LocalBackend(Workspace.at(tmp_path))
+        backend = build_backend("local", Workspace.at(tmp_path))
         await backend.run("true", timeout=60, conversation_id="")
         assert not (tmp_path / ".domyn").exists()
 
@@ -285,10 +285,10 @@ class TestThroughTheBackend:
     async def test_a_secret_in_the_process_environment_is_not_visible_by_default(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from domyn.agents.tools.builtin import LocalBackend
+        from domyn.agents.tools.builtin import build_backend
 
         monkeypatch.setenv("MY_SECRET", "s3cr3t")
-        backend = LocalBackend(Workspace.at(tmp_path))
+        backend = build_backend("local", Workspace.at(tmp_path))
         result = await backend.run('echo "$MY_SECRET"', timeout=60, conversation_id="")
         assert "s3cr3t" not in result.stdout
 
@@ -296,9 +296,9 @@ class TestThroughTheBackend:
     async def test_an_allowed_name_reaches_the_command(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from domyn.agents.tools.builtin import LocalBackend
+        from domyn.agents.tools.builtin import build_backend
 
         monkeypatch.setenv("MY_SECRET", "s3cr3t")
-        backend = LocalBackend(Workspace.at(tmp_path), allowed_env=["MY_SECRET"])
+        backend = build_backend("local", Workspace.at(tmp_path), allowed_env=["MY_SECRET"])
         result = await backend.run('echo "$MY_SECRET"', timeout=60, conversation_id="")
         assert "s3cr3t" in result.stdout

@@ -226,6 +226,13 @@ class LocalBackend(CommandBackend):
 
     async def _spawn(self, command: str, streams: dict[str, Any]) -> asyncio.subprocess.Process:
         """Start ``command`` in this backend's shell. The seam a subclass replaces."""
+        if os.name == "nt":
+            # The system shell there is cmd.exe, which reads the line differently
+            # from the POSIX parser that approved it. GitBashBackend overrides this.
+            raise ShellUnavailableError(
+                "LocalBackend does not run commands on Windows: use "
+                "build_backend('local', ...) or GitBashBackend, which run them in Git Bash."
+            )
         return await asyncio.create_subprocess_shell(
             command,
             # Its own process group, so a timeout can kill the whole tree and

@@ -206,8 +206,13 @@ jobs:
       # rather than holding the job until its timeout with nothing to show:
       # waiting on a process that never exits is how a POSIX assumption fails
       # here. -rfE lists every failure and error at the end, by name.
+      # UTF-8 output: on the runner's cp1252 console, the first failure whose
+      # text has a character outside it (the banner art) ended pytest silently
+      # in the middle of its summary.
       - name: Run tests
         shell: bash
+        env:
+          PYTHONUTF8: "1"
         run: >-
           uv run --with pytest-timeout pytest tests/ examples/ -q --no-cov
           -p no:cacheprovider --timeout=120 -rfE
