@@ -16,6 +16,9 @@ pytest_plugins = ["tests.fake_platform"]
 # Where a background command started by the built-in tools keeps its pid and
 # group (`tools/builtin/processes.py`), relative to the workspace it ran in.
 _PROCESS_FILES = ".domyn/processes/*/*/run.pgid"
+# The same, under a state folder a caller named (`LocalBackend(state_dir=...)`). It
+# also matches the first pattern's files: stopping a group twice is a no-op.
+_STATE_PROCESS_FILES = "processes/*/*/run.pgid"
 
 
 def _stop_background_commands(root: Path, pattern: str) -> int:
@@ -84,6 +87,8 @@ def _no_background_commands_left(tmp_path: Path) -> Iterator[None]:
     """
     yield
     _stop_background_commands(tmp_path, f"**/{_PROCESS_FILES}")
+    # And those started with a state folder of their own (`state_dir`, the CLI's).
+    _stop_background_commands(tmp_path, f"**/{_STATE_PROCESS_FILES}")
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
@@ -94,6 +99,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         return
     with contextlib.suppress(OSError, ValueError):
         _stop_background_commands(factory.getbasetemp(), f"**/{_PROCESS_FILES}")
+        _stop_background_commands(factory.getbasetemp(), f"**/{_STATE_PROCESS_FILES}")
 
 
 @pytest.fixture(autouse=True)

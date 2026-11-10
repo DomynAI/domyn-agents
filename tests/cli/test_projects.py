@@ -107,7 +107,7 @@ class TestSelecting:
 
         assert cfg.config_path() == folder / cfg.CONFIG_FILENAME
         assert cfg.home_dir() == folder
-        assert cfg.credentials_path() == folder / cfg.CREDENTIALS_FILENAME
+        assert cfg.credentials_path() == folder / cfg.PrivateFiles.CREDENTIALS
 
     def test_its_instructions_are_only_the_ones_it_declares(self, home: Path) -> None:
         """A ``SOUL.md`` at the project's top is a file like any other: read only when
@@ -146,7 +146,7 @@ class TestByPath:
 
         assert cfg.use_project("./alpha") == folder.resolve()
         assert cfg.config_path() == folder.resolve() / cfg.CONFIG_FILENAME
-        assert cfg.credentials_path() == folder.resolve() / cfg.CREDENTIALS_FILENAME
+        assert cfg.credentials_path() == folder.resolve() / cfg.PrivateFiles.CREDENTIALS
 
     def test_a_name_never_reads_a_folder_of_that_name_here(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -232,13 +232,13 @@ class TestWhatIsTheProjectsAlone:
         cfg.use_project("p")
         paths = _REAL_APPROVALS_PATHS()
 
-        assert paths["user"] == folder / cfg.APPROVALS_FILENAME
+        assert paths["user"] == folder / cfg.PrivateFiles.APPROVALS
         assert paths["project"].is_relative_to(folder / cfg.PROJECTS_DIRNAME)
 
     def test_without_a_project_they_live_at_home(self, home: Path) -> None:
         paths = _REAL_APPROVALS_PATHS()
 
-        assert paths["user"] == home / cfg.APPROVALS_FILENAME
+        assert paths["user"] == home / cfg.PrivateFiles.APPROVALS
         assert paths["project"].is_relative_to(home / cfg.PROJECTS_DIRNAME)
 
     def test_the_project_credentials_go_over_the_home_ones(

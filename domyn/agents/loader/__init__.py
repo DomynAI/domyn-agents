@@ -58,13 +58,16 @@ async def load_application_from_config_new(
     mcp_init: bool = True,
     *,
     extra_workspace_roots: Iterable[str] = (),
+    state_dir: str | None = None,
 ) -> Agent:
     version = config.get("version", "1.0")
     match version:
         case "1.0":
             from domyn.agents.loader.config import ConfigurationV1
 
-            cfg = ConfigurationV1.from_dict(config, extra_workspace_roots=extra_workspace_roots)
+            cfg = ConfigurationV1.from_dict(
+                config, extra_workspace_roots=extra_workspace_roots, state_dir=state_dir
+            )
         case _:
             raise ValueError(f"Unsupported configuration version: {version}")
 
@@ -90,12 +93,18 @@ async def load_application_from_config_new(
 
 
 async def load_application_from_file(
-    file_path: str, *, extra_workspace_roots: Iterable[str] = ()
+    file_path: str,
+    *,
+    extra_workspace_roots: Iterable[str] = (),
+    state_dir: str | None = None,
 ) -> Agent:
-    """Load application configuration from a YAML file. Return the root agent."""
+    """Load application configuration from a YAML file. Return the root agent.
+
+    ``state_dir`` is where the built-in tools keep their state (see
+    ``ConfigurationV1.from_dict``); ``.domyn`` in the workspace when not given."""
     config = load_from_file(file_path)
     return await load_application_from_config_new(
-        config, extra_workspace_roots=extra_workspace_roots
+        config, extra_workspace_roots=extra_workspace_roots, state_dir=state_dir
     )
 
 

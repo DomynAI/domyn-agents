@@ -26,21 +26,12 @@ back to, and reading both would concatenate two attempts at the same file."""
 AUTODISCOVERY_DIRS: tuple[Path, ...] = (Path(".domyn"), Path(".agents"))
 """The project's own instruction folders, relative to where the CLI is started.
 
-Listed as written in an agent's paths, they are walked on every load (`STATE_DIRS`
+Listed as written in an agent's paths, they are walked on every load (`StateFolders.INSTRUCTIONS_SKIP`
 skipped) rather than read flat. When ``domyn setup`` is told to, it writes them in this
 order **after** the user's own paths — the reverse of the skills folders, because the
 order means the opposite: the first soul wins, so the user's beats a project's (and
 ``.domyn``'s beats ``.agents``'s), and every ``AGENTS.md`` is included with the last one
 weighed most, so the project's brief lands after the user's.
-"""
-
-STATE_DIRS = frozenset({"conversations", "browser", "processes", "skills"})
-"""Folders domyn itself writes directly under ``.domyn`` (and ``.agents/skills``),
-skipped by the autodiscovery walk.
-
-Their content is the agent's own scratch files or skill folders, and an ``AGENTS.md``
-in there must never reach the system prompt. `tests/instructions/test_state_dirs.py`
-fails when a built-in starts writing to a folder that is not listed here.
 """
 
 

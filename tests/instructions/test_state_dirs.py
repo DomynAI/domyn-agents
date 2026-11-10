@@ -1,4 +1,4 @@
-"""`STATE_DIRS` names every folder domyn itself writes directly under ``.domyn``.
+"""`StateFolders.INSTRUCTIONS_SKIP` names every folder domyn itself writes directly under ``.domyn``.
 
 The autodiscovery walk over ``./.domyn`` skips them: what is in there is the agent's
 own scratch (a conversation's files, a browser page, a process log) or skill folders,
@@ -9,10 +9,11 @@ starts writing somewhere new under ``.domyn`` fails here until it is listed.
 import inspect
 from pathlib import Path, PurePath
 
-from domyn.agents.instructions.discovery import STATE_DIRS
 from domyn.agents.interfaces.cli.config import LOCAL_SKILLS_DIRS
 from domyn.agents.tools.builtin import BrowserSessions, processes
-from domyn.agents.tools.builtin.session import HOME_DIRNAME, SessionPaths
+from domyn.agents.tools.builtin.session import HOME_DIRNAME, SessionPaths, StateFolders
+
+STATE_DIRS = StateFolders.INSTRUCTIONS_SKIP
 
 
 def test_conversation_folders(tmp_path: Path) -> None:
@@ -20,6 +21,7 @@ def test_conversation_folders(tmp_path: Path) -> None:
 
     assert home.parts[0] == HOME_DIRNAME
     assert home.parts[1] in STATE_DIRS
+    assert home.parts[1] in set(StateFolders)
 
 
 def test_the_browser_folder() -> None:
@@ -27,11 +29,13 @@ def test_the_browser_folder() -> None:
 
     assert PurePath(default).parts[0] == HOME_DIRNAME
     assert PurePath(default).parts[1] in STATE_DIRS
+    assert PurePath(default).parts[1] in set(StateFolders)
 
 
 def test_the_process_folder() -> None:
     assert PurePath(processes.HOME).parts[0] == HOME_DIRNAME
     assert PurePath(processes.HOME).parts[1] in STATE_DIRS
+    assert PurePath(processes.HOME).parts[1] in set(StateFolders)
 
 
 def test_the_skills_folders() -> None:

@@ -20,6 +20,7 @@ import os
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, overload
 from urllib.parse import urlsplit, urlunsplit
@@ -48,8 +49,21 @@ from domyn.agents.skills.layout import listed_path_is_linked
 from domyn.agents.tools.builtin import BUNDLE_TOOL_NAMES, DEFAULT_BUNDLES, BrowserOptions
 
 CONFIG_FILENAME = "config.yaml"
-CREDENTIALS_FILENAME = "credentials"
-STATE_FILENAME = "state.yaml"
+
+
+class PrivateFiles(StrEnum):
+    """The files a domyn home (``~/.domyn`` or a project) keeps for its owner alone.
+    Never exported, and never brought in by an import (`is_private`, ``export.py``)."""
+
+    CREDENTIALS = "credentials"
+    """API keys as ``NAME=value``, 0600."""
+    APPROVALS = "approvals.yaml"
+    """The grants given with "always"; also the per-folder ones under ``projects/``."""
+    STATE = "state.yaml"
+    """What the CLI remembers between sessions (`CliState`, ``state.py``)."""
+    CONVERSATIONS = "conversations.db"
+    """The conversation history; SQLite's side files (``-wal``, ``-shm``) start with it."""
+
 
 GLOBAL_DIR = Path.home() / ".domyn"
 
@@ -240,7 +254,8 @@ class AgentConfig(BaseModel):
 
     isolate_environment: bool = True
     """Give each conversation its own virtualenv under
-    ``.domyn/conversations/<id>/venv``, so what the agent installs stays there.
+    ``conversations/<id>/venv`` in the project's folder, or in ``~/.domyn``
+    (``home_dir``), so what the agent installs stays there.
 
     On by default because the alternative is what the CLI used to do: inherit
     whatever environment it was launched from, which under ``uv run domyn`` is
@@ -497,7 +512,7 @@ def config_path() -> Path:
 def credentials_path() -> Path:
     """``credentials`` in the active project's folder, else in ``~/.domyn``: the file
     setup writes to. Reading falls back to ``~/.domyn`` (`credential_files`)."""
-    return home_dir() / CREDENTIALS_FILENAME
+    return home_dir() / PrivateFiles.CREDENTIALS
 
 
 def credential_files() -> list[Path]:
@@ -506,7 +521,7 @@ def credential_files() -> list[Path]:
     so a key kept at home serves every project, and a project overrides it by setting
     its own."""
     files = [credentials_path()]
-    global_file = GLOBAL_DIR / CREDENTIALS_FILENAME
+    global_file = GLOBAL_DIR / PrivateFiles.CREDENTIALS
     if global_file != files[0]:
         files.append(global_file)
     return files
@@ -1629,9 +1644,6 @@ def is_configuration_v1_usable(raw: dict[str, Any]) -> bool:
     )
 
 
-APPROVALS_FILENAME = "approvals.yaml"
-
-
 def approvals_paths() -> dict[str, Path]:
     """Where each persisted scope keeps its grants, by scope name.
 
@@ -1640,7 +1652,7 @@ def approvals_paths() -> dict[str, Path]:
     under one configuration does not carry over to another.
     """
     return {
-        "user": home_dir() / APPROVALS_FILENAME,
+        "user": home_dir() / PrivateFiles.APPROVALS,
         "project": _project_approvals_path(),
     }
 
@@ -1651,7 +1663,7 @@ def _project_approvals_path() -> Path:
     cwd = Path.cwd().resolve()
     slug = re.sub(r"[^A-Za-z0-9._-]", "_", cwd.name) or "root"
     digest = hashlib.sha256(str(cwd).encode()).hexdigest()[:12]
-    return home_dir() / PROJECTS_DIRNAME / f"{slug}-{digest}" / APPROVALS_FILENAME
+    return home_dir() / PROJECTS_DIRNAME / f"{slug}-{digest}" / PrivateFiles.APPROVALS
 
 
 def _launched_from_home() -> bool:

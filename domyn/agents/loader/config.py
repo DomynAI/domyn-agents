@@ -551,6 +551,7 @@ class ConfigurationV1(BaseModel):
         save_in_registry: bool = False,
         *,
         extra_workspace_roots: Iterable[str] = (),
+        state_dir: str | None = None,
     ) -> "ConfigurationV1":
         """Create Configuration from a dictionary, processing agents, tools, and hooks.
 
@@ -559,6 +560,11 @@ class ConfigurationV1(BaseModel):
         than a config key because which directories those are is resolved at
         run time by the caller (e.g. the CLI's configured skill directories),
         not something a persisted file should freeze.
+
+        ``state_dir`` is where every built-in tool bundle keeps its state — the
+        conversations' environments, the background commands' logs, the browser's
+        files — ``.domyn`` in the workspace when not given; a parameter for the same
+        reason (the CLI names the project's folder, or ``~/.domyn``).
         """
 
         # Helper function for deep merging dictionaries
@@ -951,7 +957,9 @@ class ConfigurationV1(BaseModel):
             for bundle_name in agent_config.get("tool_bundles", []):
                 if bundle_name not in tool_bundles:
                     raise ValueError(f"Tool bundle '{bundle_name}' not found in configuration")
-                built = tool_bundles[bundle_name].build(extra_roots=extra_workspace_roots)
+                built = tool_bundles[bundle_name].build(
+                    extra_roots=extra_workspace_roots, state_dir=state_dir
+                )
                 agent_builtin_tools.append(built)
                 new_tools.extend(built.tools)
 

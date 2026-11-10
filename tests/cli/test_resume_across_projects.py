@@ -12,7 +12,7 @@ from domyn.agents.interfaces.cli.repl import APPLICATION_NAME, USER_ID
 async def _store(folder: Path, conversation_id: str) -> None:
     folder.mkdir(parents=True)
     (folder / config.CONFIG_FILENAME).write_text("version: '1.0'\n")
-    manager = SqliteConversationManager(path=str(folder / conversations.STORE_FILENAME))
+    manager = SqliteConversationManager(path=str(folder / config.PrivateFiles.CONVERSATIONS))
     await manager.create_conversation(APPLICATION_NAME, USER_ID, conversation_id)
 
 
@@ -39,4 +39,4 @@ async def test_a_project_without_history_is_skipped_and_not_created(
     (folder / config.CONFIG_FILENAME).write_text("version: '1.0'\n")
 
     assert await conversations.project_holding(APPLICATION_NAME, USER_ID, "conv_a") is None
-    assert not (folder / conversations.STORE_FILENAME).exists()
+    assert not (folder / config.PrivateFiles.CONVERSATIONS).exists()

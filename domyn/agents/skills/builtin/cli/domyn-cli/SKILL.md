@@ -48,7 +48,7 @@ place of `~/.domyn/` entirely — see *Which configuration this session runs* be
 | `~/.domyn/state.yaml` | settings remembered between sessions (`verbose`, `auto_approve`), written by `/verbose`, `/auto`, Shift+Tab and `-v`. A project has its own in its folder. Never exported. Do not edit it to turn auto-approve on for the user: tell them to use `/auto` |
 | `~/.domyn/projects/<folder>-<hash>/approvals.yaml` | approvals for this project only, one file per directory the CLI starts in. `./.domyn/approvals.yaml` is not read. Not used when the CLI is started from the home directory itself |
 | `conversations.db` (next to the config) | saved conversations, used by `--resume` and `/resume` |
-| `<workspace>/.domyn/conversations/<id>/venv` | per-conversation virtualenv, when `isolate_environment` is on (`./.domyn/…` unless `workspace` is set) |
+| `conversations/<id>/` (next to `conversations.db`) | per-conversation virtualenv (`venv/`, when `isolate_environment` is on) and `output/`, in the project's folder or `~/.domyn`, never in the working directory. Beside it, `processes/<id>/` holds the logs of background commands and `browser/` the browser's saved pages. None of the three is exported or imported |
 | `.env` (working directory or a parent) | loaded at startup. Variables already set in the shell take precedence |
 | `~/.domyn/projects/<name>/` (or any folder given by path) | a project: its own `config.yaml`, `skills/`, `credentials` (a key it does not set is read from `~/.domyn/credentials`), approvals and `conversations.db`, laid out like `~/.domyn/`, and the instruction files its config lists. Created by `domyn setup --project <name>` or `domyn export` |
 
@@ -78,9 +78,11 @@ it.
 **What your file tools can reach.** The built-in file tools only work inside the
 workspace (by default the directory the CLI was started in) plus the skill
 directories known when the session started (only when the agent comes from a YAML
-config, the default one included; a `.py` agent gets no skill directories). `~/.domyn/config.yaml`
-and the user's own `SOUL.md` / `AGENTS.md` (the paths saved by `domyn setup`) are
-normally **outside** it, so `read_file` and `write_file` will refuse them; the ones in
+config, the default one included; a `.py` agent gets no skill directories). `~/.domyn/config.yaml`,
+the user's own `SOUL.md` / `AGENTS.md` (the paths saved by `domyn setup`) and the
+session's state beside the config (background commands' logs, a conversation's
+`output/`) are normally **outside** it, so `read_file` and `write_file` will refuse
+them; read a log with `check_command`, or `tail`/`grep` through `run_command`. The ones in
 `./.domyn` and `./.agents` are inside it. To work on them, use `run_command`
 (`cat ~/.domyn/config.yaml`, a small Python edit, …). It asks the user for approval
 first. If no shell tool is available, give the user the exact change to make by

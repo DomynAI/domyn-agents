@@ -53,6 +53,7 @@ from domyn.agents.interfaces.cli.config import (
     build_approval_policy,
     config_path,
     describe_configuration_v1,
+    home_dir,
     is_configuration_v1_usable,
     print_config_description,
     read_raw_config,
@@ -1412,7 +1413,9 @@ class Repl:
         workspace_roots = unique_paths([*config_skill_dirs, *runtime_skill_dirs])
         try:
             reloaded = await load_application_from_file(
-                str(config_path()), extra_workspace_roots=[str(d) for d in workspace_roots]
+                str(config_path()),
+                extra_workspace_roots=[str(d) for d in workspace_roots],
+                state_dir=str(home_dir()),  # as at startup: beside conversations.db
             )
         except Exception as exc:
             self._console.print(

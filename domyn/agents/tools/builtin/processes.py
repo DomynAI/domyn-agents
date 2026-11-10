@@ -20,7 +20,9 @@ operation is an ordinary shell command:
 
 That is what makes it portable — identical locally, against a remote executor
 and over ssh, with **no new backend method and nothing added to its API**. It
-also means `grep` and `read_file` already reach the logs.
+also means a shell command (`tail`, `grep`) already reaches the logs. The file tools
+do not, unless the state folder is in the workspace: outside a project it is
+``~/.domyn``, shared by every folder a session runs in.
 
 **The redirection is load-bearing, not tidiness.** A backend using
 `Popen(..., stdout=PIPE)` and `communicate()` returns when the *pipes close*,
@@ -44,9 +46,9 @@ import shlex
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
-from domyn.agents.tools.builtin.session import safe_id
+from domyn.agents.tools.builtin.session import HOME_DIRNAME, StateFolders, safe_id
 
 # How long the *call* waits before handing back a handle. Not how long the
 # process may live.
@@ -108,12 +110,15 @@ LOG_CHECK_EVERY_S = 30
 HEAD_BYTES = 20_000
 TAIL_BYTES = 20_000
 
-HOME = ".domyn/processes"
-"""Relative to the working directory the backend already uses: the workspace
-root locally, the backend's own working directory elsewhere. Processes are grouped
-below it, so one conversation cannot read another's logs through the file
-tools, and so everything a conversation left behind can be found — and one
-day removed — as a unit."""
+HOME = f"{HOME_DIRNAME}/{StateFolders.PROCESSES}"
+"""Where processes go by default: relative to the working directory the backend
+already uses, the workspace root locally, the backend's own working directory
+elsewhere. A backend that names its own state folder (``CommandBackend.state_dir``,
+the CLI's project folder or ``~/.domyn``) has them in ``<state_dir>/processes``
+instead. Processes are grouped below it by conversation, so
+everything a conversation left behind can be found — and one day removed — as a
+unit."""
+
 
 HANDLE = re.compile(r"[0-9a-f]{8}")
 """What every handle looks like: ``new_record`` makes them, four random bytes in
@@ -148,6 +153,12 @@ class ProcessRecord(BaseModel):
     cursor: int = 0
     """Bytes of stdout already shown to the model."""
     err_cursor: int = 0
+    home: str = Field(default=HOME, exclude=True)
+    """The processes folder, ``HOME`` or ``<backend.state_dir>/processes``. Never
+    stored: it is the backend's, supplied by whoever reads the record
+    (``registry``, ``new_record``), so a folder moved or a state written by a
+    session elsewhere never sends a command to an old place. Put into shell lines
+    quoted, like every path here."""
 
     @field_validator("handle")
     @classmethod
@@ -158,7 +169,7 @@ class ProcessRecord(BaseModel):
 
     @property
     def dir(self) -> str:
-        return f"{HOME}/{safe_id(self.conversation)}/{self.handle}"
+        return f"{self.home}/{safe_id(self.conversation)}/{self.handle}"
 
 
 class ProcessState(BaseModel):
@@ -197,9 +208,11 @@ class ProcessState(BaseModel):
     model_config = {"extra": "ignore"}
 
 
-def new_record(command: str, conversation: str = "") -> ProcessRecord:
+def new_record(command: str, conversation: str = "", *, home: str = HOME) -> ProcessRecord:
     """A record for a command that has not been started yet."""
-    return ProcessRecord(handle=secrets.token_hex(4), command=command, conversation=conversation)
+    return ProcessRecord(
+        handle=secrets.token_hex(4), command=command, conversation=conversation, home=home
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -324,8 +337,12 @@ def _report(record: ProcessRecord, *, from_cursor: bool) -> str:
 # that ran can be opened and read instead of reconstructed from memory.
 _WRAPPER = """#!/usr/bin/env bash
 # Written by domyn-agents. Runs detached; nothing waits for it.
-echo $$ > "{dir}/run.pid"
-ps -o pgid= -p $$ | tr -d ' ' > "{dir}/run.pgid"
+# The folder is assigned once, quoted, and read as "$D" everywhere: it can be any
+# absolute path (a project's folder), and inside double quotes `$` and `"` in it
+# would otherwise be shell.
+D={dir}
+echo $$ > "$D/run.pid"
+ps -o pgid= -p $$ | tr -d ' ' > "$D/run.pgid"
 
 # The backstop for the guarantee detaching gives up, inside the group it
 # polices: when it fires, the session that started it may be long closed.
@@ -353,13 +370,13 @@ ps -o pgid= -p $$ | tr -d ' ' > "{dir}/run.pgid"
 ( trap '' TERM
   waited=0
   while [ "$waited" -lt {max_lifetime} ]; do
-    [ -f "{dir}/run.exit" ] && exit 0
+    [ -f "$D/run.exit" ] && exit 0
     kill -0 $$ 2>/dev/null || exit 0
     sleep {watch_step}
     waited=$(( waited + {watch_step} ))
   done
-  [ -f "{dir}/run.exit" ] && exit 0
-  echo lifetime > "{dir}/run.killed"
+  [ -f "$D/run.exit" ] && exit 0
+  echo lifetime > "$D/run.killed"
   kill -TERM 0
   sleep {grace}
   kill -KILL 0 ) &
@@ -387,14 +404,14 @@ compact_once() {{
   # cannot cure. A lock released between the failed mkdir and the look is taken
   # at once: giving that pass up could skip the wrapper's last one, and leave
   # what the command wrote at its end above the cap.
-  until mkdir "{dir}/compact.lock" 2>/dev/null; do
-    if [ ! -d "{dir}/compact.lock" ]; then
-      mkdir "{dir}/compact.lock" 2>/dev/null && break
+  until mkdir "$D/compact.lock" 2>/dev/null; do
+    if [ ! -d "$D/compact.lock" ]; then
+      mkdir "$D/compact.lock" 2>/dev/null && break
       return 1
     fi
     sleep 0.1
   done
-  for f in "{dir}/out.log" "{dir}/err.log"; do
+  for f in "$D/out.log" "$D/err.log"; do
     s=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
     [ "${{s:-0}}" -gt {compact_at} ] || continue
     [ -s "$f.head" ] || head -c {head_bytes} "$f" > "$f.head"
@@ -405,20 +422,20 @@ compact_once() {{
       echo $(( prev + s - {tail_bytes} )) > "$f.cut"
     fi
   done
-  rmdir "{dir}/compact.lock"
+  rmdir "$D/compact.lock"
 }}
 
 # Leaves with the command, on the same two signs as the watchdog.
 ( while :; do
     sleep {check_every}
-    [ -f "{dir}/run.exit" ] && exit 0
+    [ -f "$D/run.exit" ] && exit 0
     kill -0 $$ 2>/dev/null || exit 0
     compact_once
   done ) &
 
 {stdin_open}env PYTHONUNBUFFERED=1 TERM=dumb COLORTERM= \
-    bash "{dir}/cmd.sh" >> "{dir}/out.log" 2>> "{dir}/err.log" {stdin_redirect}
-echo $? > "{dir}/run.exit"
+    bash "$D/cmd.sh" >> "$D/out.log" 2>> "$D/err.log" {stdin_redirect}
+echo $? > "$D/run.exit"
 
 # Once more, now that nothing is writing. The loop above leaves when the command
 # does, so without this everything written since its last pass would stay — and
@@ -484,18 +501,15 @@ def build_launch(
     as a hang, which is the worst shape for it to come back in.
     """
     d = shlex.quote(record.dir)
-    raw_dir = record.dir
     cmd = shlex.quote(record.command)
 
     # Opened, then immediately unlinked. A POSIX fd outlives the name, so the
     # command still reads every byte while nothing is left on disk for anyone —
     # this agent's own file tools included — to read afterwards. Without it the
     # answer to a prompt sits in the workspace until somebody deletes it.
-    stdin_open = (
-        f'exec 3< "{raw_dir}/stdin.in"\nrm -f "{raw_dir}/stdin.in"\n' if stdin is not None else ""
-    )
+    stdin_open = 'exec 3< "$D/stdin.in"\nrm -f "$D/stdin.in"\n' if stdin is not None else ""
     wrapper = _WRAPPER.format(
-        dir=raw_dir,
+        dir=d,
         max_lifetime=int(max_lifetime),
         grace=grace,
         check_every=LOG_CHECK_EVERY_S,
@@ -587,7 +601,7 @@ def build_sweep(records: list[ProcessRecord]) -> str:
     return "; ".join(parts)
 
 
-def build_discover(conversation: str = "") -> str:
+def build_discover(conversation: str = "", *, home: str = HOME) -> str:
     """Ask the machine what this conversation left running, without being told.
 
     ``build_sweep`` needs the records; this needs nothing. Each process has a
@@ -598,7 +612,7 @@ def build_discover(conversation: str = "") -> str:
     that loses the conversation's state used to orphan it permanently — still
     running, still writing, unreachable. Now it is one listing away.
     """
-    d = shlex.quote(f"{HOME}/{safe_id(conversation)}")
+    d = shlex.quote(f"{home}/{safe_id(conversation)}")
     return (
         f"for p in {d}/*/; do "
         f'[ -d "$p" ] || continue; '
@@ -872,8 +886,8 @@ def parse_report(output: str, record: ProcessRecord, *, from_cursor: bool) -> Pr
     )
 
 
-def registry(state: dict[str, Any] | None) -> dict[str, ProcessRecord]:
-    """The conversation's processes, read out of ``state``.
+def registry(state: dict[str, Any] | None, *, home: str = HOME) -> dict[str, ProcessRecord]:
+    """The conversation's processes, read out of ``state``, each in *home*.
 
     Follows ``CompactionRecord``: a malformed entry is dropped rather than
     raised on. Losing one costs the ability to poll that process — its files are
@@ -891,7 +905,7 @@ def registry(state: dict[str, Any] | None) -> dict[str, ProcessRecord]:
         return {}
     for handle, raw in entries.items():
         try:
-            out[handle] = ProcessRecord.model_validate(raw)
+            out[handle] = ProcessRecord.model_validate(raw).model_copy(update={"home": home})
         except Exception:
             continue
     return out
@@ -905,9 +919,10 @@ MAX_RECORDS = 32
 
 
 def refresh(
-    state: dict[str, Any] | None, observed: dict[str, dict[str, Any]]
+    state: dict[str, Any] | None, observed: dict[str, dict[str, Any]], *, home: str = HOME
 ) -> list[ProcessRecord]:
-    """Fold a sweep back into the registry and return what is still alive.
+    """Fold a sweep back into the registry and return what is still alive, each in
+    *home*, as `registry` reads them.
 
     The cap is enforced against the live count, which is only as fresh as the
     last time anybody looked — and nothing looks on its own. So a conversation
@@ -922,7 +937,7 @@ def refresh(
             record.finished = True
         remember(state, record)
     prune(state)
-    return [r for r in registry(state).values() if not r.finished]
+    return [r for r in registry(state, home=home).values() if not r.finished]
 
 
 def prune(state: dict[str, Any] | None) -> None:
@@ -1085,7 +1100,7 @@ def describe(state: ProcessState, *, following: bool, command: str = "") -> str:
             f"It keeps running whatever you do next. Check it again with "
             f'check_command("{state.handle}"), stop it with '
             f'stop_command("{state.handle}").\n'
-            f"Full log: {state.log_path}"
+            f"Full log (read it with tail or grep through run_command): {state.log_path}"
         )
     if command:
         head += f"\n(handle `{state.handle}` — for these tools, and for the person's /stop)"
