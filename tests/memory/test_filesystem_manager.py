@@ -26,7 +26,9 @@ class TestFilesystemMemoryManager:
     @pytest.fixture
     def temp_file(self):
         """Create a temporary file for testing."""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".jsonl") as f:
+        with tempfile.NamedTemporaryFile(
+            encoding="utf-8", mode="w", delete=False, suffix=".jsonl"
+        ) as f:
             temp_path = f.name
         yield temp_path
         # Cleanup
@@ -89,7 +91,7 @@ class TestFilesystemMemoryManager:
         # Verify file was created and contains the memory
         assert os.path.exists(temp_file)
 
-        with open(temp_file) as f:
+        with open(temp_file, encoding="utf-8") as f:
             content = f.read().strip()
             assert sample_memory.user_id in content
             assert sample_memory.memory in content
@@ -320,7 +322,7 @@ class TestFilesystemMemoryManager:
     async def test_malformed_lines_handling(self, memory_manager, temp_file):
         """Test handling of malformed JSON lines in file."""
         # Write a malformed line to the file
-        with open(temp_file, "w") as f:
+        with open(temp_file, "w", encoding="utf-8") as f:
             f.write('{"invalid": "json"}\n')
             f.write("invalid line\n")
 
@@ -408,3 +410,41 @@ class TestFilesystemMemoryManager:
         memories = await memory_manager.recall_memories("user1", recency_limit=100)
         assert len(memories) == 1
         assert memories[0].memory == "Post-reset memory"
+
+
+class TestRewritesStayBesideTheFile:
+    """Deleting and resetting rewrite the file through a temporary one, swapped in
+    with ``os.replace``, which cannot cross drives (``C:`` temp, a project on
+    ``D:``) or file systems (``/tmp`` as tmpfs). The temporary file goes beside the
+    memory file, so the system's temp folder is never involved."""
+
+    @staticmethod
+    async def _one_memory(manager: FilesystemMemoryManager) -> str:
+        agent = Mock(spec=BaseAgent)
+        agent.name = "a"
+        agent.sub_agents = []
+        await manager.write_single_memory(user_id="u", agent=agent, memory_content="m")
+        return (await manager.recall_memories("u"))[0].id
+
+    @pytest.fixture
+    def no_system_temp(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Unusable, as a temp folder on another drive is to os.replace.
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "no-such-temp"))
+
+    @pytest.mark.asyncio
+    async def test_delete(self, tmp_path: Path, no_system_temp: None) -> None:
+        manager = FilesystemMemoryManager(file_path=str(tmp_path / "memory.jsonl"))
+        memory_id = await self._one_memory(manager)
+
+        assert await manager.delete_memory(memory_id) is True
+        assert await manager.recall_memories("u") == []
+
+    @pytest.mark.asyncio
+    async def test_reset(self, tmp_path: Path, no_system_temp: None) -> None:
+        manager = FilesystemMemoryManager(file_path=str(tmp_path / "memory.jsonl"))
+        await self._one_memory(manager)
+
+        await manager.reset_memory("u")
+
+        assert await manager.recall_memories("u") == []
+        assert [p.name for p in tmp_path.iterdir()] == ["memory.jsonl"]

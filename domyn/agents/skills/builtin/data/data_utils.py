@@ -398,7 +398,8 @@ def safe_name(text: str) -> str:
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     """Write JSON, turning numpy scalars into plain numbers."""
     path.write_text(
-        json.dumps(payload, indent=2, default=lambda o: o.item() if hasattr(o, "item") else str(o))
+        json.dumps(payload, indent=2, default=lambda o: o.item() if hasattr(o, "item") else str(o)),
+        encoding="utf-8",
     )
 
 

@@ -201,9 +201,7 @@ def modify_pyproject_toml(
         typer.echo("pyproject.toml not found. uv init may have failed.", err=True)
         return
 
-    pyproject: tomlkit.TOMLDocument | None = None
-    with open(pyproject_file) as f:
-        pyproject = tomlkit.load(f)
+    pyproject = tomlkit.parse(pyproject_file.read_text(encoding="utf-8"))
 
     # The line editor (completion, history, multiline) for ``uv run domyn run``.
     pyproject["project"]["dependencies"].add_line(DOMYN_AGENTS_REQUIREMENT)  # type: ignore
@@ -226,8 +224,7 @@ def modify_pyproject_toml(
         uv["sources"] = sources
         sources.append("domyn", tomlkit.inline_table().add("path", path).add("editable", True))
 
-    with open(pyproject_file, "w") as f:
-        tomlkit.dump(pyproject, f)
+    pyproject_file.write_text(tomlkit.dumps(pyproject), encoding="utf-8")
 
     typer.echo(f"Updated pyproject.toml with {DOMYN_AGENTS_REQUIREMENT} dependency")
 
