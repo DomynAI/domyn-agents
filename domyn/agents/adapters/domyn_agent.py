@@ -339,7 +339,11 @@ class DomynAgentAdapter:
             logger.error(
                 "DomynAgentAdapter: invocation failed request_id=%s: %s",
                 request_id,
-                exc,
+                type(exc).__name__,
+            )
+            logger.debug(
+                "DomynAgentAdapter: invocation failure detail request_id=%s",
+                request_id,
                 exc_info=True,
             )
             done = BaseEvent(

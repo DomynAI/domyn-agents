@@ -364,7 +364,8 @@ async def _patched_handle_refresh_response(
         await self.context.storage.set_tokens(token_response)
         return True
     except PydanticValidationError:
-        _mcp_oauth2.logger.exception("Invalid refresh response")
+        _mcp_oauth2.logger.error("Invalid refresh response")
+        _mcp_oauth2.logger.debug("Invalid refresh response detail", exc_info=True)
         self.context.clear_tokens()
         return False
 

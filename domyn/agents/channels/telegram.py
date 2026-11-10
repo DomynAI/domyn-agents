@@ -123,7 +123,8 @@ class TelegramChannel:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                logger.warning("TelegramChannel: getUpdates failed: %s", exc)
+                logger.warning("TelegramChannel: getUpdates failed: %s", type(exc).__name__)
+                logger.debug("TelegramChannel: getUpdates failure detail", exc_info=True)
                 await asyncio.sleep(5)
                 continue
 
@@ -188,8 +189,9 @@ class TelegramChannel:
             logger.warning(
                 "TelegramChannel: failed to send message to chat_id=%s: %s",
                 conversation_id,
-                exc,
+                type(exc).__name__,
             )
+            logger.debug("TelegramChannel: send failure detail", exc_info=True)
 
 
 async def _message_to_parts(bot: "telegram.Bot", message: "telegram.Message") -> list[Part]:
@@ -230,7 +232,10 @@ async def _message_to_parts(bot: "telegram.Bot", message: "telegram.Message") ->
             if tg_file.file_path:
                 parts.append(Part(file=File(file_id=tg_file.file_path, type=file_type)))
         except Exception as exc:
-            logger.warning("TelegramChannel: failed to resolve file_id=%s: %s", file_id, exc)
+            logger.warning(
+                "TelegramChannel: failed to resolve file_id=%s: %s", file_id, type(exc).__name__
+            )
+            logger.debug("TelegramChannel: file resolution failure detail", exc_info=True)
 
     if caption:
         parts.append(Part(text=caption))
