@@ -35,7 +35,7 @@ jobs:
       fail-fast: false  # one broken platform does not stop the others
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
           # The Linux archives need glibc 2.33+ (cryptography's wheels), whatever
           # the runner: Ubuntu 22.04+, Debian 12+, RHEL 9+.

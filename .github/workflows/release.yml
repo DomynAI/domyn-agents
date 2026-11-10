@@ -99,7 +99,7 @@ jobs:
     # `pypi` environment, so no token is stored. It must run here, not in a
     # called workflow, which PyPI does not accept as a trusted publisher.
     environment:
-      name: pypi
+      name: ${{ contains(github.ref_name, 'a') && 'pypi-nightly' || 'pypi' }}
       url: https://pypi.org/project/domyn/
     permissions:
       id-token: write
