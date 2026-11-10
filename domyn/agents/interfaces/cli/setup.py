@@ -4,9 +4,9 @@ Reachable as ``domyn setup`` and as ``/model`` / ``/config`` inside a session, s
 settings can be changed without leaving the conversation — the thing that makes a
 CLI feel usable rather than merely functional.
 
-On a re-run each section — model, instructions, tools, skills, and the decision model
-when the config declares one — first shows what the config holds and asks whether to
-keep it (`_keep`); a yes skips its questions, so
+On a re-run each section — model, instructions, tools, skills, the decision model
+when the config declares one, memory — first shows what the config holds and asks
+whether to keep it (`_keep`); a yes skips its questions, so
 changing one section costs an Enter for each of the others. Every prompt shows the
 current value and accepts empty input to keep it. The one exception is
 the instructions path, where empty removes it (`_choose_instructions`); the question
@@ -65,6 +65,7 @@ from domyn.agents.interfaces.cli.config import (
     current_settings_from,
     decision_url_default,
     describe_configuration_v1,
+    describe_memory,
     describe_project,
     expand_project_dir,
     find_api_key,
@@ -215,6 +216,7 @@ class _Draft:
     keep_tools: bool = False
     keep_skills: bool = False
     keep_decisions: bool = False
+    keep_memory: bool = False
     provider_type: str = ""
     model_name: str = ""
     url: str = ""
@@ -1575,8 +1577,9 @@ def run_setup(
     Returns the saved config (the dict actually written), or ``None`` if the
     user aborted.
 
-    On a re-run each section (model, instructions, tools, skills, and a declared decision model) first shows what
-    the config holds and asks whether to keep it; a yes skips its questions. Not on
+    On a re-run each section (model, instructions, tools, skills, a declared decision
+    model, memory) first shows what the config holds and asks whether to keep it; a
+    yes skips its questions. Not on
     a ``provider_only`` run, whose point is changing the model, and not for a model
     the config leaves incomplete. Keeping the skills does not reinstall
     ``~/.domyn/builtin-skills``, so built-in skills changed by an upgrade arrive only on a
@@ -1862,8 +1865,7 @@ def run_setup(
             decision_url_default(main_type, main_url),
         )
 
-    def ask_memory(d: _Draft) -> None:
-        d.memory = _ask_memory(console, theme, current_memory_from(existing))
+    def say_if_memory_loses_its_decider(d: _Draft) -> None:
         if memory_loses_its_decider(existing, d.decisions, d.memory):
             console.print(
                 "  without a decision model the agent saves memories itself, "
@@ -1872,15 +1874,34 @@ def run_setup(
                 highlight=False,
             )
 
+    def keep_memory(d: _Draft) -> None:
+        d.keep_memory = _keep(console, theme, "memory settings", describe_memory(existing))
+        if d.keep_memory:
+            # The scope the file has and no decider: the memory manager is kept as
+            # written (`_apply_memory`), unless this run removed the decision model
+            # deciding for it, which makes it the agent's (`memory_loses_its_decider`).
+            d.memory = MemoryChoice(scope=current_memory_from(existing).scope)
+            say_if_memory_loses_its_decider(d)
+
+    def ask_memory(d: _Draft) -> None:
+        d.memory = _ask_memory(console, theme, current_memory_from(existing))
+        say_if_memory_loses_its_decider(d)
+
+    def decisions_after(d: _Draft) -> DecisionsChoice | None:
+        # A kept decision model leaves `d.decisions` as `None`: the file's is in force.
+        return current_decisions if d.keep_decisions else d.decisions
+
     def ask_memory_decider(d: _Draft) -> None:
-        assert d.memory is not None and d.decisions is not None
+        decisions = decisions_after(d)
+        assert d.memory is not None and decisions is not None
         decided_by = _ask_memory_decider(
-            console, theme, current_memory_from(existing).decided_by, d.decisions
+            console, theme, current_memory_from(existing).decided_by, decisions
         )
         d.memory = d.memory.model_copy(update={"decided_by": decided_by})
 
     def asks_memory_decider(d: _Draft) -> bool:
-        return bool(d.memory and d.memory.enabled and d.decisions and d.decisions.enabled)
+        decisions = decisions_after(d)
+        return bool(d.memory and d.memory.enabled and decisions and decisions.enabled)
 
     def asks_model(d: _Draft) -> bool:
         return not d.keep_model
@@ -1937,8 +1958,13 @@ def run_setup(
         # Kept, `draft.decisions` stays `None`, which leaves the file's decision model
         # exactly as written, hand-tuned thresholds included (`_apply_decisions`).
         _Step("decisions", ask_decisions, lambda d: not d.keep_decisions),
-        _Step("memory", ask_memory),
-        _Step("memory decider", ask_memory_decider, asks_memory_decider),
+        _Step("keep memory", keep_memory, lambda d: ask_keep),
+        _Step("memory", ask_memory, lambda d: not d.keep_memory),
+        _Step(
+            "memory decider",
+            ask_memory_decider,
+            lambda d: not d.keep_memory and asks_memory_decider(d),
+        ),
     ]
     steps = model_steps if provider_only else [*model_steps, *section_steps]
 

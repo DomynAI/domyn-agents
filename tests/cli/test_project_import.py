@@ -558,7 +558,7 @@ class TestTheCommand:
 
         assert result.exit_code == 0, result.output
         # Asked as on a re-run, each section showing what the export brought.
-        assert keep.asked == ["model", "instructions", "tools", "skills"]
+        assert keep.asked == ["model", "instructions", "tools", "skills", "memory settings"]
         # Named after the imported folder, under ~/.domyn/projects.
         project = cfg.project_dir(exported.name)
         saved = yaml.safe_load((project / cfg.CONFIG_FILENAME).read_text())

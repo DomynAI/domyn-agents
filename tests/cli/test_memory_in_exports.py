@@ -253,7 +253,10 @@ class TestTheImportedProjectsSetup:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dest: Path, answer: str
     ) -> list[MemoryChoice]:
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(cli_setup, "_keep", lambda *a, **k: True)
+        # Every other section kept: the memory question is what is tested.
+        monkeypatch.setattr(
+            cli_setup, "_keep", lambda c, t, section, *a, **k: section != "memory settings"
+        )
         monkeypatch.setattr(select_mod, "_interactive", lambda theme: False)
         script: list[str] = []
         monkeypatch.setattr("builtins.input", lambda *_: script.pop(0) if script else "")
