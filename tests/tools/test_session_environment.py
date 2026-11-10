@@ -159,14 +159,15 @@ class TestTheEnvironmentHandedToCommands:
         under `uv run` it comes first — `python` would keep resolving to the
         runtime the agent is supposed to be isolated from."""
         launcher = tmp_path / "launcher"
+        launcher_bin = launcher / ("Scripts" if os.name == "nt" else "bin")
         env = environment_for(
             self._paths(tmp_path),
             {
                 "VIRTUAL_ENV": str(launcher),
-                "PATH": os.pathsep.join([str(launcher / "bin"), "/usr/bin"]),
+                "PATH": os.pathsep.join([str(launcher_bin), "/usr/bin"]),
             },
         )
-        assert str(launcher / "bin") not in env["PATH"].split(os.pathsep)
+        assert str(launcher_bin) not in env["PATH"].split(os.pathsep)
 
     def test_virtual_env_points_at_the_conversation(self, tmp_path: Path) -> None:
         env = environment_for(self._paths(tmp_path), {})
@@ -249,7 +250,8 @@ class TestThroughTheBackend:
 
         backend = build_backend("local", Workspace.at(tmp_path))
         result = await backend.run('echo "$VIRTUAL_ENV"', timeout=60, conversation_id="c1")
-        assert "conversations/c1/venv" in result.stdout
+        # A Windows path on Windows: compared with forward slashes.
+        assert "conversations/c1/venv" in result.stdout.replace("\\", "/")
 
     @pytest.mark.asyncio
     async def test_isolation_can_be_turned_off(self, tmp_path: Path) -> None:

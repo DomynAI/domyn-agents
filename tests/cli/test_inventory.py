@@ -450,9 +450,11 @@ class TestAutodiscoverCommand:
 
         await repl.run()
 
+        # The autodiscovery entries are written with forward slashes, as
+        # `.domyn/skills` is, so a config reads the same on every system.
         assert self._paths(config) == [
-            str(folders / "domyn-local"),
-            str(folders / "agents-local"),
+            (folders / "domyn-local").as_posix(),
+            (folders / "agents-local").as_posix(),
             str(folders / "skills"),
         ]
         text = out.getvalue()

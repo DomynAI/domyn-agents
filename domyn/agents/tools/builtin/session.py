@@ -153,8 +153,14 @@ def _ignore_from_version_control(conversations: Path) -> None:
     a link included even when it leads nowhere: the folder is in the project, so
     a cloned repository can commit ``.gitignore`` as a link, and writing through
     it would create a file wherever it points.
+
+    On Windows that is not enough: creating a file over a link that leads nowhere
+    follows it and creates the target (measured in CI). So any name already there,
+    a dangling link included (lexists), is left alone first.
     """
     marker = conversations / ".gitignore"
+    if os.path.lexists(marker):
+        return
     with contextlib.suppress(OSError), open(marker, "x", encoding="utf-8") as f:
         f.write("# Created by domyn: per-conversation working state.\n*\n")
 

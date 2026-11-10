@@ -1250,7 +1250,7 @@ agents:
     skills:
       source:
         type: local_dir
-        paths: ["{skills_dir}"]
+        paths: ["{skills_dir.as_posix()}"]
   - name: Orchestrator
     description: coordinator
     instruction: delegate

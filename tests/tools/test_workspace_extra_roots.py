@@ -135,4 +135,4 @@ class TestWhatTheErrorAndTheDisplaySay:
         work, skills = places
         space = Workspace.at(work, also=[skills])
         shown = space.display(skills / "a-skill" / "SKILL.md")
-        assert shown == str(skills / "a-skill" / "SKILL.md")
+        assert shown == (skills / "a-skill" / "SKILL.md").as_posix()

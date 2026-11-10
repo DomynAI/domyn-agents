@@ -405,7 +405,7 @@ class TestSearchStaysInsideTheWorkspace:
         out = await _call(extra, "glob_files", pattern="plotly_style.py", path=str(skills))
         deep = await _call(extra, "glob_files", pattern="**/*.md", path=str(skills))
 
-        assert out == str(skills.resolve() / "plotly_style.py")
+        assert out == (skills.resolve() / "plotly_style.py").as_posix()
         assert "SKILL.md" in deep
 
     @pytest.mark.asyncio

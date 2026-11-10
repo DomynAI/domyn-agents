@@ -414,7 +414,7 @@ class TestTheStartupWarning:
         warning = _missing_skills_warning(_agent(llm_provider, [gone]))
 
         assert warning is not None
-        assert f"Skill not found: {gone}" in warning
+        assert f"Skill not found: {gone.as_posix()}" in warning
         assert "Relative paths" not in warning
         assert "Run `domyn setup` to update" in warning
 
@@ -510,7 +510,7 @@ class TestTheStartupWarning:
         warning = _missing_skills_warning(_agent(llm_provider, [link]))
 
         assert warning is not None
-        assert f"symbolic link (links are not followed): {link}" in warning
+        assert f"symbolic link (links are not followed): {link.as_posix()}" in warning
         assert "Skill not found" not in warning
 
     def test_a_symlinked_path_listed_by_hand_is_named_too(
@@ -522,7 +522,7 @@ class TestTheStartupWarning:
         warning = _missing_skills_warning(_agent(llm_provider, [tmp_path / "review"]))
 
         assert warning is not None
-        assert "symbolic link" in warning and str(tmp_path / "review") in warning
+        assert "symbolic link" in warning and (tmp_path / "review").as_posix() in warning
 
     def test_an_agent_with_no_skills_prints_nothing(self, llm_provider: Any) -> None:
         assert _missing_skills_warning(_agent(llm_provider)) is None

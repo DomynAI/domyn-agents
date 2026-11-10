@@ -419,7 +419,7 @@ class TestTheProjectSkillsPicker:
         result = cli_setup._choose_project_skills(_console(), THEME, skills, project)
 
         assert result is not None
-        assert result["source"]["paths"] == [builtin, f"{folder}/poem"]
+        assert result["source"]["paths"] == [builtin, str(Path(folder) / "poem")]
 
     def test_nothing_ticked_lists_nothing(
         self, imported: tuple[Path, dict[str, Any]], picker: dict[str, Any]
