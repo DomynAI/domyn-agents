@@ -488,6 +488,40 @@ class TestWriting:
         assert "print('hello')" in (workspace.root / "app.py").read_text(), "left untouched"
 
 
+class TestWritingThroughHardLinks:
+    """A hard link is a second name for the same file, so it has nothing for
+    `Workspace.resolve` to follow: the name is inside the workspace, the file
+    may also be one outside it, and a write through it changes both."""
+
+    @pytest.mark.parametrize(
+        ("tool", "arguments"),
+        [
+            ("write_file", {"content": "changed\n"}),
+            ("append_file", {"content": "changed\n"}),
+            ("edit_file", {"old": "secret", "new": "changed"}),
+        ],
+        ids=["write_file", "append_file", "edit_file"],
+    )
+    @pytest.mark.asyncio
+    async def test_no_write_tool_changes_a_file_outside_through_a_hard_link(
+        self,
+        tools: dict,
+        workspace: Workspace,
+        tmp_path_factory: pytest.TempPathFactory,
+        tool: str,
+        arguments: dict,
+    ) -> None:
+        outside = tmp_path_factory.mktemp("outside") / "secret.txt"
+        outside.write_text("secret\n")
+        (workspace.root / "linked.txt").hardlink_to(outside)
+
+        out = await _call(tools, tool, path="linked.txt", **arguments)
+
+        assert out.startswith("ERROR"), out
+        assert "hard link" in out
+        assert outside.read_text() == "secret\n"
+
+
 class TestShell:
     @pytest.mark.asyncio
     async def test_it_runs_and_returns_the_exit_code(self, tools: dict) -> None:

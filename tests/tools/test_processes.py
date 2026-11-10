@@ -986,6 +986,39 @@ class TestTheFilesystemIsTheTruth:
         assert "sleep 30" in str(listed.data)
 
 
+class TestADirectoryNameIsNotAHandle:
+    """The listing reads handles back from directory names, and handles are put
+    into shell lines, some inside double quotes. `list_commands` and
+    `check_command` ask no approval, so a directory named after a command would
+    run it unseen: only names shaped like the handles `new_record` makes count.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_planted_directory_runs_nothing(self, tmp_path: Path) -> None:
+        planted = tmp_path / processes.HOME / "c1" / "x$(touch${IFS}PWNED)"
+        planted.mkdir(parents=True)
+        (planted / "out.log").write_text("")
+        (planted / "run.started").write_text("0")
+        (planted / "cmd.sh").write_text("ls")
+        tools = {t.name: t for t in bundle("shell", root=tmp_path)}
+
+        listed = await tools["list_commands"].execute(state={}, conversation_id="c1")
+        await _call(
+            tools["check_command"],
+            handle="x$(touch${IFS}PWNED)",
+            state=listed.state,
+            conversation_id="c1",
+        )
+
+        assert processes.registry(listed.state) == {}
+        assert not (tmp_path / "PWNED").exists()
+
+    def test_a_tampered_record_in_state_is_dropped(self) -> None:
+        record = processes.new_record("ls").model_dump()
+        record["handle"] = "x$(touch${IFS}PWNED)"
+        assert processes.registry({"background_processes": {record["handle"]: record}}) == {}
+
+
 class TestTheLogCannotGrowForever:
     """A run nobody is watching must not be able to fill a disk.
 

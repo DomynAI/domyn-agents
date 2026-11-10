@@ -62,10 +62,34 @@ def output_dir(out: Path) -> Path:
     The run folder itself holds only report.md, which the agent writes, so a reader
     opening it sees the report first and the evidence one level down. A path that is
     already the files folder (a copied script rerun from run.sh) is used as it is.
+
+    No link is written through. The scripts write here by name, so a link planted in the
+    folder (committed to a cloned repository, say) would have them overwrite the file it
+    leads to, wherever it is, and record_run would first copy that file's lines into
+    run.sh. So the files folder, its fonts folder and everything in both are checked
+    before anything is read or written: a symlink, or a file with another name on disk (a
+    hard link), stops the script. The run folder itself is the path the user gave, and is
+    followed like any other.
     """
+    named = out if out.name == FILES_DIR else out / FILES_DIR
+    if named.is_symlink():
+        sys.exit(
+            f"{named} is a link, and the scripts write only into a folder of their own: "
+            "use a new --out folder."
+        )
     out = out.resolve()
     files = out if out.name == FILES_DIR else out / FILES_DIR
     files.mkdir(parents=True, exist_ok=True)
+    fonts = files / FONTS_DIR
+    entries = list(files.iterdir())
+    if fonts.is_dir() and not fonts.is_symlink():
+        entries += list(fonts.iterdir())
+    linked = [p for p in entries if p.is_symlink() or (p.is_file() and p.stat().st_nlink > 1)]
+    if linked:
+        sys.exit(
+            f"{files} holds links, which the scripts would write through to files elsewhere: "
+            f"{', '.join(str(p) for p in linked)}. Use a new --out folder."
+        )
     return files
 
 

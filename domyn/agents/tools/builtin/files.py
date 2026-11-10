@@ -311,6 +311,24 @@ def _too_large(path: str, size: int) -> WorkspaceError:
     )
 
 
+def _refuse_hard_link(path: str, resolved: Path) -> None:
+    """Refuse to write a file that has another name on disk.
+
+    ``Workspace.resolve`` follows symlinks and ``..``, but a hard link has
+    nothing to follow: the name is inside the workspace, the data may also be a
+    file outside it, and writing through one name changes both. Checked before
+    anything reads the file, so the file outside is not read either. A file
+    that does not exist yet has no other name, and a directory always has more
+    than one, so only existing files are checked.
+    """
+    if resolved.is_file() and resolved.stat().st_nlink > 1:
+        raise WorkspaceError(
+            f"'{path}' is a hard link: the same file also has another name, possibly "
+            "outside the workspace, and writing here would change it there too. "
+            "Write to a new file instead."
+        )
+
+
 def _refuse_text_over_document(path: str, resolved: Path) -> None:
     """Refuse to write text over a document, which ``read_file`` shows converted.
 
@@ -624,6 +642,7 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
             content: The full new contents of the file.
         """
         resolved = workspace.resolve(path)
+        _refuse_hard_link(path, resolved)
         _refuse_text_over_document(path, resolved)
         resolved.parent.mkdir(parents=True, exist_ok=True)
         existed = resolved.exists()
@@ -642,6 +661,7 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
             content: Text to add at the end.
         """
         resolved = workspace.resolve(path)
+        _refuse_hard_link(path, resolved)
         _refuse_text_over_document(path, resolved)
         resolved.parent.mkdir(parents=True, exist_ok=True)
         with resolved.open("a", encoding="utf-8") as handle:
@@ -660,6 +680,7 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
             new: Text to put in its place.
         """
         resolved = workspace.resolve(path, must_exist=True)
+        _refuse_hard_link(path, resolved)
         _refuse_text_over_document(path, resolved)
         content = _read_text(path, workspace)
         occurrences = content.count(old)
