@@ -17,7 +17,8 @@ The setup wizard asks which sets of tools the agent gets, with all three ticked 
 | `files` | `read_file`, `list_dir`, `glob_files`, `grep` | Never asked: they only read |
 | | `write_file`, `append_file`, `edit_file` | Asked for every file |
 | `shell` | `run_command` | Asked for every command |
-| `browser` | `browser_open`, `browser_snapshot`, `browser_read`, `browser_scroll`, `browser_back` | Never asked: they open and read pages |
+| `browser` | `browser_snapshot`, `browser_read`, `browser_scroll`, `browser_back` | Never asked: they read the page that is open |
+| | `browser_open` | Asked for every page |
 | | `browser_click`, `browser_type`, `browser_press` | Asked for every action |
 
 `read_file` also reads documents: PDF, Word, Excel, PowerPoint, OpenDocument, RTF and EPUB files are converted to text on your machine. A PDF is read page by page. A scanned page is read from the text its scanner recognized, when the scanner left it in the file; otherwise it is not read, nor is the content of a large image, and the agent is told which pages and images were left out.
@@ -49,7 +50,7 @@ The `browser` set drives a real browser through [agent-browser](https://github.c
 
 The first time the agent uses a browser tool and no Chrome or Chromium is found, domyn downloads Chrome for Testing (about 200 MB) into `~/.domyn/browsers/`, once, and says so. A Chrome you already have is used as it is. To use another browser, set `browser.executable_path`. On Linux, Chrome also needs system libraries (`libnss3` and a few others, or `agent-browser install --with-deps`).
 
-The agent opens a page, reads its text or the list of elements on it, scrolls and goes back without asking. Clicking, typing and pressing a key wait for your approval, which names the site and the element, such as `https://github.com :: click 'Sign in' [@e5]`. Before an approved action runs, the session checks that the browser is still on that page and that the element still has that name; if anything changed, nothing runs and the agent is told why. When the agent types into a field whose name looks like a password, a token or a card number, the approval shows how many characters it types, not the text.
+The agent reads the text of the open page or the list of elements on it, scrolls and goes back without asking. Opening a page waits for your approval, which names the site and the address, such as `https://github.com :: open 'https://github.com/docs'`. Clicking, typing and pressing a key wait for it too, naming the site and the element, such as `https://github.com :: click 'Sign in' [@e5]`. Before an approved action runs, the session checks that the browser is still on that page and that the element still has that name; if anything changed, nothing runs and the agent is told why. When the agent types into a field whose name looks like a password, a token or a card number, the approval shows how many characters it types, not the text. An address is not shortened that way: the approval shows it as the agent wrote it, parameters such as `?token=…` included, and a saved approval keeps it whole, so approving one address does not cover the same page with other parameters.
 
 What the browser may open:
 
@@ -75,7 +76,7 @@ The question comes with a numbered list of answers: choose one with the arrow ke
 
 A session started from your home directory offers no project choice, because your home directory is not a project.
 
-The pattern choice appears for commands and browser actions. For a command it proposes a pattern such as `$ git *`, which you can edit before saving; for a browser action, the whole site, such as `https://github.com :: *`, which covers every click, typing and key press on that site. A command made of several parts, such as `git pull && make`, is covered only when every part matches an approved pattern, so approving `$ git *` never approves `git status && rm -rf build`. Commands that run other commands, such as `bash`, `sudo` or `xargs`, never get a pattern proposed.
+The pattern choice appears for commands and browser actions. For a command it proposes a pattern such as `$ git *`, which you can edit before saving; for the browser, the whole site, such as `https://github.com :: *`. A pattern covers the kind of action it was approved on: approving it on a click covers every click on that site, not typing there or opening its pages, which ask the first time they come up. A command made of several parts, such as `git pull && make`, is covered only when every part matches an approved pattern, so approving `$ git *` never approves `git status && rm -rf build`. Commands that run other commands, such as `bash`, `sudo` or `xargs`, never get a pattern proposed.
 
 Approvals that last beyond the conversation are saved in your home directory, never in the project: `~/.domyn/approvals.yaml` for "always", and `~/.domyn/projects/` for a project. `/approvals` lists and removes them.
 

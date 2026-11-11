@@ -730,7 +730,59 @@ class TestGating:
     def test_exactly_the_actions_ask(self, fake: ScriptedBrowser, tmp_path: Any) -> None:
         tools = _tools(fake, tmp_path)
         gated = {n for n, t in tools.items() if n != "_built" and t.approval_type}
-        assert gated == {"browser_click", "browser_type", "browser_press"}
+        assert gated == {"browser_open", "browser_click", "browser_type", "browser_press"}
+
+    def test_opening_names_the_site_and_the_address(
+        self, fake: ScriptedBrowser, tmp_path: Any
+    ) -> None:
+        tools = _tools(fake, tmp_path)
+        assert _subject(tools, "browser_open", url=f"{SITE}/docs") == (
+            f"{SITE} :: open '{SITE}/docs'"
+        )
+        assert fake.lines == []
+
+    @pytest.mark.asyncio
+    async def test_a_grant_for_opening_covers_opening_that_site_only(
+        self, fake: ScriptedBrowser, tmp_path: Any
+    ) -> None:
+        tools = _tools(fake, tmp_path)
+        pattern = _pattern(tools, "browser_open", url=f"{SITE}/docs")
+        assert pattern == f"{SITE} :: *"
+
+        def request(subject: str) -> ApprovalRequest:
+            return ApprovalRequest(tool_name="browser_open", agent_name="A", subject=subject)
+
+        store = InMemoryApprovalStore()
+        await store.grant(
+            request(_subject(tools, "browser_open", url=f"{SITE}/docs")), pattern=pattern
+        )
+        assert await store.is_granted(request(_subject(tools, "browser_open", url=f"{SITE}/x")))
+        other = _subject(tools, "browser_open", url="https://evil.example/")
+        assert not await store.is_granted(request(other))
+        # An address on another site that carries the granted site's line.
+        spoof = _subject(tools, "browser_open", url=f"https://evil.example/?{SITE} :: open ")
+        assert not await store.is_granted(request(spoof))
+
+    @pytest.mark.asyncio
+    async def test_a_grant_is_for_the_tool_it_was_given_on(
+        self, fake: ScriptedBrowser, tmp_path: Any
+    ) -> None:
+        """A grant is keyed by tool: the site pattern given on a click covers
+        clicks, not typing and not opening."""
+        tools = _tools(fake, tmp_path)
+
+        def request(tool: str, **parameters: Any) -> ApprovalRequest:
+            return ApprovalRequest(
+                tool_name=tool, agent_name="A", subject=_subject(tools, tool, **parameters)
+            )
+
+        store = InMemoryApprovalStore()
+        await store.grant(
+            request("browser_click", **GO), pattern=_pattern(tools, "browser_click", **GO)
+        )
+        assert await store.is_granted(request("browser_click", **GO))
+        assert not await store.is_granted(request("browser_type", **NAME, text="Ada"))
+        assert not await store.is_granted(request("browser_open", url=f"{SITE}/x"))
 
     def test_the_prompt_names_the_site_and_the_element(
         self, fake: ScriptedBrowser, tmp_path: Any
@@ -781,6 +833,8 @@ class TestGating:
         subject = _subject(tools, "browser_click", **{**GO, "url": url})
         assert subject.startswith("(invalid url) :: click")
         assert _pattern(tools, "browser_click", **{**GO, "url": url}) is None
+        assert _subject(tools, "browser_open", url=url).startswith("(invalid url) :: open")
+        assert _pattern(tools, "browser_open", url=url) is None
 
     def test_text_typed_into_a_secret_field_is_not_repeated(
         self, fake: ScriptedBrowser, tmp_path: Any

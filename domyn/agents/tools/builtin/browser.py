@@ -55,8 +55,9 @@ Lightpanda 1.0.0-nightly, macOS arm64, every command through
 * **Configuration files are code.** Both ``./agent-browser.json`` in the
   working directory (the workspace root) and ``~/.agent-browser/config.json``
   are applied, and either can name an executable, extensions, init scripts or
-  plugins. A cloned repository would get code run on the first, ungated
-  ``browser_open``. ``--config`` replaces both, so every command passes
+  plugins. A cloned repository would get code run on the first
+  ``browser_open``, whose approval names a site and not what the browser
+  loads. ``--config`` replaces both, so every command passes
   ``/dev/stdin`` with ``{}`` piped in. A missing or invalid file is an error
   (``/dev/null`` is one), and a file written in the workspace would be one a
   repository can replace with a symlink. The daemon reads it once, at launch.
@@ -158,6 +159,17 @@ def type_subject(
     return f"{_site(url)} :: type {typed} into {_target(ref, name)}{enter}"
 
 
+def open_subject(url: str = "", **_: Any) -> str:
+    """The address as written, parameters included: the line is the key an
+    exact grant is stored under, so two addresses that differ in a parameter
+    are two grants. The one exception is a run of spaces, which counts as one
+    in every subject (``_flat``, ``approvals/subject.py``): two addresses that
+    differ only there share a grant. Nothing is hidden: hiding a value would
+    make one grant cover every value of it, and the address is in the
+    conversation's history either way."""
+    return f"{_site(url)} :: open {url!r}"
+
+
 def press_subject(url: str = "", key: str = "", **_: Any) -> str:
     return f"{_site(url)} :: press {key!r}"
 
@@ -175,9 +187,10 @@ def browser_tools(
 ) -> tuple[list[Any], BrowserSessions]:
     """The browser tools, and the sessions behind them so a caller can close them.
 
-    Split by risk, like the file tools: reading the page is ungated, acting on
-    it is gated per site. Opening a page is ungated and fenced by the URL
-    policy instead — asking before every site would be asking before reading.
+    Split by risk, like the file tools: reading the page that is open is
+    ungated, opening one and acting on it are gated per site. A grant is kept
+    per tool: one for opening pages of a site covers no click on them. The URL
+    policy fences every open, approved or not.
     """
     from domyn.agents.tools.function_tool import FunctionTool
 
@@ -294,6 +307,7 @@ def browser_tools(
         return result
 
     gated: dict[str, Callable[..., str]] = {
+        "browser_open": open_subject,
         "browser_click": click_subject,
         "browser_type": type_subject,
         "browser_press": press_subject,
@@ -325,6 +339,7 @@ __all__ = [
     "browser_tools",
     "claimed_origin",
     "click_subject",
+    "open_subject",
     "press_subject",
     "site_pattern",
     "type_subject",
