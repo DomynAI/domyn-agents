@@ -318,8 +318,12 @@ class GitBashBackend(LocalBackend):
             await asyncio.wait_for(killer.wait(), timeout=_REAP_TIMEOUT_S)
         with contextlib.suppress(ProcessLookupError):
             process.kill()
+        # communicate, not wait: asyncio closes the transport once the process
+        # has exited and both pipes have reached their end, and on Windows the
+        # pipes get there after the exit. Left half way, the transport outlived
+        # the event loop and Python printed "Event loop is closed" on exit.
         with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(process.wait(), timeout=_REAP_TIMEOUT_S)
+            await asyncio.wait_for(process.communicate(), timeout=_REAP_TIMEOUT_S)
 
 
 async def _terminate_tree(process: asyncio.subprocess.Process) -> None:
