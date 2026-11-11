@@ -56,7 +56,7 @@ From a Python file, the agent is the one that is not a sub-agent of another; fro
 | `--resume` | flag | off | Continues a past conversation: `--resume <conversation_id>`, or `--resume` alone to choose one from a list. The id takes the place of `MESSAGE`, so the two cannot be combined. For a conversation started from a file, give the same `FILE`. Without `--project`, an id kept in a project's history is found there. |
 | `--expand-skills` | flag | off | Gives the model every [skill](../guides/skills.md) in full up front, instead of an index it reads from on demand. Uses more of the context window. |
 | `--skill-sections` | flag | off | Lists each skill's sections in the index. Uses more of the context window. |
-| `--verbose`, `-v` | flag | off | Shows internal events: model calls, hooks, hand-offs. |
+| `--verbose`, `-v` | flag | off | Shows internal events: model calls, hooks, hand-offs. Remembered like `/verbose`: later sessions start with it on until you turn it off with `/verbose`. |
 | `--no-banner` | flag | off | Skips the startup banner. |
 | `--project` | `str` | | Runs a [project](../cli/configuration.md#projects) instead of the default configuration. The banner shows its name. |
 | `--voice` | flag | off | Starts with push-to-talk on, as `/voice` does: hold the space bar to speak. Needs the `audio` extra. See [Talking instead of typing](../cli/sessions.md#talking-instead-of-typing). |
@@ -136,7 +136,7 @@ Saves the configuration into the new folder `FOLDER`, with the skills and standi
 | `--config` | path | the one `domyn run` uses | The configuration file to export. |
 | `--project` | `str` | | Exports a project instead of the default configuration. |
 
-A skill is copied as its `SKILL.md` plus the files its `external_files` lists; anything else in its folder is left out and named in the report. API keys, approvals and conversation history are never copied: a key written in the configuration is replaced by a `${VAR}` reference, and the report names the variables to set. `FOLDER` must not exist, or be empty. The folder also gets a hidden `.info` file with the version of domyn-agents, the date, the Python version and the platform, which `domyn setup --import` checks. `/export FOLDER` does the same from inside a session.
+A skill is copied as its `SKILL.md` plus the files its `external_files` lists; anything else in its folder is left out and named in the report. API keys, approvals, remembered settings (`state.yaml`) and conversation history are never copied: a key written in the configuration is replaced by a `${VAR}` reference, and the report names the variables to set. `FOLDER` must not exist, or be empty. The folder also gets a hidden `.info` file with the version of domyn-agents, the date, the Python version and the platform, which `domyn setup --import` checks. `/export FOLDER` does the same from inside a session.
 
 ## `domyn connect`
 

@@ -49,6 +49,7 @@ from domyn.agents.tools.builtin import BUNDLE_TOOL_NAMES, DEFAULT_BUNDLES, Brows
 
 CONFIG_FILENAME = "config.yaml"
 CREDENTIALS_FILENAME = "credentials"
+STATE_FILENAME = "state.yaml"
 
 GLOBAL_DIR = Path.home() / ".domyn"
 

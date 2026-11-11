@@ -85,6 +85,7 @@ def _repl(
     answer: str = "Hello from the agent.",
     config: dict[str, Any] | None = None,
     config_file: Any = None,
+    verbose: bool = False,
 ) -> tuple[Repl, io.StringIO]:
     agent = _agent(answer)
     buffer = io.StringIO()
@@ -96,6 +97,7 @@ def _repl(
         config=config,
         config_file=config_file,
         enable_enhanced_input=False,
+        verbose=verbose,
     )
     repl._input._session = ScriptedEditor(*script)
     return repl, buffer

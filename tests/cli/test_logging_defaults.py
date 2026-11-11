@@ -94,7 +94,7 @@ class TestVerboseToggle:
         _set_log_level(False)
         repl, _ = _repl("/verbose")
         await repl.run()
-        assert repl._state.verbose
+        assert repl._prefs.verbose
         assert logging.getLogger().level == logging.INFO
 
     def test_starting_verbose_turns_them_on_immediately(self) -> None:

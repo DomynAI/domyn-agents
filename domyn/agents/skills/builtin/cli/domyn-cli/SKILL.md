@@ -45,6 +45,7 @@ place of `~/.domyn/` entirely — see *Which configuration this session runs* be
 | `~/.domyn/builtin-skills/` | the built-in skills chosen in `domyn setup`, copied from the package. **`domyn setup` deletes and rewrites this directory every time**, so nothing of the user's own belongs here. It is not scanned: `config.yaml` lists each skill in it by absolute path |
 | `SOUL.md`, `AGENTS.md` (or `AGENT.md`) | standing instructions: identity, tone and preferences (`SOUL.md`, follows the user), what the agent is working on (`AGENTS.md`, follows the task). Read from the paths under `standing_instructions.source.paths` in `config.yaml`: the files `domyn setup` was pointed at, plus `./.domyn` and `./.agents` (subfolders included) when the user turned that on. **`~/.domyn/SOUL.md` and `~/.domyn/AGENTS.md` are not read** unless setup was given their path, and neither are the ones at a project's top. `/config` lists the files in use |
 | `~/.domyn/approvals.yaml` | tool approvals the user granted with "always" |
+| `~/.domyn/state.yaml` | settings remembered between sessions (`verbose`, `auto_approve`), written by `/verbose`, `/auto`, Shift+Tab and `-v`. A project has its own in its folder. Never exported. Do not edit it to turn auto-approve on for the user: tell them to use `/auto` |
 | `~/.domyn/projects/<folder>-<hash>/approvals.yaml` | approvals for this project only, one file per directory the CLI starts in. `./.domyn/approvals.yaml` is not read. Not used when the CLI is started from the home directory itself |
 | `conversations.db` (next to the config) | saved conversations, used by `--resume` and `/resume` |
 | `<workspace>/.domyn/conversations/<id>/venv` | per-conversation virtualenv, when `isolate_environment` is on (`./.domyn/…` unless `workspace` is set) |
@@ -98,6 +99,7 @@ hand.
 | `standing_instructions.source.paths` in `config.yaml` | **next message** | it is part of `config.yaml` |
 | `credentials`, `.env`, exported env vars | **next start only** | read once, at startup (`/model` is the exception: a key typed there is used right away) |
 | approvals | right away | managed with `/approvals` |
+| `state.yaml` edited by hand | **next start only** | read once, at startup; `/verbose` and `/auto` write it |
 
 When you tell the user a change is done, also say when it takes effect, e.g.
 "Saved. It is used from your next message."

@@ -79,7 +79,7 @@ The pattern choice appears for commands and browser actions. For a command it pr
 
 Approvals that last beyond the conversation are saved in your home directory, never in the project: `~/.domyn/approvals.yaml` for "always", and `~/.domyn/projects/` for a project. `/approvals` lists and removes them.
 
-`/auto`, or Shift+Tab, skips every approval until you turn it off the same way or the session ends. Shift+Tab works at the prompt, while the agent is working, and on an open approval question. Use it only when you trust what the agent is about to do. A short list of commands is refused even then, such as deleting your home or root directory, formatting a disk, or piping a downloaded script into a shell. That list catches accidents; it is not a security boundary.
+`/auto`, or Shift+Tab, skips every approval until you turn it off the same way. It is remembered: the next session starts with it still on, and says so. It is saved per [project](configuration.md#projects), or for everyone using `~/.domyn` itself when you use no project, so turning it on in one project does not turn it on in another. Shift+Tab works at the prompt, while the agent is working, and on an open approval question. Use it only when you trust what the agent is about to do. A short list of commands is refused even then, such as deleting your home or root directory, formatting a disk, or piping a downloaded script into a shell. That list catches accidents; it is not a security boundary.
 
 For approvals in your own agents, see [Tool approvals](../guides/approvals.md).
 

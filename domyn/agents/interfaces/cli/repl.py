@@ -74,6 +74,7 @@ from domyn.agents.interfaces.cli.setup import (
 )
 from domyn.agents.interfaces.cli.skills_view import render_skills
 from domyn.agents.interfaces.cli.spinner import Spinner
+from domyn.agents.interfaces.cli.state import CliState
 from domyn.agents.interfaces.cli.theme import Theme
 from domyn.agents.interfaces.cli.voice import (
     PERMISSION_HINT,
@@ -128,19 +129,14 @@ def _set_log_level(verbose: bool) -> None:
 
 @dataclass
 class SessionState:
-    """Mutable state of one interactive session."""
+    """Mutable state of one interactive session's conversation.
+
+    What survives between sessions (``verbose``, ``auto_approve``) is not here: it is
+    `CliState`, held by the REPL as ``_prefs``.
+    """
 
     conversation_id: str = field(default_factory=lambda: f"conv_{uuid.uuid4().hex}")
-    verbose: bool = False
     turns: int = 0
-    auto_approve: bool = False
-    """Answer yes to every approval prompt.
-
-    Deliberately *not* a standing grant: nothing is written to a store, nothing
-    outlives the session, and there is nothing to revoke afterwards. It is the
-    front-end saying yes on the user's behalf, which is why the hardline rules
-    still apply — those are decided before the prompt is ever reached, so a
-    catastrophic command is refused even here."""
 
     last_usage: ContextUsage | None = None
     """What the last request to the model cost.
@@ -341,7 +337,13 @@ class Repl:
         # Resolved once here so `/config` and `/model`'s default-config check
         # never have to care whether the caller passed a relative path.
         self._config_file = config_file.resolve() if config_file is not None else None
-        self._state = SessionState(verbose=verbose)
+        self._state = SessionState()
+        # What the last session left, with `-v` set on top like `/verbose` would; saved
+        # whole, by `save`, whenever one of them changes.
+        self._prefs = CliState.load()
+        if verbose and not self._prefs.verbose:
+            self._prefs.verbose = True
+            self._prefs.save()
         if resumed is not None:
             self._state.resume_conversation(resumed)
         self._spinner = Spinner(console, theme)
@@ -349,12 +351,14 @@ class Repl:
         # library, and never passes through the renderer that keeps the spinner
         # out of the way.
         self._spinner.attach_to_logging()
-        self._renderer = EventRenderer(console, theme, verbose=verbose, spinner=self._spinner)
+        self._renderer = EventRenderer(
+            console, theme, verbose=self._prefs.verbose, spinner=self._spinner
+        )
         self._input = InputSession(
             console,
             theme,
             enable_enhanced=enable_enhanced_input,
-            auto_mode=lambda: self._state.auto_approve,
+            auto_mode=lambda: self._prefs.auto_approve,
             on_toggle_auto=self._toggle_auto_from_key,
         )
         # The answer's unfinished end is drawn by the editor (`EventRenderer.preview`),
@@ -402,9 +406,9 @@ class Repl:
         # Built on the first /voice, not before: it reads the configuration and
         # may load a speech model, which a session that never talks should not pay.
         self._voice: VoiceInput | None = None
-        # `domyn run -v` should start with the logs already on, the same ones
-        # `/verbose` toggles later.
-        _set_log_level(verbose)
+        # `domyn run -v` (or a `/verbose` left on) starts with the logs already on,
+        # the same ones `/verbose` toggles later.
+        _set_log_level(self._prefs.verbose)
 
     # --- public API --------------------------------------------------------
 
@@ -471,6 +475,13 @@ class Repl:
         # What the startup line under the banner described: the baseline every
         # turn's end is compared with (`_say_what_changed`).
         self._inventory = await take_inventory(self._agent)
+        if self._prefs.auto_approve:
+            self._console.print(
+                "  Auto-approve is on, kept from an earlier session of this configuration: every "
+                "tool call runs without asking. /auto or shift+tab to stop.",
+                style=self._theme.style("auto_mode"),
+                highlight=False,
+            )
 
         while True:
             # Drained before asking, so nobody is prompted for something they have
@@ -660,7 +671,7 @@ class Repl:
                 pending_event = None
                 continue
 
-            if self._state.auto_approve:
+            if self._prefs.auto_approve:
                 self._spinner.pause()
                 pending_event = self._approve_automatically(needs_feedback)
                 continue
@@ -746,7 +757,7 @@ class Repl:
                     # of it. A no-op once the reader has ended.
                     if not self._closing:
                         self._reader.start(self._elapsed)
-                    if self._state.auto_approve:
+                    if self._prefs.auto_approve:
                         return self._approve_automatically(needs_feedback)
                     if self._reader.ended is not None:
                         # Ctrl-D on an empty line. Denied, as an aborted prompt
@@ -758,7 +769,7 @@ class Repl:
                 self._input.withdraw_choice()
 
             picked = answer.result()
-            if picked is None and self._state.auto_approve:
+            if picked is None and self._prefs.auto_approve:
                 # Shift+Tab turned auto-approve on while this was open, and took
                 # the question down with it. Approved once, as auto-approve always
                 # does; read as an aborted prompt it would be a denial.
@@ -956,8 +967,9 @@ class Repl:
         call the user is looking at, and leaving it open would make the key look
         like it did nothing.
         """
-        self._state.auto_approve = not self._state.auto_approve
-        if self._state.auto_approve and self._approving:
+        self._prefs.auto_approve = not self._prefs.auto_approve
+        self._prefs.save()
+        if self._prefs.auto_approve and self._approving:
             self._input.withdraw_choice()
 
     def _approve_automatically(self, needs_feedback: BaseEvent) -> BaseEvent:
@@ -1031,8 +1043,9 @@ class Repl:
             await self._reload_if_changed()
             self._render_agent()
         elif name == "/auto":
-            self._state.auto_approve = not self._state.auto_approve
-            if self._state.auto_approve:
+            self._prefs.auto_approve = not self._prefs.auto_approve
+            self._prefs.save()
+            if self._prefs.auto_approve:
                 stop = "/auto or shift+tab" if self._input.enhanced else "/auto again"
                 self._console.print(
                     "  Auto-approve on: every tool call runs without asking, "
@@ -1048,12 +1061,13 @@ class Repl:
         elif name == "/voice":
             await self.toggle_voice()
         elif name == "/verbose":
-            self._state.verbose = not self._state.verbose
+            self._prefs.verbose = not self._prefs.verbose
+            self._prefs.save()
             self._renderer = EventRenderer(
-                self._console, self._theme, verbose=self._state.verbose, spinner=self._spinner
+                self._console, self._theme, verbose=self._prefs.verbose, spinner=self._spinner
             )
-            _set_log_level(self._state.verbose)
-            self._say(f"Verbose {'on' if self._state.verbose else 'off'}.")
+            _set_log_level(self._prefs.verbose)
+            self._say(f"Verbose {'on' if self._prefs.verbose else 'off'}.")
         elif name in ("/skills", "/skill"):
             await self._render_skills(argument if name == "/skill" else None)
         elif name == "/config":
@@ -1106,7 +1120,7 @@ class Repl:
         # The screen holds the conversation that was left, and the one resumed
         # is about to be drawn in full: below it, the two would read as one.
         self._console.clear()
-        conversations.render_history(self._console, self._theme, info, verbose=self._state.verbose)
+        conversations.render_history(self._console, self._theme, info, verbose=self._prefs.verbose)
 
     def _backend(self) -> Any:
         """The shell backend the agent's ``run_command`` uses, if it has one.

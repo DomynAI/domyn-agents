@@ -524,7 +524,7 @@ class TestAutoApprove:
     async def test_it_toggles(self) -> None:
         repl, _ = self._repl("/auto", "/auto")
         await repl.run()
-        assert repl._state.auto_approve is False
+        assert repl._prefs.auto_approve is False
 
     @pytest.mark.asyncio
     async def test_turning_it_on_says_what_it_means(self) -> None:
@@ -540,14 +540,14 @@ class TestAutoApprove:
     async def test_it_starts_off(self) -> None:
         repl, _ = self._repl()
         await repl.run()
-        assert repl._state.auto_approve is False
+        assert repl._prefs.auto_approve is False
 
     @pytest.mark.asyncio
     async def test_an_auto_approval_is_still_shown(self) -> None:
         """The point is to stop being interrupted, not to stop being told: a
         command that ran unseen is one nobody can notice was wrong."""
         repl, buffer = self._repl()
-        repl._state.auto_approve = True
+        repl._prefs.auto_approve = True
         event = BaseEvent(
             event_type=ExecutionEventType.TOOL_NEEDS_FEEDBACK,
             author="a",
@@ -564,7 +564,7 @@ class TestAutoApprove:
         """It is the front-end saying yes, not a permission being recorded —
         so there is nothing left to revoke when the session ends."""
         repl, _ = self._repl()
-        repl._state.auto_approve = True
+        repl._prefs.auto_approve = True
         event = BaseEvent(
             event_type=ExecutionEventType.TOOL_NEEDS_FEEDBACK,
             author="a",
