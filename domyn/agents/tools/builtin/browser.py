@@ -162,9 +162,11 @@ def type_subject(
 def open_subject(url: str = "", **_: Any) -> str:
     """The address as written, parameters included: the line is the key an
     exact grant is stored under, so two addresses that differ in a parameter
-    are two grants. Nothing is hidden: hiding a value would make one grant
-    cover every value of it, and the address is in the conversation's history
-    either way."""
+    are two grants. The one exception is a run of spaces, which counts as one
+    in every subject (``_flat``, ``approvals/subject.py``): two addresses that
+    differ only there share a grant. Nothing is hidden: hiding a value would
+    make one grant cover every value of it, and the address is in the
+    conversation's history either way."""
     return f"{_site(url)} :: open {url!r}"
 
 
