@@ -3,7 +3,7 @@ import contextlib
 import copy
 import inspect
 import uuid
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from importlib import import_module
@@ -303,6 +303,27 @@ HELD_TOOL_CALLS_KEY = "held_tool_calls"
 # What the model is told about a call of its response that never ran, because a
 # hook stopped the turn before it or the user wrote instead of answering.
 _STOPPED = "the turn was stopped before it ran."
+# What the model is told about a call left without a result by a run that never
+# finished (the process was killed): whether it ran, or how far, nobody knows.
+_LOST = (
+    "the run stopped before its result was recorded (the process ended), so it may "
+    "or may not have run."
+)
+_LOST_AGENT = (
+    "the run stopped before it finished (the process ended), and what it did so far "
+    "is not in this result."
+)
+
+# Under ``context.state`` while a turn runs: its turn id, removed however the turn
+# ends (``run()``'s ``finally``). Found at the start of the next turn, it means the
+# process running that one stopped mid-turn — killed, crashed, redeployed — with
+# calls still running and no ``finally`` to give them a result. See
+# ``Runner._repair_lost_turn``.
+RUNNING_TURN_KEY = "running_turn"
+
+_STOPPED_RUNNING = (
+    "the turn was stopped while it ran, and what it did so far is not in this result."
+)
 _SUPERSEDED = (
     "the user sent a new message instead of answering the approval it was waiting "
     "for, so it did not run. Ask again if it is still needed."
@@ -401,6 +422,13 @@ class RunnerState:
     # add to it and write it back whole (SQLite does), and two such writes at once
     # keep only one of the two additions.
     write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # What to do if the turn stops while calls run at the same time: cancel them,
+    # and give each sub-agent that had not ended a result saying so. Shared by the
+    # copies of the state, and run by `run()` however the turn ends, since a
+    # consumer that walks away (`aclose()`) closes only the outermost generator:
+    # the ones below, `_run_tool_group` among them, are closed whenever they are
+    # collected, with their calls still running meanwhile.
+    on_stop: list[Callable[[], Awaitable[None]]] = field(default_factory=list)
 
 
 class ContextBuilder:
@@ -1143,6 +1171,7 @@ class Runner:
         conversation id to key it by.
         """
         registered: list[tuple[str, str]] = []
+        on_stop: list[Callable[[], Awaitable[None]]] = []
         try:
             async for event in self._run(
                 application_name,
@@ -1155,11 +1184,15 @@ class Runner:
                 run_config,
                 metadata,
                 registered,
+                on_stop,
             ):
                 yield event
         finally:
             for key in registered:
                 self.injection_queue.pop(key, None)
+            # The innermost first: a batch inside a branch stops before the branch.
+            for stop in reversed(list(on_stop)):
+                await stop()
 
     async def _run(
         self,
@@ -1173,6 +1206,7 @@ class Runner:
         run_config: dict[str, Any] | None,
         metadata: dict[str, Any] | None,
         registered: list[tuple[str, str]],
+        on_stop: list[Callable[[], Awaitable[None]]] | None = None,
     ) -> AsyncGenerator[BaseEvent, None]:
         if entrypoint_name is None:
             entrypoint_name = root.name
@@ -1212,6 +1246,8 @@ class Runner:
             entrypoint=entrypoint,
             conversation_id=conversation_id,
         )
+        if on_stop is not None:
+            state.on_stop = on_stop
         state.steering_reaches_subagents = self.steering_reaches_subagents
 
         # Only when the store answered with an id the caller did not supply — one
@@ -1281,6 +1317,12 @@ class Runner:
                 state.application_name, state.user_id, state.conversation_id
             )
             return
+
+        # A turn that never finished leaves calls without results, which the next
+        # request would carry and a provider refuse. Closed before the new input is
+        # stored, so they read where they were made.
+        if on_stop is not None:
+            await self._repair_lost_turn(state, context)
 
         # Store the user input (TOOL_FEEDBACK events will be saved later on)
         if user_input.event_type == ExecutionEventType.USER_INPUT:
@@ -3297,19 +3339,40 @@ class Runner:
         self, state: RunnerState, record: dict[str, Any], first: str | None, reason: str
     ) -> BaseEvent:
         """The AGENT_END of a branch that did not end, stored, for its caller."""
-        failure = BaseEvent(
+        return await self._end_branch(
+            state,
+            record,
+            first,
+            text=f"The agent failed: {reason}",
+            code="SubAgentFailed",
+            message=f"The agent {record['agent']} failed",
+        )
+
+    async def _end_branch(
+        self,
+        state: RunnerState,
+        record: dict[str, Any],
+        first: str | None,
+        *,
+        text: str,
+        code: str,
+        message: str,
+    ) -> BaseEvent:
+        """An AGENT_END for a branch that will not end on its own, stored: the
+        result its caller reads for the call."""
+        end = BaseEvent(
             event_type=ExecutionEventType.AGENT_END,
             author=record["agent"],
             interaction_id=first,
             turn_id=state.turn_id,
-            content=[Part(text=f"The agent failed: {reason}")],
-            error_code="SubAgentFailed",
-            error_message=f"The agent {record['agent']} failed",
+            content=[Part(text=text)],
+            error_code=code,
+            error_message=message,
         )
-        await self._add_event(state, failure, context=None)
+        await self._add_event(state, end, context=None)
         record["stack"].clear()
         record["status"] = DONE
-        return failure
+        return end
 
     async def _end_batch(
         self,
@@ -3554,8 +3617,18 @@ class Runner:
         if len(group) == 1:
             call, tool = group[0]
             yield "event", call
-            async for item in self._run_call(tool, call, state, context, outcome, batch):
-                yield item
+            single = self._group_stopper([], batch, group, state, context)
+            state.on_stop.append(single)
+            single_finished = False
+            try:
+                async for item in self._run_call(tool, call, state, context, outcome, batch):
+                    yield item
+                single_finished = True
+            finally:
+                if single_finished:
+                    state.on_stop.remove(single)
+                else:
+                    await single()
             if batch is not None:
                 async for item in self._end_batch(batch, state, context, outcome):
                     yield item
@@ -3581,6 +3654,9 @@ class Runner:
             asyncio.ensure_future(pump(tool, call, own))
             for (call, tool), own in zip(group, outcomes, strict=True)
         ]
+        stop = self._group_stopper(tasks, batch, group, state, context)
+        state.on_stop.append(stop)
+        finished = False
         running = len(tasks)
         try:
             while running:
@@ -3589,10 +3665,12 @@ class Runner:
                     running -= 1
                     continue
                 yield arrived
+            finished = True
         finally:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            if finished:
+                state.on_stop.remove(stop)
+            else:
+                await stop()
         for task in tasks:
             if not task.cancelled() and task.exception() is not None:
                 raise task.exception()  # type: ignore[misc]
@@ -3601,6 +3679,66 @@ class Runner:
         if batch is not None:
             async for item in self._end_batch(batch, state, context, outcome):
                 yield item
+
+    def _group_stopper(
+        self,
+        tasks: Sequence[asyncio.Future[None]],
+        batch: dict[str, Any] | None,
+        group: list[tuple[BaseEvent, FunctionTool | DelegateTool | None]],
+        state: RunnerState,
+        context: InteractionContext,
+    ) -> Callable[[], Awaitable[None]]:
+        """What stops a group whose turn stopped before it finished: its calls are
+        cancelled, and each sub-agent of its batch that had not ended gets a result
+        saying so. Runs once, whether ``run()`` or the group's own ``finally`` gets
+        there first."""
+        stopped = False
+
+        async def stop() -> None:
+            nonlocal stopped
+            if stopped:
+                return
+            stopped = True
+            if stop in state.on_stop:
+                state.on_stop.remove(stop)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            if batch is not None:
+                await self._interrupt_branches(batch, group, state, context)
+
+        return stop
+
+    async def _interrupt_branches(
+        self,
+        batch: dict[str, Any],
+        group: list[tuple[BaseEvent, FunctionTool | DelegateTool | None]],
+        state: RunnerState,
+        context: InteractionContext,
+    ) -> None:
+        """Give every sub-agent of a stopped batch that had not ended a result:
+        an AGENT_END saying it was interrupted when it had started, else the result
+        of a call that never ran. Without it the caller reads only "Task assigned"
+        and may take the work as still going, or make up its outcome. A sub-agent
+        waiting for an answer is interrupted too: the batch never got to ask."""
+        calls = {getattr(call.action, "call_id", None): call for call, _ in group}
+        for record in batch["branches"]:
+            if record["status"] == DONE:
+                continue
+            if record["interactions"]:
+                await self._end_branch(
+                    state,
+                    record,
+                    record["interactions"][0],
+                    text=f"The agent was interrupted before it finished: {_STOPPED_RUNNING}",
+                    code="SubAgentInterrupted",
+                    message=f"The agent {record['agent']} was interrupted",
+                )
+            else:
+                call = calls.get(record["call_id"])
+                if call is not None:
+                    await self._close_tool_calls([call], state, context, _STOPPED)
+            record["status"] = DONE
 
     async def _run_call(
         self,
@@ -3691,6 +3829,153 @@ class Runner:
             ],
         }
         await self._write_conversation_state(state, context)
+
+    async def _repair_lost_turn(self, state: RunnerState, context: InteractionContext) -> None:
+        """Close what a turn that never finished left open, then mark this one as
+        running until it ends.
+
+        A run that ends in any way ``run()`` sees — an answer, a pause, a stop —
+        gives every call a result. A process that is killed does not: its calls stay
+        without results, and the next request carries them, which a provider such as
+        OpenAI or Anthropic refuses, so the conversation is stuck. The mark left
+        under ``RUNNING_TURN_KEY`` is what tells the two apart: still there, the
+        previous turn never ended, and every call without a result gets one now —
+        a tool's saying it may or may not have run, a sub-agent of a batch an
+        AGENT_END saying it was interrupted. Calls a pause still waits on
+        (``_pending_calls``) are left alone.
+
+        Assumes no other process runs a turn of this conversation at the same time,
+        as the rest of the runner does: it would take that turn's calls for lost.
+        """
+        lost_turn = context.state.get(RUNNING_TURN_KEY)
+        if lost_turn is not None:
+            get_logger().warning(
+                f"conversation {state.conversation_id}: turn {lost_turn} never finished, "
+                "closing the calls it left without a result"
+            )
+            await self._close_lost_calls(state, context)
+        running = state.turn_id or InteractionContext.generate_turn_id()
+        context.state[RUNNING_TURN_KEY] = running
+        await self._write_conversation_state(state, context)
+
+        async def finished() -> None:
+            # Read and written fresh: by now the state may have been written from
+            # a context other than this one.
+            try:
+                async with state.write_lock:
+                    info = await self.conversation_manager.get_conversation(
+                        state.application_name, state.user_id, state.conversation_id
+                    )
+                    stored = dict(info.state or {}) if info is not None else {}
+                    if stored.get(RUNNING_TURN_KEY) == running:
+                        stored.pop(RUNNING_TURN_KEY)
+                        await self.conversation_manager.update_conversation_state(
+                            state.application_name, state.user_id, state.conversation_id, stored
+                        )
+            except Exception as e:
+                get_logger().warning(f"could not clear the running turn: {type(e).__name__}")
+                get_logger().debug(f"could not clear the running turn, detail: {e}")
+            context.state.pop(RUNNING_TURN_KEY, None)
+            if state.conversation_info.state is not None:
+                state.conversation_info.state.pop(RUNNING_TURN_KEY, None)
+
+        # First in, so last to run: after every stopper has written its results.
+        state.on_stop.insert(0, finished)
+
+    async def _close_lost_calls(self, state: RunnerState, context: InteractionContext) -> None:
+        """Give a result to every call of the conversation left without one, except
+        those a pause still waits on."""
+        events = list(state.conversation_info.events_history or [])
+        pending_calls, pending_interactions = self._pending_calls(state, context)
+        answered = {
+            getattr(e.action, "call_id", None)
+            for e in events
+            if e.event_type in (ExecutionEventType.TOOL_END, ExecutionEventType.TOOL_ERROR)
+        }
+        started = {
+            getattr(e.action, "call_id", None)
+            for e in events
+            if e.event_type == ExecutionEventType.AGENT_START and METADATA_TOOL_BATCH in e.metadata
+        }
+        ended = {e.interaction_id for e in events if e.event_type == ExecutionEventType.AGENT_END}
+
+        tools: list[BaseEvent] = []
+        agents: list[BaseEvent] = []
+        interrupted: list[BaseEvent] = []
+        seen: set[str] = set()
+        for event in events:
+            call_id = getattr(event.action, "call_id", None)
+            if event.event_type == ExecutionEventType.AGENT_START:
+                if (
+                    METADATA_TOOL_BATCH in event.metadata
+                    and event.interaction_id not in ended
+                    and event.interaction_id not in pending_interactions
+                    and call_id not in pending_calls
+                ):
+                    interrupted.append(event)
+                continue
+            if not call_id or call_id in seen or call_id in answered or call_id in pending_calls:
+                continue
+            if event.event_type == ExecutionEventType.TOOL_START:
+                seen.add(call_id)
+                tools.append(event)
+            elif (
+                event.event_type == ExecutionEventType.AGENT_CALL
+                and METADATA_TOOL_BATCH in event.metadata
+                and call_id not in started
+            ):
+                seen.add(call_id)
+                agents.append(event)
+
+        await self._close_tool_calls(tools, state, context, _LOST)
+        await self._close_tool_calls(agents, state, context, _LOST)
+        for start in interrupted:
+            end = BaseEvent(
+                event_type=ExecutionEventType.AGENT_END,
+                author=start.author,
+                interaction_id=start.interaction_id,
+                turn_id=state.turn_id,
+                content=[Part(text=f"The agent was interrupted before it finished: {_LOST_AGENT}")],
+                error_code="SubAgentInterrupted",
+                error_message=f"The agent {start.author} was interrupted",
+            )
+            # Into this turn's context too: its history was read before these existed.
+            await self._add_event(state, end, context=context)
+
+    @staticmethod
+    def _pending_calls(
+        state: RunnerState, context: InteractionContext
+    ) -> tuple[set[str], set[str]]:
+        """The calls and interactions a pause still waits on, which a lost turn must
+        not close: the held calls of an approval, the sub-agents of a batch waiting
+        their turn to ask, and the agents on the conversation's stack."""
+        calls: set[str] = set()
+        interactions: set[str] = {
+            entry.interaction_id
+            for entry in state.conversation_info.agents_name_stack or []
+            if entry.interaction_id
+        }
+
+        def held(store: dict[str, Any]) -> None:
+            kept = store.get(HELD_TOOL_CALLS_KEY) or {}
+            if kept.get("waiting"):
+                calls.add(kept["waiting"])
+            for raw in kept.get("calls") or []:
+                call_id = (raw.get("action") or {}).get("call_id")
+                if call_id:
+                    calls.add(call_id)
+
+        held(context.state)
+        for entry in (context.state.get(WAITING_BRANCHES_KEY) or {}).values():
+            for record in entry.get("branches") or []:
+                calls.add(record["call_id"])
+                interactions.update(record.get("interactions") or [])
+                held(record)
+            for raw in entry.get("held") or []:
+                call_id = (raw.get("action") or {}).get("call_id")
+                if call_id:
+                    calls.add(call_id)
+        return calls, interactions
 
     async def _drop_held_tool_calls(self, state: RunnerState, context: InteractionContext) -> None:
         """Close the calls of a pause the user did not answer: see ``run()``."""

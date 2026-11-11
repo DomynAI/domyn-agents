@@ -13,6 +13,7 @@
 
 # No `from __future__ import annotations`: builds real agents and tools.
 import asyncio
+import sqlite3
 import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -47,7 +48,7 @@ from domyn.agents.llm.base import (
     ToolCallFunction,
 )
 from domyn.agents.planner_strategy import PlannerStrategyFactory
-from domyn.agents.runner import Runner
+from domyn.agents.runner import RUNNING_TURN_KEY, Runner
 from domyn.agents.runner.branches import WAITING_BRANCHES_KEY
 from domyn.agents.runner.transport import RunnerTransport
 from domyn.agents.tools.function_tool import FunctionTool
@@ -1001,12 +1002,182 @@ class TestWhenASubAgentDoesNotEnd:
                     break
         await run.aclose()
 
+        # Stopped with the turn, not left running in the background: a consumer
+        # walking away closes only the outermost generator.
+        others = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        assert not [t for t in others if "pump" in getattr(t.get_coro(), "__qualname__", "")]
+        info = await runner.conversation_manager.get_conversation(APP, USER, conversation)
+        assert info is not None
+        interrupted = [
+            e
+            for e in info.events_history
+            if e.event_type == ExecutionEventType.AGENT_END
+            and e.error_code == "SubAgentInterrupted"
+        ]
+        assert sorted(e.author for e in interrupted) == ["Alpha", "Beta"]
+
         events = await _run(runner, root, conversation, _ask("stop that"))
 
         # As after a hand-off that was stopped: the message goes to the caller, and
-        # each of its calls is answered by the start of its sub-agent.
+        # each of its calls is answered by the start of its sub-agent. It also reads
+        # that both were interrupted, rather than only that they were assigned.
         assert _answered_by_main(events)
         assert sorted(main.answered(len(main.shown) - 1)) == ["main_1_0", "main_1_1"]
+        shown = " ".join(m.content or "" for m in main.shown[-1])
+        assert shown.count("interrupted before it finished") == 2
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_a_turn_cancelled_mid_batch_interrupts_every_sub_agent(
+        self, planner: str
+    ) -> None:
+        # The way the CLI stops a turn on Ctrl-C: the task reading it is cancelled.
+        root, main, _ = _team(planner, delays=(5.0, 5.0))
+        main.replies.append("Fine.")
+        runner = Runner()
+        conversation = f"c_cancel_{planner}"
+        both_started = asyncio.Event()
+
+        async def consume() -> None:
+            started = 0
+            async for event in runner.run(
+                application_name=APP,
+                user_id=USER,
+                conversation_id=conversation,
+                root=root,
+                user_input=_ask(),
+            ):
+                if (
+                    event.event_type == ExecutionEventType.AGENT_START
+                    and event.author != "MainAgent"
+                ):
+                    started += 1
+                    if started == 2:
+                        both_started.set()
+
+        reading = asyncio.ensure_future(consume())
+        await asyncio.wait_for(both_started.wait(), timeout=2)
+        reading.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await reading
+
+        events = await _run(runner, root, conversation, _ask("stop that"))
+
+        assert _answered_by_main(events)
+        shown = " ".join(m.content or "" for m in main.shown[-1])
+        assert shown.count("interrupted before it finished") == 2
+
+
+def _snapshot(source: str, target: str) -> None:
+    """What a killed process leaves on disk: the database as it is right now."""
+    with sqlite3.connect(source) as src, sqlite3.connect(target) as dst:
+        src.backup(dst)
+
+
+async def _killed_at(
+    root: Agent, conversation: str, tmp_path: Path, moment: Any
+) -> SqliteConversationManager:
+    """Run a turn until ``moment(event)``, take the database as a kill would leave
+    it, and return a manager over that copy, as a restarted process would open it."""
+    live = str(tmp_path / "live.db")
+    left = str(tmp_path / "left.db")
+    run = Runner(conversation_manager=SqliteConversationManager(live)).run(
+        application_name=APP,
+        user_id=USER,
+        conversation_id=conversation,
+        root=root,
+        user_input=_ask(),
+    )
+    async for event in run:
+        if moment(event):
+            _snapshot(live, left)
+            break
+    await run.aclose()
+    return SqliteConversationManager(left)
+
+
+class TestAfterTheProcessDied:
+    """A process killed mid-turn runs no ``finally``: the next turn, in a new
+    process, closes what it left open."""
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_sub_agents_killed_mid_batch_are_read_as_interrupted(
+        self, planner: str, tmp_path: Path
+    ) -> None:
+        root, main, _ = _team(planner, delays=(5.0, 5.0))
+        main.replies.append("Fine.")
+        conversation = f"c_killed_{planner}"
+        started: list[str] = []
+
+        def both_started(event: BaseEvent) -> bool:
+            if event.event_type == ExecutionEventType.AGENT_START and event.author != "MainAgent":
+                started.append(event.author or "")
+            return len(started) == 2
+
+        manager = await _killed_at(root, conversation, tmp_path, both_started)
+        events = await _run(Runner(conversation_manager=manager), root, conversation, _ask("so?"))
+
+        assert _answered_by_main(events)
+        shown = " ".join(m.content or "" for m in main.shown[-1])
+        assert shown.count("the process ended") == 2
+        info = await manager.get_conversation(APP, USER, conversation)
+        assert info is not None
+        assert RUNNING_TURN_KEY not in (info.state or {})
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_a_tool_killed_while_it_ran_gets_a_result(
+        self, planner: str, tmp_path: Path
+    ) -> None:
+        async def slow(path: str) -> str:
+            """Take a while.
+
+            Args:
+                path: what to work on.
+            """
+            await asyncio.sleep(5)
+            return "done"
+
+        provider = _Script(label="solo", replies=[[("slow", '{"path": "x"}')], "Fine."])
+        agent = Agent(
+            name="Solo",
+            description="works alone",
+            instruction="work",
+            llm_provider=provider,
+            planner=_planner(planner),
+            tools=[FunctionTool(func=slow)],
+        )
+        conversation = f"c_killed_tool_{planner}"
+
+        manager = await _killed_at(
+            agent,
+            conversation,
+            tmp_path,
+            lambda e: e.event_type == ExecutionEventType.TOOL_START,
+        )
+        events = await _run(Runner(conversation_manager=manager), agent, conversation, _ask("so?"))
+
+        # The call has its result, so the request is one a provider accepts.
+        assert provider.calls(len(provider.shown) - 1) == ["solo_1_0"]
+        assert provider.answered(len(provider.shown) - 1) == ["solo_1_0"]
+        shown = " ".join(m.content or "" for m in provider.shown[-1])
+        assert "may or may not have run" in shown
+        answers = [e for e in events if e.event_type == ExecutionEventType.RESPONSE]
+        assert answers and answers[-1].author == "Solo"
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_a_turn_that_ended_leaves_no_mark(self, planner: str, tmp_path: Path) -> None:
+        manager = SqliteConversationManager(str(tmp_path / "c.db"))
+        root, _, _ = _team(planner, delays=(0.0, 0.0), writes=(True, False))
+        conversation = f"c_mark_{planner}"
+
+        # Ended on a pause: nothing is lost, and the answer still resumes it.
+        await _run(Runner(conversation_manager=manager), root, conversation)
+        info = await manager.get_conversation(APP, USER, conversation)
+        assert info is not None
+        assert RUNNING_TURN_KEY not in (info.state or {})
 
 
 class TestAMessageInsteadOfTheAnswer:
