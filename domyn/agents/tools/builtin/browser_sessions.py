@@ -438,7 +438,8 @@ class BrowserSessions:
     _OPTION_SHAPED: ClassVar[re.Pattern[str]] = re.compile(r"-\S*")
 
     _NO_PAGE: ClassVar[str] = (
-        "The browser was probably closed by the inactivity timeout. Call browser_open and try again."
+        "No page is open in this conversation's browser: none was opened yet, or the browser "
+        "closed after its inactivity timeout. Call browser_open first, then try again."
     )
 
     @staticmethod
