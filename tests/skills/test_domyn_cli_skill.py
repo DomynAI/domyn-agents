@@ -56,7 +56,10 @@ class TestWhereANewSkillGoes:
     ) -> None:
         text = " ".join(_section("Adding a skill").split())
 
-        assert "`$DOMYN_PROJECT_DIR/skills/<name>/` in a project" in text
+        assert (
+            "`$DOMYN_PROJECT_DIR/skills/<name>/` (`~/.domyn/skills/<name>/` without a project)"
+            in text
+        )
         assert "`${DOMYN_PROJECT_DIR}/skills/<name>`" in text
         assert "**and add it to the config**" in text
 
@@ -95,7 +98,13 @@ class TestWhichConfigurationIsInUse:
     def test_every_domyn_command_it_runs_takes_the_project(self) -> None:
         text = " ".join(_section("Where things live").split())
 
-        assert '`--project "$DOMYN_PROJECT_DIR"` when the variable is set' in text
+        assert 'takes `--project "$DOMYN_PROJECT_DIR"`**' in text
+
+    def test_the_global_folder_in_the_variable_is_said_to_be_no_project(self) -> None:
+        """The CLI always sets it: ``~/.domyn`` without a project."""
+        text = " ".join(_section("Where things live").split())
+
+        assert "**`~/.domyn`** (the home folder's `.domyn`): no project" in text
 
     def test_remove_is_no_longer_said_to_lack_project_support(self) -> None:
         assert "not supported yet" not in SKILL.read_text(encoding="utf-8")

@@ -24,7 +24,6 @@ from domyn.agents.interfaces.cli.config import (
     apply_context_window,
     config_path,
     current_settings_from,
-    home_dir,
     is_configuration_v1_usable,
     is_skill_autodiscovery,
     project_location,
@@ -562,10 +561,6 @@ async def resolve_agent_from_file(
         agent = await load_application_from_file(
             str(path),
             extra_workspace_roots=[str(d) for d in skill_dirs],
-            # The tools' state (venvs, logs, browser pages) beside `conversations.db`
-            # (`store_path`): the project's folder, a folder's own `./.domyn` when it
-            # holds the config, else `~/.domyn`.
-            state_dir=str(home_dir()),
         )
     except (ValueError, FileNotFoundError) as exc:
         console.print(
@@ -646,7 +641,6 @@ async def load_session_agent(path: Path, options: SessionOptions) -> tuple[Agent
     agent = await load_application_from_file(
         str(path),
         extra_workspace_roots=[str(d) for d in skill_dirs],
-        state_dir=str(home_dir()),  # as at startup, above
     )
     return configure_session_agent(agent, options), raw
 

@@ -219,7 +219,6 @@ class BuiltinBundleConfig(BaseModel):
         self,
         *,
         extra_roots: Iterable[str | os.PathLike[str]] = (),
-        state_dir: str | os.PathLike[str] | None = None,
     ) -> BuiltinTools:
         """Build the bundle's tools.
 
@@ -229,10 +228,9 @@ class BuiltinBundleConfig(BaseModel):
         is resolved at run time (the CLI's configured skill directories), not
         something a persisted file should freeze.
 
-        ``state_dir`` is where the tools keep their state (``LocalBackend``):
-        ``.domyn`` in the workspace when not given. Passed in for the same reason:
-        the CLI names the selected project's folder, or ``~/.domyn``. It is not
-        added to the workspace: outside a project ``~/.domyn`` is shared by every
+        Where the tools keep their state is the folder ``DOMYN_PROJECT_DIR`` names
+        (``LocalBackend``); without it, ``.domyn`` in the workspace. It is not added to the
+        workspace: outside a project ``~/.domyn`` is shared by every
         folder a session runs in, so the ungated file tools would read the logs and
         output of conversations started anywhere. Those are read through the shell
         (``check_command``, ``run_command``), as the browser's files already are.
@@ -243,7 +241,6 @@ class BuiltinBundleConfig(BaseModel):
             space,
             isolate_environment=self.isolate_environment,
             allowed_env=self.allowed_env,
-            state_dir=state_dir,
         )
         return bundle(*self.bundles, workspace=space, backend=backend, browser=self.browser)
 

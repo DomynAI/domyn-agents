@@ -11,6 +11,7 @@ from domyn.agents.interfaces.cli.config import (
     ProjectError,
     is_project_path,
     load_credentials_into_environment,
+    names_global_dir,
     read_raw_config,
     use_project,
 )
@@ -87,6 +88,8 @@ def select_project(
     the folders under ``~/.domyn/projects`` are the ones `domyn setup` made or
     imported, and are trusted.
     """
+    if name is not None and names_global_dir(name):
+        name = None  # ~/.domyn is the session without a project, not a project folder
     try:
         folder = use_project(name, must_exist=must_exist)
     except ProjectError as exc:

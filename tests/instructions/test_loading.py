@@ -272,20 +272,16 @@ class TestTheAutodiscoveryWalk:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "where",
-        [
-            ".domyn/conversations/c1",
-            ".domyn/browser",
-            ".domyn/processes/p1",
-            ".domyn/skills/s",
-            ".agents/skills/s",
-        ],
+        [".domyn/skills/s", ".agents/skills/s"],
     )
-    async def test_domyns_own_folders_are_not(self, project: Path, where: str) -> None:
-        """An ``AGENTS.md`` the agent wrote in its scratch, or a skill's own, must never
-        reach the system prompt."""
-        _put(project / where / "AGENTS.md", "scratch")
+    async def test_the_skills_folders_are_walked_too(self, project: Path, where: str) -> None:
+        """Nothing below the two folders is skipped by name: a skill's own ``AGENTS.md`` is
+        a standing instruction like any other there."""
+        _put(project / where / "AGENTS.md", "in a skill")
 
-        assert not await _load(Path(".domyn"), Path(".agents"))
+        loaded = await _load(Path(".domyn"), Path(".agents"))
+
+        assert [one.text for one in loaded.agent] == ["in a skill"]
 
     @pytest.mark.asyncio
     async def test_agents_files_go_shallow_to_deep_then_domyn_to_agents(

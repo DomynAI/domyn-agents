@@ -1,10 +1,10 @@
 """Per-conversation working directories, and the Python environment inside them.
 
 The agent gets a state folder, and each conversation gets a directory inside it
-named after its id. By default the folder is ``.domyn`` in the workspace, like
-``.git``; a caller can name another one (``state_dir``) — the CLI does, the
-project's folder or ``~/.domyn``, so ``domyn run`` leaves nothing in the folder
-it runs in. Named after the id and not after a
+named after its id. The folder is the one ``DOMYN_PROJECT_DIR`` names
+(`PROJECT_DIR_VAR`), so a session leaves nothing in the folder it runs in. Without
+the variable it is ``.domyn`` in the workspace, like ``.git``; a caller can also
+name one (``state_dir``). Named after the id and not after a
 timestamp so it can be found again from a transcript, a log line or a
 ``/conversations`` listing — a folder you cannot map back to a conversation is a
 folder nobody will ever open.
@@ -45,7 +45,7 @@ import sys
 import venv
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from enum import StrEnum, nonmember
+from enum import StrEnum
 from pathlib import Path
 
 from domyn.agents.logger import get_logger
@@ -54,15 +54,25 @@ from domyn.agents.logger import get_logger
 # matching the directory the CLI keeps a folder's own config in.
 HOME_DIRNAME = ".domyn"
 
+PROJECT_DIR_VAR = "DOMYN_PROJECT_DIR"
+"""The folder that plays ``~/.domyn`` for a session: its project's, or ``~/.domyn``
+itself. The built-in tools keep their state there (`state_dir_from_environment`)."""
+
+
+def state_dir_from_environment() -> Path | None:
+    """The state folder ``DOMYN_PROJECT_DIR`` names, or ``None`` when it is not set:
+    the tools then use ``.domyn`` in the workspace."""
+    value = os.environ.get(PROJECT_DIR_VAR)
+    return Path(value) if value else None
+
 
 class StateFolders(StrEnum):
-    """The folders the built-in tools write in a state folder (``HOME_DIRNAME`` in the
-    workspace, or the one a caller names: the CLI's project folder or ``~/.domyn``).
+    """The folders the built-in tools write in a state folder (the one ``DOMYN_PROJECT_DIR``
+    or a caller names, else ``HOME_DIRNAME`` in the workspace).
 
     Every member is a session's working state, kept for its owner: ``domyn export``
-    copies nothing below them and ``domyn setup --import`` brings none in. The subsets
-    a reader needs are built from the members, so none can go stale when a folder is
-    added or renamed. Membership of a plain string: ``name in set(StateFolders)``
+    copies nothing below them and ``domyn setup --import`` brings none in. Membership
+    of a plain string: ``name in set(StateFolders)``
     (``in StateFolders`` raises for one on Python 3.11)."""
 
     CONVERSATIONS = "conversations"
@@ -71,13 +81,6 @@ class StateFolders(StrEnum):
     """``<id>/<handle>`` of each background command (``ProcessRecord.home``)."""
     BROWSER = "browser"
     """The browser's saved pages (``BrowserSessions.browser_dir``)."""
-
-    INSTRUCTIONS_SKIP = nonmember(frozenset({CONVERSATIONS, PROCESSES, BROWSER, "skills"}))
-    """Skipped by the ``./.domyn`` instructions walk (``find_instruction_files``), at
-    its root only: these, and ``skills`` (``.domyn/skills``, ``.agents/skills``).
-    Their content is the agent's scratch files or skill folders, and an ``AGENTS.md``
-    in there must never reach the system prompt. `tests/instructions/test_state_dirs.py`
-    fails when a built-in starts writing to a folder that is not listed here."""
 
 
 def linked_below(start: Path, target: Path) -> Path | None:
@@ -280,11 +283,11 @@ _SAFE_ENV_NAMES = frozenset(
         "TERM",
         "SHELL",
         "TMPDIR",
-        # The CLI project the session runs in (`use_project`, interfaces/cli/config.py):
-        # a folder path, not a secret, and the only way a command the agent runs —
-        # `domyn skill remove`, an edit to the config — can tell which configuration
-        # is in use. Absent outside a project.
-        "DOMYN_PROJECT_DIR",
+        # The folder that plays ~/.domyn for the session: its project's, or ~/.domyn
+        # itself. A folder path, not a secret, and the only way a command the agent
+        # runs — `domyn skill remove`, an edit to the config — can tell which
+        # configuration is in use.
+        PROJECT_DIR_VAR,
         # Windows equivalents.
         "SystemRoot",
         "TEMP",

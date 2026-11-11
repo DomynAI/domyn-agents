@@ -51,6 +51,7 @@ from domyn.agents.tools.builtin.session import (
     environment_for,
     linked_below,
     restricted_environment,
+    state_dir_from_environment,
 )
 
 if TYPE_CHECKING:
@@ -162,11 +163,14 @@ class LocalBackend(CommandBackend):
         state_dir: str | os.PathLike[str] | None = None,
     ) -> None:
         """``state_dir`` is the folder the conversations' environments, the
-        background commands' logs and the browser's files go in: ``.domyn`` in
-        the workspace when not given. The CLI names the project's folder, or
-        ``~/.domyn``, so nothing is written into the folder it runs in."""
+        background commands' logs and the browser's files go in. When not given, the
+        folder ``DOMYN_PROJECT_DIR`` names (`state_dir_from_environment`), so nothing
+        is written into the workspace. Without either, ``.domyn`` in the workspace.
+        Read when the backend is built, so a session keeps the folder it started with."""
         self._workspace = workspace
         self._isolate = isolate_environment
+        if state_dir is None:
+            state_dir = state_dir_from_environment()
         self._state_dir = Path(state_dir).expanduser().absolute() if state_dir is not None else None
         self._sessions = (
             SessionEnvironment(workspace.root, state_dir=self._state_dir)

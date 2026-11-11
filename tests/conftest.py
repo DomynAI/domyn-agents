@@ -57,6 +57,19 @@ def _state_off_the_real_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.fixture(autouse=True)
+def _no_session_home_from_the_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every test without ``DOMYN_PROJECT_DIR``.
+
+    The built-in tools keep their state in the folder it names (`LocalBackend`), and a
+    developer running the suite from a domyn session has it set: every backend a test
+    builds would put its venvs and logs in that session's real home folder.
+    """
+    from domyn.agents.tools.builtin.session import PROJECT_DIR_VAR
+
+    monkeypatch.delenv(PROJECT_DIR_VAR, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _forget_context_windows() -> None:
     """Start every test with no context window remembered.
 

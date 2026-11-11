@@ -1,9 +1,9 @@
-"""A state folder of the caller's: where the tools keep what is not the task's.
+"""A state folder: where the tools keep what is not the task's.
 
-`LocalBackend(state_dir=...)` moves the conversations' environments, the background
-commands' logs and the browser's files out of the workspace; the CLI names the
-project's folder, or ``~/.domyn``. Without one, nothing changes: ``.domyn`` in the
-workspace, as before.
+`LocalBackend` puts the conversations' environments, the background commands' logs and
+the browser's files in the folder ``DOMYN_PROJECT_DIR`` names, or in one the caller
+passes (``state_dir=``). Without either, nothing changes: ``.domyn`` in the workspace,
+as before.
 """
 
 # No `from __future__ import annotations`: this reaches the tool modules, which
@@ -44,6 +44,45 @@ class TestWithoutAStateFolder:
         assert backend.state_dir == ".domyn"
         assert backend.sessions is not None
         assert backend.sessions.paths("c1").home == workspace / ".domyn" / "conversations" / "c1"
+
+
+class TestFromTheEnvironment:
+    def test_the_variable_names_it(
+        self, workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DOMYN_PROJECT_DIR", str(tmp_path / "home"))
+
+        backend = LocalBackend(Workspace.at(workspace))
+
+        assert backend.state_dir == str(tmp_path / "home")
+        assert backend.sessions is not None
+        assert backend.sessions.paths("c1").home == tmp_path / "home" / "conversations" / "c1"
+
+    def test_a_folder_passed_wins_over_it(
+        self, workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DOMYN_PROJECT_DIR", str(tmp_path / "home"))
+
+        backend = LocalBackend(Workspace.at(workspace), state_dir=tmp_path / "mine")
+
+        assert backend.state_dir == str(tmp_path / "mine")
+
+    def test_it_is_read_when_the_backend_is_built(
+        self, workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A session keeps the folder it started with."""
+        monkeypatch.setenv("DOMYN_PROJECT_DIR", str(tmp_path / "first"))
+        backend = LocalBackend(Workspace.at(workspace))
+        monkeypatch.setenv("DOMYN_PROJECT_DIR", str(tmp_path / "second"))
+
+        assert backend.state_dir == str(tmp_path / "first")
+
+    def test_an_empty_variable_is_none(
+        self, workspace: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DOMYN_PROJECT_DIR", "")
+
+        assert LocalBackend(Workspace.at(workspace)).state_dir == ".domyn"
 
 
 class TestWithAStateFolder:
@@ -210,13 +249,16 @@ class TestRefreshKeepsTheFolder:
 
 
 class TestTheBundle:
-    def test_the_file_tools_do_not_reach_it(self, workspace: Path, tmp_path: Path) -> None:
+    def test_the_file_tools_do_not_reach_it(
+        self, workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Outside a project it is ``~/.domyn``, shared by every folder a session runs
         in: the ungated read tools would reach other conversations' logs and output."""
         home = tmp_path / "home"
         (home / "processes" / "c1").mkdir(parents=True)
         (home / "conversations" / "c1").mkdir(parents=True)
-        built = BuiltinBundleConfig(name="b", workspace=str(workspace)).build(state_dir=home)
+        monkeypatch.setenv("DOMYN_PROJECT_DIR", str(home))
+        built = BuiltinBundleConfig(name="b", workspace=str(workspace)).build()
 
         assert built.workspace is not None and built.workspace.extra_roots == ()
         for folder in ("processes", "conversations", "credentials"):

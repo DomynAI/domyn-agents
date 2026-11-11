@@ -901,20 +901,20 @@ class TestInstructionsNesting:
         assert (report.dest / "instructions/agents/SOUL.md").read_text() == ".agents\n"
         assert (report.dest / "instructions/agents/AGENTS.md").read_text() == "task\n"
 
-    def test_a_local_folder_is_walked_without_domyn_s_own_folders(
+    def test_a_local_folder_is_walked_as_the_loader_walks_it(
         self, machine: dict[str, Path], tmp_path: Path
     ) -> None:
-        """As the loader walks it: subfolders included, the state folders skipped."""
+        """Subfolders included, the skills folder like any other."""
         self._write(machine["cwd"] / ".domyn", "AGENTS.md", "top\n")
+        self._write(machine["cwd"] / ".domyn" / "skills", "AGENTS.md", "skills\n")
         self._write(machine["cwd"] / ".domyn" / "team", "AGENTS.md", "team\n")
-        self._write(machine["cwd"] / ".domyn" / "skills", "AGENTS.md", "not an instruction\n")
 
         report = _export(self._raw(".domyn"), machine, tmp_path / "out")
 
         declared = self._declared(report.dest)
-        assert len(declared) == 2
+        assert len(declared) == 3
         texts = [(report.dest / d.removeprefix(P)).read_text() for d in declared]
-        assert texts == ["top\n", "team\n"]
+        assert texts == ["top\n", "skills\n", "team\n"]
 
     def test_a_local_folder_with_neither_file_is_left_out_quietly(
         self, machine: dict[str, Path], tmp_path: Path

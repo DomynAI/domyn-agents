@@ -25,7 +25,7 @@ from domyn.agents.interfaces.cli.prompt import GoBack
 from domyn.agents.skills.catalog import install_skills, list_builtin_skills
 from domyn.agents.tools.builtin.session import StateFolders
 
-P = cfg.PROJECT_DIR_REF
+P = f"${{{cfg.PROJECT_DIR_VAR}}}"
 BUILTINS = cfg.BUILTIN_SKILLS_DIRNAME
 # Captured at import, before the CLI conftest replaces it for every test.
 _REAL_CHOOSE_INSTRUCTIONS = cli_setup._choose_instructions

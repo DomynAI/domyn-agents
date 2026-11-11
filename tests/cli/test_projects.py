@@ -194,15 +194,38 @@ class TestByPath:
 
         assert os.environ[cfg.PROJECT_DIR_VAR] == str(folder)
 
-    def test_no_project_removes_an_inherited_value(
+    def test_no_project_sets_it_to_the_global_folder_over_an_inherited_value(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The agent's shell reads it to tell which project the session runs."""
+        """The agent's shell reads it to tell which configuration the session runs, and
+        the tools keep their state there."""
         monkeypatch.setenv(cfg.PROJECT_DIR_VAR, str(tmp_path / "from-my-shell"))
 
         cfg.use_project(None)
 
-        assert cfg.PROJECT_DIR_VAR not in os.environ
+        assert os.environ[cfg.PROJECT_DIR_VAR] == str(cfg.GLOBAL_DIR)
+
+    def test_the_global_folder_given_as_a_project_path_is_no_project(self) -> None:
+        """What the agent passes back as ``--project "$DOMYN_PROJECT_DIR"`` without a
+        project: not a folder to review, which would be refused off a terminal."""
+        from rich.console import Console
+
+        from domyn.agents.cli.project import select_project
+        from domyn.agents.interfaces.cli.theme import Theme
+
+        cfg.GLOBAL_DIR.mkdir(parents=True, exist_ok=True)
+
+        assert cfg.names_global_dir(str(cfg.GLOBAL_DIR))
+        assert (
+            select_project(str(cfg.GLOBAL_DIR), Console(), Theme.build(allow_animation=False))
+            is None
+        )
+        assert cfg.active_project() is None
+        assert os.environ[cfg.PROJECT_DIR_VAR] == str(cfg.GLOBAL_DIR)
+
+    @pytest.mark.parametrize("value", ["alpha", "./elsewhere"])
+    def test_other_values_are_not_the_global_folder(self, value: str) -> None:
+        assert not cfg.names_global_dir(value)
 
     def test_its_files_and_the_working_folder_s_skills_both_load(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

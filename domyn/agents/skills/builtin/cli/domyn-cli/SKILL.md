@@ -59,21 +59,24 @@ instruction file — and before running any `domyn` command. Each project has it
 files, and changing the wrong ones looks like it worked while the session never sees
 it.
 
-1. Run `echo "$DOMYN_PROJECT_DIR"` in the shell.
-   - **Set**: the session runs the project in that folder. Its config is
-     `$DOMYN_PROJECT_DIR/config.yaml`, its skills folder `$DOMYN_PROJECT_DIR/skills/`,
-     its instructions the files that config lists. **Nothing in
+1. Run `echo "$DOMYN_PROJECT_DIR"` in the shell. It names the folder this session
+   uses as its home: its config is `$DOMYN_PROJECT_DIR/config.yaml`, its skills folder
+   `$DOMYN_PROJECT_DIR/skills/`, its instructions the files that config lists, whatever
+   folder the CLI was started in (a `./.domyn/config.yaml` there is not read).
+   - **`~/.domyn`** (the home folder's `.domyn`): no project, the global configuration.
+   - **Any other folder**: the session runs the project in that folder. **Nothing in
      `~/.domyn/` is used**: do not read or edit the files there for this session.
-   - **Empty**: no project. The config is `~/.domyn/config.yaml`, whatever folder the
-     CLI was started in (a `./.domyn/config.yaml` there is not read).
+   - **Empty**: the session was not started by the `domyn` CLI; ask the user which
+     configuration it runs.
 2. A session can also run a config file named on the command line
    (`domyn run my.yaml`), which only `/config` shows. When unsure, or when there is no
    shell, ask the user to type `/config`: it prints the file in use and a summary
    with secrets removed.
 3. **Every `domyn` command you run in the shell takes
-   `--project "$DOMYN_PROJECT_DIR"` when the variable is set** (`domyn skill remove`,
-   `domyn skills`, `domyn export`, …). Without it the command reads and changes
-   `~/.domyn/`, not this session's configuration, and reports success.
+   `--project "$DOMYN_PROJECT_DIR"`** (`domyn skill remove`, `domyn skills`,
+   `domyn export`, …). Without it the command reads and changes `~/.domyn/`, which in a
+   project is not this session's configuration, and reports success. With
+   `~/.domyn` it is the global configuration, as without the option.
 
 **What your file tools can reach.** The built-in file tools only work inside the
 workspace (by default the directory the CLI was started in) plus the skill
@@ -153,8 +156,8 @@ Steps:
      message.
    - **Autodiscovery is off**: create it in the **`skills/` folder of the
      configuration's own folder** (see *Which configuration this session runs*):
-     `$DOMYN_PROJECT_DIR/skills/<name>/` in a project, `~/.domyn/skills/<name>/`
-     without one — **and add it to the config** (step 4).
+     `$DOMYN_PROJECT_DIR/skills/<name>/` (`~/.domyn/skills/<name>/` without a
+     project) — **and add it to the config** (step 4).
      Nothing scans that folder: a skill created there and not listed in
      `config.yaml` is **never loaded**. Writing the file is half the job. If the user
      would rather keep their skills in `./.domyn/skills`, suggest `/skills-autodiscover on`

@@ -26,8 +26,8 @@ back to, and reading both would concatenate two attempts at the same file."""
 AUTODISCOVERY_DIRS: tuple[Path, ...] = (Path(".domyn"), Path(".agents"))
 """The project's own instruction folders, relative to where the CLI is started.
 
-Listed as written in an agent's paths, they are walked on every load (`StateFolders.INSTRUCTIONS_SKIP`
-skipped) rather than read flat. When ``domyn setup`` is told to, it writes them in this
+Listed as written in an agent's paths, they are walked on every load rather than read
+flat. When ``domyn setup`` is told to, it writes them in this
 order **after** the user's own paths — the reverse of the skills folders, because the
 order means the opposite: the first soul wins, so the user's beats a project's (and
 ``.domyn``'s beats ``.agents``'s), and every ``AGENTS.md`` is included with the last one
@@ -56,7 +56,7 @@ class FoundInstructions:
         return [*([self.soul] if self.soul else []), *self.agents]
 
 
-def find_instruction_files(root: Path, *, skip: frozenset[str] = frozenset()) -> FoundInstructions:
+def find_instruction_files(root: Path) -> FoundInstructions:
     """The instruction files under ``root``, breadth first, sorted by name within a level.
 
     Breadth first, so "the first ``SOUL.md``" is the one nearest the root, and the
@@ -64,9 +64,7 @@ def find_instruction_files(root: Path, *, skip: frozenset[str] = frozenset()) ->
     order the loader keeps within a kind, where the later one is what a model follows.
     In each folder only the first of the accepted spellings is taken, as the loader
     does. Hidden and dependency folders are skipped and no link is followed, as in
-    the skills walk. ``skip`` names folders skipped among the root's direct children
-    only, where domyn keeps its state; a folder of that name deeper down is walked.
-    A missing root, a file, or a linked one gives nothing; a folder that cannot be
+    the skills walk. A missing root, a file, or a linked one gives nothing; a folder that cannot be
     listed ends the walk with what was found so far.
     """
     if listed_path_is_linked(root) or not root.is_dir():
@@ -95,8 +93,6 @@ def find_instruction_files(root: Path, *, skip: frozenset[str] = frozenset()) ->
                     children = sorted(entries, key=lambda e: e.name)
                 for entry in children:
                     if entry.name.startswith(".") or entry.name in SKIPPED_DIRS:
-                        continue
-                    if directory == root and entry.name in skip:
                         continue
                     if not entry.is_dir(follow_symlinks=False):
                         continue

@@ -104,7 +104,6 @@ from domyn.agents.interfaces.cli import config as cli_config
 from domyn.agents.interfaces.cli.config import (
     BUILTIN_SKILLS_DIRNAME,
     CONFIG_FILENAME,
-    PROJECT_DIR_REF,
     PROJECT_DIR_VAR,
     PROVIDER_HINTS,
     PrivateFiles,
@@ -685,9 +684,7 @@ class _Exporter:
                     # folder (`resolve_instruction_dirs`).
                     if listed.is_symlink() or not listed.is_dir() or listed.resolve() == home:
                         continue
-                    found = find_instruction_files(
-                        listed.resolve(), skip=StateFolders.INSTRUCTIONS_SKIP
-                    )
+                    found = find_instruction_files(listed.resolve())
                     for file in found.paths:
                         file = file.resolve()
                         sources.setdefault(file, _InstructionSource(file, [file]))
@@ -813,7 +810,7 @@ class _Exporter:
                 "be read on the machine that imports it:\n"
                 + "".join(f"  - {line}\n" for line in outside)
                 + f"Remove them, or put the files in the project and name them as "
-                f"{PROJECT_DIR_REF}/…"
+                f"${{{PROJECT_DIR_VAR}}}/…"
             )
 
     # -- the whole thing --------------------------------------------------
@@ -1032,11 +1029,11 @@ def _inside_project(value: Any) -> bool:
     variable, which could be set to anything where it is run."""
     if not isinstance(value, str):
         return False
-    if value == PROJECT_DIR_REF:
+    if value == f"${{{PROJECT_DIR_VAR}}}":
         return True
-    if not value.startswith(f"{PROJECT_DIR_REF}/"):
+    if not value.startswith(f"${{{PROJECT_DIR_VAR}}}/"):
         return False
-    rest = value.removeprefix(f"{PROJECT_DIR_REF}/")
+    rest = value.removeprefix(f"${{{PROJECT_DIR_VAR}}}/")
     if "$" in rest:
         return False
     normal = posixpath.normpath(rest)
@@ -1045,7 +1042,7 @@ def _inside_project(value: Any) -> bool:
 
 def _in_project(relative: str) -> str:
     """A path inside the export, as its config names it."""
-    return f"{PROJECT_DIR_REF}/{relative}"
+    return f"${{{PROJECT_DIR_VAR}}}/{relative}"
 
 
 @dataclass(frozen=True)
@@ -1317,7 +1314,7 @@ def _print_list(console: Console, title: str, items: list[str], style: str) -> N
 
 def _in_export(path: str) -> str:
     """A path of the exported config as the reader sees it: relative to the export."""
-    return path.removeprefix(f"{PROJECT_DIR_REF}/")
+    return path.removeprefix(f"${{{PROJECT_DIR_VAR}}}/")
 
 
 def _with_tilde(path: Path) -> str:
