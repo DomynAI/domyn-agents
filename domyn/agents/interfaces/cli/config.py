@@ -50,7 +50,6 @@ from domyn.agents.tools.builtin import BUNDLE_TOOL_NAMES, DEFAULT_BUNDLES, Brows
 CONFIG_FILENAME = "config.yaml"
 CREDENTIALS_FILENAME = "credentials"
 
-PROJECT_DIR = Path(".domyn")
 GLOBAL_DIR = Path.home() / ".domyn"
 
 # The planner the CLI runs on, deliberately fixed rather than configurable.
@@ -426,22 +425,14 @@ def project_location(folder: Path) -> str:
 
 
 def home_dir() -> Path:
-    """The folder that plays ``~/.domyn``: the active project's, else ``~/.domyn``."""
-    return _active_project or GLOBAL_DIR
+    """The folder that plays ``~/.domyn``: the active project's, else ``~/.domyn``.
 
-
-def config_dir(*, prefer_project: bool = True) -> Path:
-    """Where config lives: the ``--project`` folder when one is selected, else
-    ``./.domyn`` when present, else the home one.
-
-    Project-local wins so a repo can pin its own model without touching the
-    user's global setup.
+    Where the config lives too, and never the folder domyn runs in: a
+    ``./.domyn/config.yaml`` there is not read, so a cloned repository cannot choose
+    the model, tools or skills a session runs on. A configuration of its own is
+    selected explicitly, with ``--project`` or by passing the file to ``domyn run``.
     """
-    if _active_project is not None:
-        return _active_project
-    if prefer_project and (PROJECT_DIR / CONFIG_FILENAME).is_file():
-        return PROJECT_DIR
-    return GLOBAL_DIR
+    return _active_project or GLOBAL_DIR
 
 
 def _config_paths(raw: dict[str, Any]) -> Iterable[list[Any]]:
@@ -498,8 +489,8 @@ def expand_project_dir(raw: dict[str, Any], folder: Path | None) -> dict[str, An
     return expanded
 
 
-def config_path(*, prefer_project: bool = True) -> Path:
-    return config_dir(prefer_project=prefer_project) / CONFIG_FILENAME
+def config_path() -> Path:
+    return home_dir() / CONFIG_FILENAME
 
 
 def credentials_path() -> Path:
@@ -1762,9 +1753,6 @@ this order, into the agent's skills paths. The order is the precedence: domyn's 
 folder wins a name clash with the one other tools share. Being relative, they are read
 every turn from the folder ``domyn run`` starts in, whichever that is, group folders
 included (`skills.layout`).
-
-``.domyn`` is `PROJECT_DIR`'s name, spelled out rather than derived from it: the entry
-has to stay relative, and tests point `PROJECT_DIR` at absolute folders.
 """
 
 

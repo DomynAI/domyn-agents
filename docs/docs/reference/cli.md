@@ -100,7 +100,7 @@ Then set the provider in `agent.py` and run `uv run domyn run agent.py`.
 domyn skills
 ```
 
-Lists the [skills](../guides/skills.md) the configuration loads, `./.domyn/config.yaml` when the current directory has one and `~/.domyn/config.yaml` otherwise: their names, descriptions, sections and files, and why any is unavailable. A relative path in the configuration is read from the current directory, as `domyn run` reads it.
+Lists the [skills](../guides/skills.md) `~/.domyn/config.yaml` loads, whatever the current directory, or a project's with `--project`: their names, descriptions, sections and files, and why any is unavailable. A relative path in the configuration is read from the current directory, as `domyn run` reads it.
 
 | Option | Type | Description |
 |---|---|---|

@@ -26,7 +26,6 @@ _REAL_CUSTOM_SKILLS = setup._choose_custom_skills
 @pytest.fixture(autouse=True)
 def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cfg, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
-    monkeypatch.setattr(cfg, "PROJECT_DIR", tmp_path / "nowhere" / ".domyn")
     monkeypatch.setattr(select_mod, "_interactive", lambda theme: False)
     monkeypatch.setattr(setup, "_choose_builtin_skills", lambda console, theme, current: current)
     for name in ("OPENAI_API_KEY", "VLLM_API_KEY", "LLM_API_KEY"):

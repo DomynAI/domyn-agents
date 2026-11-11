@@ -21,7 +21,6 @@ P = cfg.PROJECT_DIR_REF
 @pytest.fixture(autouse=True)
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(cfg, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
-    monkeypatch.setattr(cfg, "PROJECT_DIR", tmp_path / "nowhere" / ".domyn")
     monkeypatch.chdir(tmp_path)
     return cfg.GLOBAL_DIR
 

@@ -295,7 +295,6 @@ class TestChangeModelIsDefaultConfigOnly:
         from domyn.agents.interfaces.cli import repl as repl_mod
 
         monkeypatch.setattr(cfg, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
-        monkeypatch.setattr(cfg, "PROJECT_DIR", tmp_path / "project" / ".domyn")
 
         called = False
 
@@ -329,7 +328,6 @@ class TestChangeModelKeepsTheSessionsSkills:
         from domyn.agents.skills.integration import attach_skills
 
         monkeypatch.setattr(cfg, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
-        monkeypatch.setattr(cfg, "PROJECT_DIR", tmp_path / "project" / ".domyn")
 
         configured = tmp_path / "configured"
         from_file = tmp_path / "from-file"
@@ -373,7 +371,6 @@ class TestChangeModelKeepsTheSessionsSkills:
         from domyn.agents.skills.integration import attach_skills
 
         monkeypatch.setattr(cfg, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
-        monkeypatch.setattr(cfg, "PROJECT_DIR", tmp_path / "project" / ".domyn")
 
         skill = "---\nname: in-memory\ndescription: d\n---\nbody of in-memory\n"
         # The saved config declares the same in-memory source.

@@ -106,7 +106,7 @@ class TestDomynSkills:
         config = _config({"source": {"type": "local_dir", "paths": [str(p) for p in paths]}})
         saved = tmp_path / "config.yaml"
         saved.write_text(yaml.safe_dump(config), encoding="utf-8")
-        monkeypatch.setattr(cfg, "config_path", lambda *, prefer_project=True: saved)
+        monkeypatch.setattr(cfg, "config_path", lambda: saved)
         monkeypatch.chdir(tmp_path)
         return paths
 
@@ -122,7 +122,7 @@ class TestDomynSkills:
     ) -> None:
         from domyn.agents.cli.commands.skills.command import _configured_skill_dirs
 
-        monkeypatch.setattr(cfg, "config_path", lambda *, prefer_project=True: tmp_path / "no.yaml")
+        monkeypatch.setattr(cfg, "config_path", lambda: tmp_path / "no.yaml")
 
         assert _configured_skill_dirs() == []
 

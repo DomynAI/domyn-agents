@@ -66,10 +66,7 @@ def skill_command(
         )
         raise typer.Exit(1)
 
-    # The selected project's config, else the global one whatever folder the command
-    # runs in: `config_path` would otherwise pick ./.domyn/config.yaml when the folder
-    # has one.
-    path = config_path(prefer_project=False)
+    path = config_path()
     raw = read_raw_config(path)
 
     if action == "show":

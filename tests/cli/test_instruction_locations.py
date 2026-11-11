@@ -321,7 +321,6 @@ class TestTheySurviveAReload:
         from domyn.agents.interfaces.cli.repl import Repl
 
         monkeypatch.setattr(cfg, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
-        monkeypatch.setattr(cfg, "PROJECT_DIR", tmp_path / "project" / ".domyn")
 
         usable = _raw()
         monkeypatch.setattr(repl_mod, "run_setup", lambda *a, **k: usable)

@@ -281,7 +281,7 @@ From the shell:
 | `domyn skill show <name>` | Prints one skill the global `~/.domyn/config.yaml` loads, with its file and sections. `<name>#<section>` prints one `##` section. |
 | `domyn skill remove <name>` | Removes the entry that names the skill, its folder or its `.md` file, from `~/.domyn/config.yaml`. The files stay where they are. A skill loaded through a listed folder, such as `./.domyn/skills`, has no entry of its own, so nothing is removed and the command says how to stop loading it. |
 
-`--project`, for a project's own `./.domyn/config.yaml`, is not supported.
+All of them read `~/.domyn/config.yaml` whatever the current directory, or a project's with `--project`. A `./.domyn/config.yaml` in the current directory is never read.
 
 ## Next steps
 

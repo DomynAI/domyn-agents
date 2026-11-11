@@ -35,11 +35,12 @@ Ground rules:
 Everything is under `~/.domyn/` (the *home* directory), unless the session runs a
 **project** (`domyn run --project <name|path>`): then the project's folder takes the
 place of `~/.domyn/` entirely — see *Which configuration this session runs* below. A
-folder can also have its own `./.domyn/` in the directory the CLI is started from.
+`./.domyn/` in the directory the CLI is started from can hold skills and instructions
+(autodiscovery, when setup turned it on), but a `config.yaml` there is never read.
 
 | path | what it is |
 |---|---|
-| `~/.domyn/config.yaml` | provider, model, default agent, tools, compaction. **`./.domyn/config.yaml` takes its place when that file exists** in the directory the CLI was started from |
+| `~/.domyn/config.yaml` | provider, model, default agent, tools, compaction. A `./.domyn/config.yaml` in the directory the CLI was started from is **not** read: a folder's own configuration is a project (`--project`) or a file passed to `domyn run` |
 | `~/.domyn/credentials` | API keys as `NAME=value`, permissions 0600. Written by `domyn setup` |
 | `~/.domyn/builtin-skills/` | the built-in skills chosen in `domyn setup`, copied from the package. **`domyn setup` deletes and rewrites this directory every time**, so nothing of the user's own belongs here. It is not scanned: `config.yaml` lists each skill in it by absolute path |
 | `SOUL.md`, `AGENTS.md` (or `AGENT.md`) | standing instructions: identity, tone and preferences (`SOUL.md`, follows the user), what the agent is working on (`AGENTS.md`, follows the task). Read from the paths under `standing_instructions.source.paths` in `config.yaml`: the files `domyn setup` was pointed at, plus `./.domyn` and `./.agents` (subfolders included) when the user turned that on. **`~/.domyn/SOUL.md` and `~/.domyn/AGENTS.md` are not read** unless setup was given their path, and neither are the ones at a project's top. `/config` lists the files in use |
@@ -62,8 +63,8 @@ it.
      `$DOMYN_PROJECT_DIR/config.yaml`, its skills folder `$DOMYN_PROJECT_DIR/skills/`,
      its instructions the files that config lists. **Nothing in
      `~/.domyn/` is used**: do not read or edit the files there for this session.
-   - **Empty**: no project. The config is `./.domyn/config.yaml` when that file exists
-     in the folder the CLI was started in, else `~/.domyn/config.yaml`.
+   - **Empty**: no project. The config is `~/.domyn/config.yaml`, whatever folder the
+     CLI was started in (a `./.domyn/config.yaml` there is not read).
 2. A session can also run a config file named on the command line
    (`domyn run my.yaml`), which only `/config` shows. When unsure, or when there is no
    shell, ask the user to type `/config`: it prints the file in use and a summary
@@ -208,8 +209,8 @@ are written `${DOMYN_PROJECT_DIR}/...` instead, which the CLI sets to the projec
 folder. A listed path that does not exist (deleted, moved, or relative to another
 folder) is named at startup as "Skill not found: ..." — except `.domyn/skills` and
 `.agents/skills`: most folders have neither, and that is normal. The list in the global
-`~/.domyn/config.yaml` is shared by every project; a project that wants its own can
-have a `./.domyn/config.yaml`, which takes its place when it exists.
+`~/.domyn/config.yaml` is shared by every folder; a configuration of its own is a
+project (`domyn setup --project <name>`, then `domyn run --project <name>`).
 
 **The built-in skills** are chosen in `domyn setup`, which copies each chosen one
 (and the files it shares with others) into `~/.domyn/builtin-skills/` and lists it in
@@ -233,7 +234,7 @@ shows. To stop loading a skill, run `domyn skill remove <name>` (with
 `--project "$DOMYN_PROJECT_DIR"` in a project, see *Which configuration this session
 runs*): it removes the entry naming that skill (its folder or its `.md` file) from the
 config and leaves the files where they are. Without `--project` it edits
-`~/.domyn/config.yaml`, never `./.domyn/config.yaml`. A skill loaded through
+`~/.domyn/config.yaml`. A skill loaded through
 `./.domyn/skills` or `./.agents/skills` autodiscovery, or through a listed folder
 holding several skills, is not listed on its own, so the command changes nothing and says so: turn autodiscovery off
 (`/skills-autodiscover off`), or delete or move the skill's file. The session picks
@@ -297,7 +298,8 @@ there and should be moved (below).
   next message of a running session, since it rewrites `config.yaml`).
   Both are interactive, so you cannot fill them in for the user.
 - **Anything else** → edit the YAML. Edit the file `/config` names: it is
-  `./.domyn/config.yaml` when the project has one, `~/.domyn/config.yaml` otherwise.
+  `$DOMYN_PROJECT_DIR/config.yaml` in a project, the file given to `domyn run` when
+  there was one, `~/.domyn/config.yaml` otherwise.
   Below, `CONFIG` stands for that path. Before editing:
   1. Back it up: `cp CONFIG CONFIG.bak`.
   2. Make the smallest edit that does the job, keeping the existing structure and

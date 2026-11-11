@@ -6,7 +6,7 @@ description: "The CLI's configuration file, the settings you are most likely to 
 
 # Configuring the CLI
 
-The setup wizard saves the session's configuration to `~/.domyn/config.yaml`. Run `domyn setup` to go through the wizard again, use `/model` to change only the model, and `/config` to see what a session runs on.
+The setup wizard saves the session's configuration to `~/.domyn/config.yaml`. `domyn run` uses it whatever folder it starts in: a `config.yaml` in a `./.domyn` folder there is not read. To give a folder a configuration of its own, make it a [project](#projects), or pass the file to `domyn run`. Run `domyn setup` to go through the wizard again, use `/model` to change only the model, and `/config` to see what a session runs on.
 
 ## The setup wizard
 

@@ -21,7 +21,6 @@ from domyn.agents.interfaces.cli import select as select_mod
 def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Redirect config and credentials into a temp dir, as tests/cli/test_cli_config.py does."""
     monkeypatch.setattr(cfg, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
-    monkeypatch.setattr(cfg, "PROJECT_DIR", tmp_path / "project" / ".domyn")
     # setenv first so the original value (or its absence) is always recorded:
     # delenv on an unset variable records nothing, and a key the wizard then
     # writes to os.environ would survive into every later test.
