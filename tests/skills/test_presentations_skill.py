@@ -26,12 +26,12 @@ from domyn.agents.skills import LocalDirSkillSource, SkillQuery
 
 PRODUCTIVITY = Path(domyn.agents.__file__).parent / "skills" / "builtin" / "productivity"
 SKILL = PRODUCTIVITY / "presentations"
-SKILL_MD = (SKILL / "SKILL.md").read_text()
+SKILL_MD = (SKILL / "SKILL.md").read_text(encoding="utf-8")
 SCRIPTS = SKILL / "scripts"
 TEMPLATE = SKILL / "template" / "layouts.pptx"
 RESOURCES = PRODUCTIVITY.parent / "resources"
-PALETTE = json.loads((RESOURCES / "palette.json").read_text())
-TYPOGRAPHY = json.loads((RESOURCES / "typography.json").read_text())
+PALETTE = json.loads((RESOURCES / "palette.json").read_text(encoding="utf-8"))
+TYPOGRAPHY = json.loads((RESOURCES / "typography.json").read_text(encoding="utf-8"))
 BACKGROUNDS = PALETTE["backgrounds"]
 EMU = 914400
 BODY = "New analysts needed three weeks to answer their first question on their own."
@@ -75,7 +75,7 @@ class TestTheSkill:
         assert "import slides as sl" in SKILL_MD
 
     def test_every_layout_method_is_documented(self) -> None:
-        source = (SCRIPTS / "slides.py").read_text()
+        source = (SCRIPTS / "slides.py").read_text(encoding="utf-8")
         deck = source[source.index("class Deck") :]
         methods = set(re.findall(r"\n    def ([a-z]\w*)\(", deck))
         assert {"two_cards", "three_cards", "four_cards", "table_slide", "save"} <= methods
@@ -190,7 +190,7 @@ class TestWhatTheSpecNames:
     def test_the_module_types_no_family_name_and_no_colour(self) -> None:
         """Families come from typography.json and colours from palette.json, so the slides,
         the PDFs and the charts cannot drift apart."""
-        source = (SCRIPTS / "slides.py").read_text()
+        source = (SCRIPTS / "slides.py").read_text(encoding="utf-8")
         assert "DM Sans" not in source
         assert not re.findall(r'"#[0-9A-Fa-f]{6}"', source)
         assert "`DM Sans Thin`" in SKILL_MD and "not among these files" in SKILL_MD
@@ -410,7 +410,7 @@ class TestTheTemplate:
                 assert not shape.is_placeholder or "slot" in tags, (layout.name, shape.name)
 
     def test_every_layout_the_module_starts_exists(self, deck: Any) -> None:
-        source = (SCRIPTS / "slides.py").read_text()
+        source = (SCRIPTS / "slides.py").read_text(encoding="utf-8")
         named = set(re.findall(r'self\._start\(\s*"([^"]+)"', source))
         assert named and named <= set(deck.layouts)
 
@@ -509,7 +509,7 @@ class TestTheTemplate:
         from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 
         secret = tmp_path / "secret.txt"
-        secret.write_text("the secret")
+        secret.write_text("the secret", encoding="utf-8")
         prs = Presentation(str(TEMPLATE))
         theme = prs.slide_master.part.part_related_by(RT.THEME)
         xml = theme.blob.decode()

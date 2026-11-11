@@ -58,7 +58,7 @@ def _write(path: Path, name: str, description: str = "does a thing") -> None:
     else:
         path.mkdir(parents=True, exist_ok=True)
         file = path / "SKILL.md"
-    file.write_text(f"---\nname: {name}\ndescription: {description}\n---\nbody\n")
+    file.write_text(f"---\nname: {name}\ndescription: {description}\n---\nbody\n", encoding="utf-8")
 
 
 # Captured before the CLI conftest replaces it for every other wizard test.
@@ -255,7 +255,7 @@ class TestWhatTheConfigHolds:
     ) -> None:
         stray = cfg.skills_install_dir() / "mine"
         stray.mkdir(parents=True)
-        (stray / "SKILL.md").write_text("mine")
+        (stray / "SKILL.md").write_text("mine", encoding="utf-8")
 
         result = _run(console, theme, [*FIELDS, "none", "no", ""])
 
@@ -281,7 +281,7 @@ class TestWhatTheConfigHolds:
     ) -> None:
         _run(console, theme, _answers(""), target=Path("config.yaml"))
 
-        on_disk = yaml.safe_load(Path("config.yaml").read_text())
+        on_disk = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
         assert on_disk["agents"][0]["skills"]["source"]["paths"] == AUTO
 
 
@@ -414,7 +414,7 @@ class TestTheStartupWarning:
         warning = _missing_skills_warning(_agent(llm_provider, [gone]))
 
         assert warning is not None
-        assert f"Skill not found: {gone}" in warning
+        assert f"Skill not found: {gone.as_posix()}" in warning
         assert "Relative paths" not in warning
         assert "Run `domyn setup` to update" in warning
 
@@ -422,7 +422,7 @@ class TestTheStartupWarning:
         self, llm_provider: Any, tmp_path: Path
     ) -> None:
         (tmp_path / "a").mkdir()
-        (tmp_path / "b.md").write_text("x")
+        (tmp_path / "b.md").write_text("x", encoding="utf-8")
 
         assert (
             _missing_skills_warning(_agent(llm_provider, [tmp_path / "a", tmp_path / "b.md"]))
@@ -453,6 +453,7 @@ class TestTheStartupWarning:
     ) -> None:
         (tmp_path / "home" / ".domyn" / "skills" / "x").mkdir(parents=True)
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))  # HOME on Windows
 
         assert _missing_skills_warning(_agent(llm_provider, [Path("~/.domyn/skills/x")])) is None
 
@@ -509,7 +510,7 @@ class TestTheStartupWarning:
         warning = _missing_skills_warning(_agent(llm_provider, [link]))
 
         assert warning is not None
-        assert f"symbolic link (links are not followed): {link}" in warning
+        assert f"symbolic link (links are not followed): {link.as_posix()}" in warning
         assert "Skill not found" not in warning
 
     def test_a_symlinked_path_listed_by_hand_is_named_too(
@@ -521,7 +522,7 @@ class TestTheStartupWarning:
         warning = _missing_skills_warning(_agent(llm_provider, [tmp_path / "review"]))
 
         assert warning is not None
-        assert "symbolic link" in warning and str(tmp_path / "review") in warning
+        assert "symbolic link" in warning and (tmp_path / "review").as_posix() in warning
 
     def test_an_agent_with_no_skills_prints_nothing(self, llm_provider: Any) -> None:
         assert _missing_skills_warning(_agent(llm_provider)) is None
@@ -575,7 +576,7 @@ def _skill_with_external_files(root: Path, name: str, entries: list[str]) -> Non
     listed = "".join(f"  - {e}\n" for e in entries)
     (root / name).mkdir(parents=True, exist_ok=True)
     (root / name / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: d\nexternal_files:\n{listed}---\nbody\n"
+        f"---\nname: {name}\ndescription: d\nexternal_files:\n{listed}---\nbody\n", encoding="utf-8"
     )
 
 

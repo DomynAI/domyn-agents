@@ -616,7 +616,7 @@ def _read_serve_channels_config(path: Path) -> list[dict[str, Any]]:
     keys like ``serve``) — it just re-reads the same file as plain YAML.
     """
     try:
-        raw = yaml.safe_load(path.read_text()) or {}
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except Exception as exc:
         console.print(f"[red]ERROR:[/red] failed to parse YAML {path}: {exc}")
         raise typer.Exit(1) from exc

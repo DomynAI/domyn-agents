@@ -132,7 +132,7 @@ class TestTheExportLoadsTheSameSkills:
 
         # The anchor moved up to the folder holding both, and the path into it is kept.
         assert _paths(_exported(report.dest)) == [P + "skills/lib/cat/tool"]
-        assert (report.dest / "skills/lib/shared.py").read_text() == "x = 1\n"
+        assert (report.dest / "skills/lib/shared.py").read_text(encoding="utf-8") == "x = 1\n"
         loaded = _loaded_skills(_exported(report.dest), machine["cwd"], report.dest)
         assert loaded == {"tool": (True, None)} == _loaded_skills(raw, machine["cwd"])
 
@@ -279,7 +279,7 @@ class TestAutodiscovery:
         self, machine: dict[str, Path], tmp_path: Path
     ) -> None:
         elsewhere = _skill(tmp_path / "elsewhere" / "ascii-art", "ascii-art", external=["x.py"])
-        (elsewhere / "x.py").write_text("print('art')\n")
+        (elsewhere / "x.py").write_text("print('art')\n", encoding="utf-8")
         copy = machine["cwd"] / ".domyn" / "skills" / "ascii-art"
         shutil.copytree(elsewhere, copy)
         raw = _config(".domyn/skills", str(elsewhere))
@@ -314,13 +314,13 @@ class TestAutodiscovery:
         self, change: str, machine: dict[str, Path], tmp_path: Path
     ) -> None:
         elsewhere = _skill(tmp_path / "elsewhere" / "ascii-art", "ascii-art", external=["."])
-        (elsewhere / "x.py").write_text("print('art')\n")
+        (elsewhere / "x.py").write_text("print('art')\n", encoding="utf-8")
         copy = machine["cwd"] / ".domyn" / "skills" / "ascii-art"
         shutil.copytree(elsewhere, copy)
         if change == "a byte":
-            (copy / "x.py").write_text("print('Art')\n")
+            (copy / "x.py").write_text("print('Art')\n", encoding="utf-8")
         elif change == "an extra file":
-            (elsewhere / "y.py").write_text("")
+            (elsewhere / "y.py").write_text("", encoding="utf-8")
         else:
             (copy / "x.py").unlink()
         raw = _config(".domyn/skills", str(elsewhere))
@@ -360,7 +360,7 @@ class TestAutodiscovery:
 
         assert _paths(_exported(report.dest)) == [P + "skills/writing/essay"]
         assert (report.dest / "skills/writing/essay/SKILL.md").is_file()
-        assert (report.dest / "skills/writing/style.md").read_text() == "style\n"
+        assert (report.dest / "skills/writing/style.md").read_text(encoding="utf-8") == "style\n"
         assert _loaded_skills(_exported(report.dest), report.dest, report.dest) == (
             _loaded_skills(raw, machine["cwd"])
         )
@@ -656,7 +656,7 @@ class TestOnlyWhatASkillListsTravels:
 
         report = _export(_config(str(skill)), machine, tmp_path / "out")
 
-        assert (report.dest / "skills/ascii-art/ascii_art.py").read_text() == "x\n"
+        assert (report.dest / "skills/ascii-art/ascii_art.py").read_text(encoding="utf-8") == "x\n"
         assert report.warnings == []
 
     def test_an_unlisted_file_goes_unnoticed_until_the_export_leaves_it_behind(
@@ -698,7 +698,7 @@ class TestSecrets:
         report = _export(raw, machine, tmp_path / "out")
 
         assert _exported(report.dest)["llm_providers"][0]["api_key"] == "${VLLM_API_KEY}"
-        assert "sk-literal" not in (report.dest / "config.yaml").read_text()
+        assert "sk-literal" not in (report.dest / "config.yaml").read_text(encoding="utf-8")
         assert report.env_vars == ["VLLM_API_KEY"]
         assert raw == original
 
@@ -748,9 +748,9 @@ class TestInstructions:
         paths = _exported(report.dest)["agents"][0]["standing_instructions"]["source"]["paths"]
         # Nothing collides, so all go straight into `instructions/`, the soul like any file.
         assert paths == [P + "instructions", P + "instructions/task.md", P + "instructions/SOUL.md"]
-        assert (report.dest / "instructions/AGENTS.md").read_text() == "brief\n"
-        assert (report.dest / "instructions/task.md").read_text() == "task\n"
-        assert (report.dest / "instructions/SOUL.md").read_text() == "soul\n"
+        assert (report.dest / "instructions/AGENTS.md").read_text(encoding="utf-8") == "brief\n"
+        assert (report.dest / "instructions/task.md").read_text(encoding="utf-8") == "task\n"
+        assert (report.dest / "instructions/SOUL.md").read_text(encoding="utf-8") == "soul\n"
 
 
 class TestInstructionsNesting:
@@ -784,8 +784,8 @@ class TestInstructionsNesting:
         report = _export(self._raw(str(a), str(b)), machine, tmp_path / "out")
 
         assert self._declared(report.dest) == [P + "instructions/a", P + "instructions/b"]
-        assert (report.dest / "instructions/a/AGENTS.md").read_text() == "a\n"
-        assert (report.dest / "instructions/b/AGENTS.md").read_text() == "b\n"
+        assert (report.dest / "instructions/a/AGENTS.md").read_text(encoding="utf-8") == "a\n"
+        assert (report.dest / "instructions/b/AGENTS.md").read_text(encoding="utf-8") == "b\n"
 
     def test_as_deep_as_it_takes_to_tell_them_apart(
         self, machine: dict[str, Path], tmp_path: Path
@@ -819,7 +819,7 @@ class TestInstructionsNesting:
         report = _export(self._raw(".domyn", ".agents"), machine, tmp_path / "out")
 
         assert self._declared(report.dest) == [P + "instructions/SOUL.md"]
-        assert (report.dest / "instructions/SOUL.md").read_text() == "ours\n"
+        assert (report.dest / "instructions/SOUL.md").read_text(encoding="utf-8") == "ours\n"
 
     def test_both_local_folders_without_a_clash_share_it(
         self, machine: dict[str, Path], tmp_path: Path
@@ -849,9 +849,15 @@ class TestInstructionsNesting:
             P + "instructions/agents/SOUL.md",
             P + "instructions/agents/AGENTS.md",
         ]
-        assert (report.dest / "instructions/domyn/SOUL.md").read_text() == ".domyn\n"
-        assert (report.dest / "instructions/agents/SOUL.md").read_text() == ".agents\n"
-        assert (report.dest / "instructions/agents/AGENTS.md").read_text() == "task\n"
+        assert (report.dest / "instructions/domyn/SOUL.md").read_text(
+            encoding="utf-8"
+        ) == ".domyn\n"
+        assert (report.dest / "instructions/agents/SOUL.md").read_text(
+            encoding="utf-8"
+        ) == ".agents\n"
+        assert (report.dest / "instructions/agents/AGENTS.md").read_text(
+            encoding="utf-8"
+        ) == "task\n"
 
     def test_a_local_folder_is_walked_without_domyn_s_own_folders(
         self, machine: dict[str, Path], tmp_path: Path
@@ -865,7 +871,7 @@ class TestInstructionsNesting:
 
         declared = self._declared(report.dest)
         assert len(declared) == 2
-        texts = [(report.dest / d.removeprefix(P)).read_text() for d in declared]
+        texts = [(report.dest / d.removeprefix(P)).read_text(encoding="utf-8") for d in declared]
         assert texts == ["top\n", "team\n"]
 
     def test_a_local_folder_with_neither_file_is_left_out_quietly(

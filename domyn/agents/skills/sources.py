@@ -279,7 +279,8 @@ class LocalDirSkillSource(SkillSource):
         return narrow_to_section(content, ref)
 
     def describe(self) -> str:
-        return f"{self.type}({', '.join(str(p) for p in self.paths)})"
+        # As written, `~` kept, with forward slashes on Windows too.
+        return f"{self.type}({', '.join(p.as_posix() for p in self.paths)})"
 
 
 def _load_skill_file(

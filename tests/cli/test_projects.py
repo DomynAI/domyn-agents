@@ -606,7 +606,7 @@ class TestPathsInAProject:
         # The step compared real folders...
         assert seen[0]["source"]["paths"] == [str(folder / "skills/old"), ".domyn/skills"]
         # ...and the file names the project's own files through the variable.
-        on_disk = yaml.safe_load((folder / cfg.CONFIG_FILENAME).read_text())
+        on_disk = yaml.safe_load((folder / cfg.CONFIG_FILENAME).read_text(encoding="utf-8"))
         assert _skill_paths(on_disk) == ["${DOMYN_PROJECT_DIR}/skills/new", ".domyn/skills"]
         assert saved is not None and _skill_paths(saved) == _skill_paths(on_disk)
 
@@ -682,7 +682,7 @@ class TestTheCommands:
         output = "".join(result.output.split())
         assert f"domynrun--project{tmp_path / 'copy'}" in output
         assert "domynrun--projectcopy" in output
-        exported = yaml.safe_load((tmp_path / "copy" / "config.yaml").read_text())
+        exported = yaml.safe_load((tmp_path / "copy" / "config.yaml").read_text(encoding="utf-8"))
         (path,) = _skill_paths(exported)
         assert path.startswith("${DOMYN_PROJECT_DIR}/")
         copied = tmp_path / "copy" / path.removeprefix("${DOMYN_PROJECT_DIR}/")
@@ -723,7 +723,10 @@ class TestTheBanner:
 
         subtitle = self._subtitle(monkeypatch, ["--project", "alpha"])
 
-        assert subtitle.plain.endswith(f"·  Project alpha ({cfg.project_dir('alpha')})")
+        # Through project_location: a temporary folder is under the home folder
+        # on Windows (AppData), and is then written with a ~.
+        location = cfg.project_location(cfg.project_dir("alpha"))
+        assert subtitle.plain.endswith(f"·  Project alpha ({location})")
 
     def test_the_name_alone_is_in_the_brand_colour(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _write_project("alpha", _config())
@@ -746,12 +749,13 @@ class TestTheBanner:
 
         subtitle = self._subtitle(monkeypatch, ["--project", str(folder)])
 
-        assert subtitle.plain.endswith(f"·  Project beta ({folder})")
+        assert subtitle.plain.endswith(f"·  Project beta ({cfg.project_location(folder)})")
 
     def test_a_location_under_home_is_written_with_a_tilde(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # HOME on Windows
 
         assert cfg.describe_project(tmp_path / "x" / "p") == "p (~/x/p)"
 

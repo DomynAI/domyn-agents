@@ -60,7 +60,7 @@ class TestAFreshWizardRun:
 
         assert result is not None
         assert target.is_file()
-        on_disk = yaml.safe_load(target.read_text())
+        on_disk = yaml.safe_load(target.read_text(encoding="utf-8"))
         assert on_disk == result
         assert "entrypoint" in on_disk
         assert "provider" not in on_disk
@@ -100,7 +100,7 @@ class TestAFreshWizardRun:
             result = setup.run_setup(console, theme, path=target)
 
         assert result is not None
-        assert "sk-super-secret" not in target.read_text()
+        assert "sk-super-secret" not in target.read_text(encoding="utf-8")
         assert result["llm_providers"][0]["api_key"] == "${OPENAI_API_KEY}"
         assert cfg.read_credentials()["OPENAI_API_KEY"] == "sk-super-secret"
 
@@ -185,7 +185,7 @@ class TestTheDomynProvider:
             result = setup.run_setup(console, theme, path=target)
 
         assert result is not None
-        assert "dk-secret" not in target.read_text()
+        assert "dk-secret" not in target.read_text(encoding="utf-8")
         assert result["llm_providers"][0]["api_key"] == "${DOMYN_API_KEY}"
         assert cfg.read_credentials()["DOMYN_API_KEY"] == "dk-secret"
 
@@ -1020,7 +1020,7 @@ class TestWhatTheRewriteWouldDelete:
     def stray(self) -> Path:
         directory = cfg.skills_install_dir() / "mine"
         directory.mkdir(parents=True)
-        (directory / "SKILL.md").write_text("my own skill")
+        (directory / "SKILL.md").write_text("my own skill", encoding="utf-8")
         return directory
 
     def test_declining_leaves_the_directory_and_the_config_as_they_were(
@@ -1031,7 +1031,7 @@ class TestWhatTheRewriteWouldDelete:
 
         assert result is not None
         assert _listed(result) is None
-        assert (stray / "SKILL.md").read_text() == "my own skill"
+        assert (stray / "SKILL.md").read_text(encoding="utf-8") == "my own skill"
 
     def test_it_is_named_before_it_is_deleted(
         self, stray: Path, console: MagicMock, theme: Theme, tmp_path: Path
@@ -1114,7 +1114,7 @@ class TestWhatTheConfigAlreadyHolds:
     ) -> None:
         target = tmp_path / "my-skills-repo"
         target.mkdir()
-        (target / "precious.md").write_text("x")
+        (target / "precious.md").write_text("x", encoding="utf-8")
         install_dir = cfg.skills_install_dir()
         install_dir.parent.mkdir(parents=True, exist_ok=True)
         install_dir.symlink_to(target)
@@ -1124,7 +1124,7 @@ class TestWhatTheConfigAlreadyHolds:
 
         assert result is not None
         assert _listed(result) is None
-        assert (target / "precious.md").read_text() == "x"
+        assert (target / "precious.md").read_text(encoding="utf-8") == "x"
 
 
 class TestTheNumberedPickerOnARealConsole:

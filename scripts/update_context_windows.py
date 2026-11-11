@@ -81,7 +81,7 @@ def main() -> None:
         sys.exit(
             f"models.dev lists no window for {', '.join(missing)}: {TARGET.name} left as it was"
         )
-    before = json.loads(TARGET.read_text())["windows"] if TARGET.exists() else {}
+    before = json.loads(TARGET.read_text(encoding="utf-8"))["windows"] if TARGET.exists() else {}
     if not (changes := differences(before, windows)):
         print(f"{TARGET.name}: unchanged")
         return
@@ -90,7 +90,8 @@ def main() -> None:
             {"source": SOURCE, "generated": date.today().isoformat(), "windows": windows},
             indent=2,
         )
-        + "\n"
+        + "\n",
+        encoding="utf-8",
     )
     print("\n".join(changes))
 

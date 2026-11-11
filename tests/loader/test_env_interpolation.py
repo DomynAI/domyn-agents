@@ -8,7 +8,7 @@ from domyn.agents.loader import load_from_file
 
 def _write_yaml(tmp_path: Path, data: dict) -> str:
     path = tmp_path / "config.yaml"
-    path.write_text(yaml.safe_dump(data))
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
     return str(path)
 
 

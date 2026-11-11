@@ -304,7 +304,7 @@ def main() -> None:
     a = p.parse_args()
 
     out = data_utils.output_dir(a.out)
-    spec: dict[str, Any] = json.loads(a.spec.read_text()) if a.spec else {}
+    spec: dict[str, Any] = json.loads(a.spec.read_text(encoding="utf-8")) if a.spec else {}
     unknown = [k for k in spec if k not in SPEC_KEYS and not k.startswith("_")]
     if unknown:
         fail(f"unknown keys {unknown}; the keys are {list(SPEC_KEYS)} (prefix a note with _)")
@@ -320,7 +320,10 @@ def main() -> None:
 
     meta_path = out / data_utils.TABLE_META
     source = str(a.data.resolve())
-    if meta_path.exists() and json.loads(meta_path.read_text()).get("source") != source:
+    if (
+        meta_path.exists()
+        and json.loads(meta_path.read_text(encoding="utf-8")).get("source") != source
+    ):
         sys.exit(f"{out} holds a table prepared from another file: use another --out folder.")
 
     # Columns kept as text are named in the source, i.e. before any rename.
@@ -350,8 +353,8 @@ def main() -> None:
     path = data_utils.write_table(out, df, meta)
     if a.spec and a.spec.resolve() != (out / SPEC_FILE):
         shutil.copy2(a.spec, out / SPEC_FILE)
-    table_meta = json.loads(meta_path.read_text())
-    (out / "table.md").write_text(markdown(table_meta))
+    table_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    (out / "table.md").write_text(markdown(table_meta), encoding="utf-8")
     data_utils.record_run(out, Path(__file__), ("prepare_table", "prepare_series"))
     print(f"\n{rows_source:,} → {len(df):,} rows, {df.shape[1]} columns. Prepared table: {path}")
 

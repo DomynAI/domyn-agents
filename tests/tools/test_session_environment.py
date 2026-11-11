@@ -101,14 +101,14 @@ class TestBuildingTheEnvironment:
         SessionEnvironment(tmp_path).prepare("c1")
         marker = tmp_path / ".domyn" / "conversations" / ".gitignore"
         assert marker.is_file()
-        assert "*" in marker.read_text()
+        assert "*" in marker.read_text(encoding="utf-8")
 
     def test_an_existing_ignore_file_is_left_alone(self, tmp_path: Path) -> None:
         conversations = tmp_path / ".domyn" / "conversations"
         conversations.mkdir(parents=True)
-        (conversations / ".gitignore").write_text("mine\n")
+        (conversations / ".gitignore").write_text("mine\n", encoding="utf-8")
         SessionEnvironment(tmp_path).prepare("c1")
-        assert (conversations / ".gitignore").read_text() == "mine\n"
+        assert (conversations / ".gitignore").read_text(encoding="utf-8") == "mine\n"
 
     @pytest.mark.parametrize(
         "linked", [".domyn", ".domyn/conversations", ".domyn/conversations/c1"]
@@ -142,7 +142,7 @@ class TestBuildingTheEnvironment:
         which is how things worked before. Refusing to run the command at all
         would trade a small problem for a total one."""
         blocked = tmp_path / "file-not-a-dir"
-        blocked.write_text("x")
+        blocked.write_text("x", encoding="utf-8")
         assert SessionEnvironment(blocked).prepare("c1") is None
 
 
@@ -159,14 +159,15 @@ class TestTheEnvironmentHandedToCommands:
         under `uv run` it comes first — `python` would keep resolving to the
         runtime the agent is supposed to be isolated from."""
         launcher = tmp_path / "launcher"
+        launcher_bin = launcher / ("Scripts" if os.name == "nt" else "bin")
         env = environment_for(
             self._paths(tmp_path),
             {
                 "VIRTUAL_ENV": str(launcher),
-                "PATH": os.pathsep.join([str(launcher / "bin"), "/usr/bin"]),
+                "PATH": os.pathsep.join([str(launcher_bin), "/usr/bin"]),
             },
         )
-        assert str(launcher / "bin") not in env["PATH"].split(os.pathsep)
+        assert str(launcher_bin) not in env["PATH"].split(os.pathsep)
 
     def test_virtual_env_points_at_the_conversation(self, tmp_path: Path) -> None:
         env = environment_for(self._paths(tmp_path), {})
@@ -245,19 +246,20 @@ class TestItReallyIsolates:
 class TestThroughTheBackend:
     @pytest.mark.asyncio
     async def test_commands_run_inside_the_conversation_environment(self, tmp_path: Path) -> None:
-        from domyn.agents.tools.builtin import LocalBackend
+        from domyn.agents.tools.builtin import build_backend
 
-        backend = LocalBackend(Workspace.at(tmp_path))
+        backend = build_backend("local", Workspace.at(tmp_path))
         result = await backend.run('echo "$VIRTUAL_ENV"', timeout=60, conversation_id="c1")
-        assert "conversations/c1/venv" in result.stdout
+        # A Windows path on Windows: compared with forward slashes.
+        assert "conversations/c1/venv" in result.stdout.replace("\\", "/")
 
     @pytest.mark.asyncio
     async def test_isolation_can_be_turned_off(self, tmp_path: Path) -> None:
         """Wanted when the agent is meant to work *on* the project it was
         launched from."""
-        from domyn.agents.tools.builtin import LocalBackend
+        from domyn.agents.tools.builtin import build_backend
 
-        backend = LocalBackend(Workspace.at(tmp_path), isolate_environment=False)
+        backend = build_backend("local", Workspace.at(tmp_path), isolate_environment=False)
         result = await backend.run('echo "$VIRTUAL_ENV"', timeout=60, conversation_id="c1")
         assert "conversations/c1" not in result.stdout
 
@@ -265,9 +267,9 @@ class TestThroughTheBackend:
     async def test_no_conversation_means_the_ambient_environment(self, tmp_path: Path) -> None:
         """A caller outside a conversation — a script, a test — is not given a
         directory it never asked for."""
-        from domyn.agents.tools.builtin import LocalBackend
+        from domyn.agents.tools.builtin import build_backend
 
-        backend = LocalBackend(Workspace.at(tmp_path))
+        backend = build_backend("local", Workspace.at(tmp_path))
         await backend.run("true", timeout=60, conversation_id="")
         assert not (tmp_path / ".domyn").exists()
 
@@ -285,10 +287,10 @@ class TestThroughTheBackend:
     async def test_a_secret_in_the_process_environment_is_not_visible_by_default(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from domyn.agents.tools.builtin import LocalBackend
+        from domyn.agents.tools.builtin import build_backend
 
         monkeypatch.setenv("MY_SECRET", "s3cr3t")
-        backend = LocalBackend(Workspace.at(tmp_path))
+        backend = build_backend("local", Workspace.at(tmp_path))
         result = await backend.run('echo "$MY_SECRET"', timeout=60, conversation_id="")
         assert "s3cr3t" not in result.stdout
 
@@ -296,9 +298,9 @@ class TestThroughTheBackend:
     async def test_an_allowed_name_reaches_the_command(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from domyn.agents.tools.builtin import LocalBackend
+        from domyn.agents.tools.builtin import build_backend
 
         monkeypatch.setenv("MY_SECRET", "s3cr3t")
-        backend = LocalBackend(Workspace.at(tmp_path), allowed_env=["MY_SECRET"])
+        backend = build_backend("local", Workspace.at(tmp_path), allowed_env=["MY_SECRET"])
         result = await backend.run('echo "$MY_SECRET"', timeout=60, conversation_id="")
         assert "s3cr3t" in result.stdout

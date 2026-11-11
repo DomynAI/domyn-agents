@@ -20,12 +20,19 @@ from pathlib import Path
 
 import pytest
 
-from domyn.agents.tools.builtin import LocalBackend, Workspace, bundle, processes, shell
+from domyn.agents.tools.builtin import (
+    LocalBackend,
+    Workspace,
+    build_backend,
+    bundle,
+    processes,
+    shell,
+)
 
 
 @pytest.fixture
 def backend(tmp_path: Path) -> LocalBackend:
-    return LocalBackend(Workspace.at(tmp_path), isolate_environment=False)
+    return build_backend("local", Workspace.at(tmp_path), isolate_environment=False)
 
 
 async def _launch(backend: LocalBackend, command: str, *, yield_s: float = 0.15, **kw):  # type: ignore[no-untyped-def]
@@ -408,8 +415,12 @@ class TestTheToolsTogether:
             *(
                 # Longer than the yield, or it finishes inside the window and
                 # leaves no record at all — which is the state this test needs.
+                # Longer on Windows, where starting one costs a second in Git Bash.
                 tools["run_command"].execute(
-                    command="sleep 2", timeout=1, state={}, conversation_id="c1"
+                    command=f"sleep {6 if os.name == 'nt' else 2}",
+                    timeout=1,
+                    state={},
+                    conversation_id="c1",
                 )
                 for _ in range(processes.MAX_PROCESSES)
             )
@@ -423,7 +434,7 @@ class TestTheToolsTogether:
         )
 
         # Wait for them to end, with nothing noticing that they have.
-        watcher = LocalBackend(Workspace.at(tmp_path), isolate_environment=False)
+        watcher = build_backend("local", Workspace.at(tmp_path), isolate_environment=False)
         last = list(processes.registry(state).values())[-1]
         assert await _until(lambda: _finished(watcher, last))
 
@@ -761,7 +772,12 @@ class TestNoCallBlocksForever:
     async def test_a_quick_command_barely_touches_the_budget(self, tmp_path: Path) -> None:
         tools = {t.name: t for t in bundle("shell", root=tmp_path)}
         started = await tools["run_command"].execute(
-            command="sleep 2", timeout=1, state={}, conversation_id="c1"
+            # Longer on Windows, where starting it in Git Bash can take longer
+            # than the yield, and it would end before going to the background.
+            command=f"sleep {6 if os.name == 'nt' else 2}",
+            timeout=1,
+            state={},
+            conversation_id="c1",
         )
         state = started.state or {}
         handle = next(iter(processes.registry(state)))
@@ -864,7 +880,12 @@ class TestWhatIsShownWhileWaiting:
 
         tools = {t.name: t for t in bundle("shell", root=tmp_path)}
         started = await tools["run_command"].execute(
-            command="sleep 2", timeout=1, state={}, conversation_id="c1"
+            # Longer on Windows, where starting it in Git Bash can take longer
+            # than the yield, and it would end before going to the background.
+            command=f"sleep {6 if os.name == 'nt' else 2}",
+            timeout=1,
+            state={},
+            conversation_id="c1",
         )
         state = started.state or {}
         handle = next(iter(processes.registry(state)))
@@ -893,10 +914,18 @@ class TestTheYieldIsHonoured:
         yield of one second waited two. Found by a `sleep 2` asked to yield after
         1s: it ran to completion inside the wait and never produced a handle."""
         loop = asyncio.get_running_loop()
+        # What starting a command costs, measured, so only the wait is compared:
+        # in Git Bash every process is slow to start, and a fixed bound on the
+        # whole call measured that instead (1.8s for a 0.5s yield on Windows).
+        started = loop.time()
+        await _launch(backend, "sleep 30", yield_s=0)
+        overhead = loop.time() - started
+
         started = loop.time()
         _, state = await _launch(backend, "sleep 30", yield_s=0.5)
         assert state.running
-        assert loop.time() - started < 1.5, "it waited longer than it was asked to"
+        waited = loop.time() - started - overhead
+        assert waited < 1.0, f"it waited {waited:.2f}s longer than starting costs, asked 0.5s"
 
 
 class TestWhenTheWaitingIsGone:
@@ -997,9 +1026,9 @@ class TestADirectoryNameIsNotAHandle:
     async def test_a_planted_directory_runs_nothing(self, tmp_path: Path) -> None:
         planted = tmp_path / processes.HOME / "c1" / "x$(touch${IFS}PWNED)"
         planted.mkdir(parents=True)
-        (planted / "out.log").write_text("")
-        (planted / "run.started").write_text("0")
-        (planted / "cmd.sh").write_text("ls")
+        (planted / "out.log").write_text("", encoding="utf-8")
+        (planted / "run.started").write_text("0", encoding="utf-8")
+        (planted / "cmd.sh").write_text("ls", encoding="utf-8")
         tools = {t.name: t for t in bundle("shell", root=tmp_path)}
 
         listed = await tools["list_commands"].execute(state={}, conversation_id="c1")
@@ -1149,6 +1178,9 @@ class TestTheLogCannotGrowForever:
         assert survivors == "0", f"{survivors} helpers left behind"
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="watches the process group from Python, which sees no MSYS groups"
+)
 class TestTheHelpersLeaveWhenTheirDirectoryCannotBeWritten:
     """The watchdog and the compactor learnt that the command was over from one
     file, ``run.exit``, in a directory that can be removed under them: pytest
@@ -1182,10 +1214,10 @@ class TestTheHelpersLeaveWhenTheirDirectoryCannotBeWritten:
         path = directory / "run.pgid"
 
         async def written() -> bool:
-            return path.exists() and path.read_text().strip() != ""
+            return path.exists() and path.read_text(encoding="utf-8").strip() != ""
 
         assert await _until(written), "the wrapper never recorded its group"
-        return int(path.read_text())
+        return int(path.read_text(encoding="utf-8"))
 
     @staticmethod
     async def _emptied(pgid: int) -> bool:
@@ -1202,7 +1234,7 @@ class TestTheHelpersLeaveWhenTheirDirectoryCannotBeWritten:
     async def test_removed_once_the_command_has_finished(self, workspace: Path) -> None:
         """What was found: the command over, the wrapper gone, the helpers
         asleep between two checks when the directory went."""
-        backend = LocalBackend(Workspace.at(workspace), isolate_environment=False)
+        backend = build_backend("local", Workspace.at(workspace), isolate_environment=False)
         record = processes.new_record("echo quick", "c1")
         await backend.run(processes.build_launch(record, yield_s=10), timeout=60)
         pgid = await self._group(workspace / record.dir)
@@ -1219,7 +1251,7 @@ class TestTheHelpersLeaveWhenTheirDirectoryCannotBeWritten:
         """Then the exit code cannot be written either, and the wrapper's own
         last compaction waited for that same lock: the wrapper spun too, and
         kept the helpers believing the command was still going."""
-        backend = LocalBackend(Workspace.at(workspace), isolate_environment=False)
+        backend = build_backend("local", Workspace.at(workspace), isolate_environment=False)
         record, state = await _launch(backend, "sleep 2")
         assert state.running
         pgid = await self._group(workspace / record.dir)
@@ -1239,7 +1271,7 @@ class TestTheHelpersLeaveWhenTheirDirectoryCannotBeWritten:
         another pass holds is worth waiting for."""
         if os.geteuid() == 0:
             pytest.skip("root creates files in a directory without write permission")
-        backend = LocalBackend(Workspace.at(workspace), isolate_environment=False)
+        backend = build_backend("local", Workspace.at(workspace), isolate_environment=False)
         record, state = await _launch(backend, "sleep 2")
         assert state.running
         directory = workspace / record.dir
@@ -1302,6 +1334,9 @@ class TestTheLastCompactionIsNotGivenUp:
         monkeypatch.setattr(processes, "LOG_HEAD_BYTES", 20_000)
         monkeypatch.setattr(processes, "LOG_TAIL_BYTES", 50_000)
 
+    @pytest.mark.skipif(
+        os.name == "nt", reason="Git Bash puts its own folders ahead of the shim on PATH"
+    )
     @pytest.mark.asyncio
     async def test_a_lock_released_between_its_two_looks_is_taken(
         self, backend: LocalBackend, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1320,7 +1355,8 @@ class TestTheLastCompactionIsNotGivenUp:
             'case "$last" in */compact.lock) '
             f"[ -e {shlex.quote(str(failed))} ] || {{ : > {shlex.quote(str(failed))}; exit 1; }} ;; "
             "esac\n"
-            f'exec {shlex.quote(real)} "$@"\n'
+            f'exec {shlex.quote(real)} "$@"\n',
+            encoding="utf-8",
         )
         (shim / "mkdir").chmod(0o755)
         monkeypatch.setenv("PATH", f"{shim}{os.pathsep}{os.environ['PATH']}")

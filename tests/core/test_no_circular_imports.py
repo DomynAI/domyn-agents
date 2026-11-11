@@ -52,7 +52,7 @@ def _find_root_modules(modules: list[str]) -> list[str]:
             continue
         is_package = spec.submodule_search_locations is not None
         try:
-            source = Path(spec.origin).read_text()
+            source = Path(spec.origin).read_text(encoding="utf-8")
             tree = ast.parse(source)
         except Exception:
             continue

@@ -44,6 +44,7 @@ from domyn.agents.tools.builtin.backends import (
     BackendUnavailableError,
     CommandBackend,
     CommandResult,
+    GitBashBackend,
     LocalBackend,
     build_backend,
 )
@@ -169,12 +170,12 @@ def bundle(
         if name == "files":
             tools.extend(file_tools(space))
         elif name == "shell":
-            resolved = resolved or LocalBackend(space, allowed_env=allowed_env)
+            resolved = resolved or build_backend("local", space, allowed_env=allowed_env)
             tools.extend(shell_tools(space, backend=resolved))
         elif name == "browser":
             # The same backend as the shell, so the browser is wherever the
             # commands are — on this machine, or in the sandbox.
-            resolved = resolved or LocalBackend(space, allowed_env=allowed_env)
+            resolved = resolved or build_backend("local", space, allowed_env=allowed_env)
             browser_list, sessions = browser_tools(backend=resolved, options=browser)
             tools.extend(browser_list)
         else:
@@ -246,6 +247,7 @@ __all__ = [
     "BuiltinTools",
     "CommandBackend",
     "CommandResult",
+    "GitBashBackend",
     "LocalBackend",
     "Workspace",
     "WorkspaceError",

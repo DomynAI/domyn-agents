@@ -39,12 +39,12 @@ from domyn.agents.tools.builtin.files import MAX_READ_CHARS
 
 @pytest.fixture
 def workspace(tmp_path: Path) -> Workspace:
-    (tmp_path / "app.py").write_text("print('hello')\nprint('world')\n")
-    (tmp_path / "notes.md").write_text("# Notes\nsomething to find\n")
+    (tmp_path / "app.py").write_text("print('hello')\nprint('world')\n", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("# Notes\nsomething to find\n", encoding="utf-8")
     (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "lib.py").write_text("def add(a, b):\n    return a + b\n")
+    (tmp_path / "src" / "lib.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
     (tmp_path / "node_modules").mkdir()
-    (tmp_path / "node_modules" / "junk.py").write_text("something to find\n")
+    (tmp_path / "node_modules" / "junk.py").write_text("something to find\n", encoding="utf-8")
     return Workspace.at(tmp_path)
 
 
@@ -133,7 +133,7 @@ class TestContainment:
         is resolved."""
         outside = tmp_path / "outside"
         outside.mkdir()
-        (outside / "secret.txt").write_text("secret")
+        (outside / "secret.txt").write_text("secret", encoding="utf-8")
         inside = tmp_path / "work"
         inside.mkdir()
         (inside / "link").symlink_to(outside)
@@ -161,10 +161,10 @@ class TestContainment:
     def _beside_a_secret(tmp_path: Path) -> dict:
         """A workspace next to a directory holding a secret, and its file tools."""
         (tmp_path / "outside").mkdir()
-        (tmp_path / "outside" / "key.txt").write_text("the secret\n")
+        (tmp_path / "outside" / "key.txt").write_text("the secret\n", encoding="utf-8")
         inside = tmp_path / "work"
         inside.mkdir()
-        (inside / "app.py").write_text("print('hello')\n")
+        (inside / "app.py").write_text("print('hello')\n", encoding="utf-8")
         return {t.name: t for t in bundle("files", workspace=Workspace.at(inside))}
 
     @pytest.mark.asyncio
@@ -208,7 +208,7 @@ class TestReadingAndSearching:
     async def test_a_huge_single_line_is_cut(self, tools: dict, workspace: Workspace) -> None:
         """One line can be a minified bundle or a base64 blob and weigh
         megabytes. Without cutting it the line budget is no budget at all."""
-        (workspace.root / "big.txt").write_text("x" * 200_000)
+        (workspace.root / "big.txt").write_text("x" * 200_000, encoding="utf-8")
         out = await _call(tools, "read_file", path="big.txt")
         body, _, note = out.partition("\n\n[")
         assert len(body) == MAX_READ_CHARS
@@ -255,7 +255,7 @@ class TestReadingAndSearching:
         a glob read from the workspace root finds nothing in it."""
         scripts = tmp_path / "skills" / "demo" / "scripts"
         scripts.mkdir(parents=True)
-        (scripts / "run.py").write_text("def run():\n    return 1\n")
+        (scripts / "run.py").write_text("def run():\n    return 1\n", encoding="utf-8")
         (tmp_path / "work").mkdir()
         workspace = Workspace.at(tmp_path / "work", also=[tmp_path / "skills"])
         tools = {t.name: t for t in bundle("files", workspace=workspace)}
@@ -304,7 +304,7 @@ class TestSearchStaysInsideTheWorkspace:
     def secret(self, workspace: Workspace) -> Path:
         """A file beside the workspace, not in it."""
         outside = workspace.root.parent / f"{workspace.root.name}-secret.txt"
-        outside.write_text("TOP-SECRET-CONTENT\n")
+        outside.write_text("TOP-SECRET-CONTENT\n", encoding="utf-8")
         return outside
 
     @pytest.mark.asyncio
@@ -396,14 +396,16 @@ class TestSearchStaysInsideTheWorkspace:
         project.mkdir()
         skills = tmp_path / "skills"
         (skills / "visualization" / "charts").mkdir(parents=True)
-        (skills / "plotly_style.py").write_text("# style\n")
-        (skills / "visualization" / "charts" / "SKILL.md").write_text("# charts\n")
+        (skills / "plotly_style.py").write_text("# style\n", encoding="utf-8")
+        (skills / "visualization" / "charts" / "SKILL.md").write_text(
+            "# charts\n", encoding="utf-8"
+        )
         extra = {t.name: t for t in bundle("files", workspace=Workspace.at(project, also=[skills]))}
 
         out = await _call(extra, "glob_files", pattern="plotly_style.py", path=str(skills))
         deep = await _call(extra, "glob_files", pattern="**/*.md", path=str(skills))
 
-        assert out == str(skills.resolve() / "plotly_style.py")
+        assert out == (skills.resolve() / "plotly_style.py").as_posix()
         assert "SKILL.md" in deep
 
     @pytest.mark.asyncio
@@ -416,7 +418,7 @@ class TestSearchStaysInsideTheWorkspace:
         project.mkdir()
         skills = tmp_path / "build" / "skills"
         skills.mkdir(parents=True)
-        (skills / "plotly_style.py").write_text("# style\n")
+        (skills / "plotly_style.py").write_text("# style\n", encoding="utf-8")
         extra = {t.name: t for t in bundle("files", workspace=Workspace.at(project, also=[skills]))}
 
         assert "plotly_style.py" in await _call(
@@ -462,7 +464,7 @@ class TestWriting:
         self, tools: dict, workspace: Workspace
     ) -> None:
         await _call(tools, "write_file", path="a/b/c.txt", content="hi")
-        assert (workspace.root / "a" / "b" / "c.txt").read_text() == "hi"
+        assert (workspace.root / "a" / "b" / "c.txt").read_text(encoding="utf-8") == "hi"
 
     @pytest.mark.asyncio
     async def test_write_says_whether_it_overwrote(self, tools: dict) -> None:
@@ -472,7 +474,7 @@ class TestWriting:
     @pytest.mark.asyncio
     async def test_edit_replaces_the_unique_match(self, tools: dict, workspace: Workspace) -> None:
         await _call(tools, "edit_file", path="src/lib.py", old="a + b", new="a - b")
-        assert "a - b" in (workspace.root / "src" / "lib.py").read_text()
+        assert "a - b" in (workspace.root / "src" / "lib.py").read_text(encoding="utf-8")
 
     @pytest.mark.asyncio
     async def test_edit_refuses_an_ambiguous_match(self, tools: dict) -> None:
@@ -485,7 +487,9 @@ class TestWriting:
     async def test_edit_refuses_a_missing_match(self, tools: dict, workspace: Workspace) -> None:
         out = await _call(tools, "edit_file", path="app.py", old="not there", new="x")
         assert "does not appear" in out
-        assert "print('hello')" in (workspace.root / "app.py").read_text(), "left untouched"
+        assert "print('hello')" in (workspace.root / "app.py").read_text(encoding="utf-8"), (
+            "left untouched"
+        )
 
 
 class TestWritingThroughHardLinks:
@@ -512,14 +516,14 @@ class TestWritingThroughHardLinks:
         arguments: dict,
     ) -> None:
         outside = tmp_path_factory.mktemp("outside") / "secret.txt"
-        outside.write_text("secret\n")
+        outside.write_text("secret\n", encoding="utf-8")
         (workspace.root / "linked.txt").hardlink_to(outside)
 
         out = await _call(tools, tool, path="linked.txt", **arguments)
 
         assert out.startswith("ERROR"), out
         assert "hard link" in out
-        assert outside.read_text() == "secret\n"
+        assert outside.read_text(encoding="utf-8") == "secret\n"
 
 
 class TestShell:
@@ -550,8 +554,9 @@ class TestShell:
 
     @pytest.mark.asyncio
     async def test_it_runs_in_the_workspace(self, tools: dict, workspace: Workspace) -> None:
-        out = await _call(tools, "run_command", command="pwd")
-        assert str(workspace.root) in out
+        # Git Bash prints /c/Users/…; its -W gives C:/Users/…. Elsewhere -W fails.
+        out = await _call(tools, "run_command", command="pwd -W 2>/dev/null || pwd")
+        assert workspace.root.as_posix() in out
 
     @pytest.mark.asyncio
     async def test_a_slow_command_hands_back_a_handle_instead_of_dying(self, tools: dict) -> None:
@@ -746,7 +751,7 @@ class TestReadingInPieces:
     @pytest.fixture
     def big(self, workspace: Workspace) -> Path:
         target = workspace.root / "big.txt"
-        target.write_text("".join(f"line {i}\n" for i in range(1, 1201)))
+        target.write_text("".join(f"line {i}\n" for i in range(1, 1201)), encoding="utf-8")
         return target
 
     @pytest.mark.asyncio
@@ -794,7 +799,7 @@ class TestReadingInPieces:
 
     @pytest.mark.asyncio
     async def test_an_empty_file_is_not_an_error(self, tools: dict, workspace: Workspace) -> None:
-        (workspace.root / "empty.txt").write_text("")
+        (workspace.root / "empty.txt").write_text("", encoding="utf-8")
         assert "empty" in await _call(tools, "read_file", path="empty.txt")
 
     @pytest.mark.parametrize(("start", "count"), [("3", "2"), (0, 0), (-1, -1), (None, None)])
@@ -814,7 +819,7 @@ class TestReadingInPieces:
         """Slicing a fully-read file would make "read it in pieces" true for
         the model and false for the process doing the reading."""
         target = workspace.root / "huge.txt"
-        target.write_text("".join(f"line {i}\n" for i in range(1, 200_001)))
+        target.write_text("".join(f"line {i}\n" for i in range(1, 200_001)), encoding="utf-8")
 
         taken = 0
         original = Path.open
@@ -862,7 +867,7 @@ class TestReadingInPieces:
         is shown, not what the tool returned."""
         row = "'" + "x" * 60 + "'"
         (workspace.root / "wide.py").write_text(
-            "".join(f"line_{i:04d} = {row}\n" for i in range(1, 1201))
+            "".join(f"line_{i:04d} = {row}\n" for i in range(1, 1201)), encoding="utf-8"
         )
         seen = await _as_the_model_sees_it(await _call(tools, "read_file", path="wide.py"))
 
@@ -879,7 +884,7 @@ class TestReadingInPieces:
     async def test_a_single_enormous_line_still_respects_the_budget(
         self, tools: dict, workspace: Workspace
     ) -> None:
-        (workspace.root / "one.txt").write_text("x" * 500_000 + "\n")
+        (workspace.root / "one.txt").write_text("x" * 500_000 + "\n", encoding="utf-8")
         out = await _call(tools, "read_file", path="one.txt")
         assert len(out) < 600_000
 
@@ -891,7 +896,7 @@ class TestReadingInPieces:
         where a read ends, the rest of the line was unreachable — start_line
         past it skips it whole."""
         line = "".join(f"{i:07d}," for i in range(5000))
-        (workspace.root / "one.json").write_text(line + "\nafter\n")
+        (workspace.root / "one.json").write_text(line + "\nafter\n", encoding="utf-8")
 
         pieces, start_char, notes = [], 0, []
         while True:
@@ -912,7 +917,7 @@ class TestReadingInPieces:
     async def test_a_start_char_past_the_end_of_the_line_says_how_long_it_is(
         self, tools: dict, workspace: Workspace
     ) -> None:
-        (workspace.root / "short.txt").write_text("abc\ndef\n")
+        (workspace.root / "short.txt").write_text("abc\ndef\n", encoding="utf-8")
         out = await _call(tools, "read_file", path="short.txt", start_char=3)
         assert (
             out == "ERROR: 'short.txt' line 1 has 3 characters, so there is nothing at character 3."
@@ -924,7 +929,9 @@ class TestReadingInPieces:
     ) -> None:
         """Cut before its line break, the next read would be offered a
         start_char with nothing after it."""
-        (workspace.root / "exact.txt").write_text("x" * MAX_READ_CHARS + "\nnext\n")
+        (workspace.root / "exact.txt").write_text(
+            "x" * MAX_READ_CHARS + "\nnext\n", encoding="utf-8"
+        )
         out = await _call(tools, "read_file", path="exact.txt")
         assert "start_char" not in out
         assert out.endswith("more follow — read on with start_line=2]")
@@ -1098,7 +1105,10 @@ class TestReadingDocuments:
         with any page without text. Its other pages have text all the same, so
         the model must not be told it has none."""
         reader = tmp_path / "refusing_reader.py"
-        reader.write_text('import sys\nsys.stdout.write(\'{"error": "Invalid PDF structure"}\')\n')
+        reader.write_text(
+            'import sys\nsys.stdout.write(\'{"error": "Invalid PDF structure"}\')\n',
+            encoding="utf-8",
+        )
         monkeypatch.setattr(documents, "_READER", reader)
         (workspace.root / "report.pdf").write_bytes(_pdf(_text("Terms"), _SCAN, _text("Penalties")))
         out = await _call(tools, "read_file", path="report.pdf")
@@ -1146,7 +1156,7 @@ class TestReadingDocuments:
     ) -> None:
         """What "export to Excel" often writes: tab-separated text called .xls.
         It is not the workbook its name claims, and it is readable as it is."""
-        (workspace.root / "export.xls").write_text("id\tname\n1\tAda\n")
+        (workspace.root / "export.xls").write_text("id\tname\n1\tAda\n", encoding="utf-8")
         assert await _call(tools, "read_file", path="export.xls") == "id\tname\n1\tAda\n"
 
     @pytest.mark.asyncio
@@ -1173,7 +1183,7 @@ class TestReadingDocuments:
     async def test_a_csv_is_read_as_written(self, tools: dict, workspace: Workspace) -> None:
         """The converter would make it a markdown table, whose lines and text
         are not the file's. Read as written, it is what edit_file matches."""
-        (workspace.root / "rows.csv").write_text("id,name\n1,Ada\n")
+        (workspace.root / "rows.csv").write_text("id,name\n1,Ada\n", encoding="utf-8")
         assert await _call(tools, "read_file", path="rows.csv") == "id,name\n1,Ada\n"
 
     @pytest.mark.asyncio
@@ -1245,10 +1255,10 @@ class TestWritingOverDocuments:
         self, tools: dict, workspace: Workspace
     ) -> None:
         """A TSV saved as .xls is read as the text it is, so it is edited as text."""
-        (workspace.root / "export.xls").write_text("id\tname\n1\tAda\n")
+        (workspace.root / "export.xls").write_text("id\tname\n1\tAda\n", encoding="utf-8")
         out = await _call(tools, "edit_file", path="export.xls", old="Ada", new="Bob")
         assert not out.startswith("ERROR"), out
-        assert (workspace.root / "export.xls").read_text() == "id\tname\n1\tBob\n"
+        assert (workspace.root / "export.xls").read_text(encoding="utf-8") == "id\tname\n1\tBob\n"
 
     @pytest.mark.asyncio
     async def test_a_csv_that_reads_as_a_table_is_protected(
@@ -1266,10 +1276,10 @@ class TestWritingOverDocuments:
     async def test_a_csv_that_reads_as_written_stays_editable(
         self, tools: dict, workspace: Workspace
     ) -> None:
-        (workspace.root / "rows.csv").write_text("id,name\n1,Ada\n")
+        (workspace.root / "rows.csv").write_text("id,name\n1,Ada\n", encoding="utf-8")
         out = await _call(tools, "edit_file", path="rows.csv", old="Ada", new="Bob")
         assert not out.startswith("ERROR"), out
-        assert (workspace.root / "rows.csv").read_text() == "id,name\n1,Bob\n"
+        assert (workspace.root / "rows.csv").read_text(encoding="utf-8") == "id,name\n1,Bob\n"
 
     def test_every_bundle_has_a_description_for_setup(self) -> None:
         """`domyn setup` shows it beside each bundle when asking which to mount."""

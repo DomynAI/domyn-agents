@@ -79,7 +79,7 @@ def _ref(snapshot: str, name: str) -> str:
 async def test_open_click_type_submit_and_close(site: str, tmp_path: Path) -> None:
     # A project config that would cap every output at 20 characters, were it
     # applied: it must not be.
-    (tmp_path / "agent-browser.json").write_text(json.dumps({"maxOutput": 20}))
+    (tmp_path / "agent-browser.json").write_text(json.dumps({"maxOutput": 20}), encoding="utf-8")
     built = bundle("browser", root=tmp_path, browser=BrowserOptions(allow_private_urls=True))
     tools = {t.name: t for t in built}
     cid = f"test-{uuid.uuid4()}"

@@ -10,6 +10,7 @@ mode bits, the atomic replace, the corrupt-file path — and a mocked filesystem
 would test the mock.
 """
 
+import os
 import stat
 from pathlib import Path
 from typing import Any
@@ -59,12 +60,15 @@ class TestItActuallyPersists:
     async def test_the_file_is_readable_by_a_human(self, path: Path) -> None:
         """A permissions file that only its writer can read cannot be audited."""
         await FileApprovalStore(path).grant(_request("git status"))
-        parsed = yaml.safe_load(path.read_text())
+        parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
         assert parsed["version"] == 1
         entry = parsed["grants"][0]
         assert entry["subject"] == "git status"
         assert entry["granted_at"], "a standing permission has to say when it was given"
 
+    @pytest.mark.skipif(
+        os.name == "nt", reason="Windows has no mode bits: the profile's ACL guards it"
+    )
     @pytest.mark.asyncio
     async def test_it_is_owner_only(self, path: Path) -> None:
         await FileApprovalStore(path).grant(_request("git status"))
@@ -106,6 +110,7 @@ class TestTheCliProjectScope:
         home = tmp_path / "home"
         home.mkdir()
         monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))  # HOME on Windows
         monkeypatch.setattr(cfg, "GLOBAL_DIR", home / ".domyn")
         return home
 
@@ -124,7 +129,8 @@ class TestTheCliProjectScope:
         repo = tmp_path / "cloned"
         (repo / ".domyn").mkdir(parents=True)
         (repo / ".domyn" / "approvals.yaml").write_text(
-            "version: 1\ngrants:\n- {value: '*', kind: pattern, user_id: local-user}\n"
+            "version: 1\ngrants:\n- {value: '*', kind: pattern, user_id: local-user}\n",
+            encoding="utf-8",
         )
         policy = self._policy_in(repo, monkeypatch)
         assert not (
@@ -240,14 +246,16 @@ class TestItFailsSafe:
     async def test_a_corrupt_file_grants_nothing(self, path: Path) -> None:
         """Extra prompts, not free passes — and above all not a crash on startup,
         which is what pushes people into deleting the file wholesale."""
-        path.write_text("this: is: not: valid: yaml: [[[")
+        path.write_text("this: is: not: valid: yaml: [[[", encoding="utf-8")
         store = FileApprovalStore(path)
         assert await store.granted() == []
         assert not await store.is_granted(_request("git status"))
 
     @pytest.mark.asyncio
     async def test_a_truncated_file_grants_nothing(self, path: Path) -> None:
-        path.write_text("version: 1\ngrants:\n  - value: 'a::b::c'\n    kind: exa")
+        path.write_text(
+            "version: 1\ngrants:\n  - value: 'a::b::c'\n    kind: exa", encoding="utf-8"
+        )
         assert await FileApprovalStore(path).granted() == []
 
     @pytest.mark.asyncio
@@ -263,7 +271,8 @@ class TestItFailsSafe:
                         "not even a mapping",
                     ],
                 }
-            )
+            ),
+            encoding="utf-8",
         )
         store = FileApprovalStore(path)
         assert len(await store.granted()) == 1
@@ -279,6 +288,7 @@ class TestItFailsSafe:
         await store.grant(_request("git status"))  # must not raise
         assert not await store.is_granted(_request("git status"))
 
+    @pytest.mark.skipif(os.name == "nt", reason="a mode-500 folder is still writable on Windows")
     @pytest.mark.asyncio
     async def test_an_unwritable_directory_does_not_crash_the_session(self, tmp_path: Path) -> None:
         locked = tmp_path / "locked"

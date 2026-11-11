@@ -366,7 +366,7 @@ def main() -> None:
     lines += ["## Flags", ""]
     lines += [f"- **{sid}**: {f}" for sid, f in flagged["flags"].items()] or ["- none"]
     lines += ["", "## Charts", ""] + [f"- `{name}` — {what[name]}" for name in charts]
-    (out / "timeseries_analysis.md").write_text("\n".join(lines) + "\n")
+    (out / "timeseries_analysis.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     common.write_json(
         out / "timeseries_analysis.json",
         {
@@ -382,7 +382,7 @@ def main() -> None:
     here = Path(__file__).resolve()
     common.record_run(out, here, (Path(sf.__file__),))
 
-    print((out / "timeseries_analysis.md").read_text())
+    print((out / "timeseries_analysis.md").read_text(encoding="utf-8"))
     print(f"outputs in {out}")
 
 

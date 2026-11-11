@@ -57,7 +57,7 @@ from pptx.util import Length
 
 RESOURCES = Path(__file__).resolve().parents[3] / "resources"
 FONTS = RESOURCES / "assets" / "fonts"
-TYPOGRAPHY = json.loads((RESOURCES / "typography.json").read_text())
+TYPOGRAPHY = json.loads((RESOURCES / "typography.json").read_text(encoding="utf-8"))
 EMU = 914400  # per inch
 
 # Single line spacing is 1.2 x the font size, in PowerPoint and in LibreOffice (measured on

@@ -9,7 +9,7 @@ from domyn.agents.cli.main import _load_credentials, _load_dotenv
 def test_loads_a_dotenv_file_from_the_working_directory(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("MY_TEST_VAR", raising=False)
-    (tmp_path / ".env").write_text("MY_TEST_VAR=from_dotenv\n")
+    (tmp_path / ".env").write_text("MY_TEST_VAR=from_dotenv\n", encoding="utf-8")
 
     _load_dotenv()
 
@@ -19,7 +19,7 @@ def test_loads_a_dotenv_file_from_the_working_directory(tmp_path: Path, monkeypa
 def test_an_already_exported_var_is_not_overridden_by_dotenv(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MY_TEST_VAR", "from_shell")
-    (tmp_path / ".env").write_text("MY_TEST_VAR=from_dotenv\n")
+    (tmp_path / ".env").write_text("MY_TEST_VAR=from_dotenv\n", encoding="utf-8")
 
     _load_dotenv()
 
@@ -37,7 +37,7 @@ def test_finds_a_dotenv_file_in_a_parent_directory(tmp_path: Path, monkeypatch) 
     subdir.mkdir()
     monkeypatch.chdir(subdir)
     monkeypatch.delenv("MY_TEST_VAR", raising=False)
-    (tmp_path / ".env").write_text("MY_TEST_VAR=from_parent_dotenv\n")
+    (tmp_path / ".env").write_text("MY_TEST_VAR=from_parent_dotenv\n", encoding="utf-8")
 
     _load_dotenv()
 
@@ -49,7 +49,7 @@ def test_credentials_file_entries_become_env_vars(tmp_path: Path, monkeypatch) -
 
     monkeypatch.delenv("MY_CRED_VAR", raising=False)
     creds = tmp_path / "credentials"
-    creds.write_text("MY_CRED_VAR=from_credentials_file\n")
+    creds.write_text("MY_CRED_VAR=from_credentials_file\n", encoding="utf-8")
     monkeypatch.setattr(cli_config, "credentials_path", lambda: creds)
 
     _load_credentials()
@@ -64,7 +64,7 @@ def test_a_real_env_var_is_not_overridden_by_the_credentials_file(
 
     monkeypatch.setenv("MY_CRED_VAR", "from_shell")
     creds = tmp_path / "credentials"
-    creds.write_text("MY_CRED_VAR=from_credentials_file\n")
+    creds.write_text("MY_CRED_VAR=from_credentials_file\n", encoding="utf-8")
     monkeypatch.setattr(cli_config, "credentials_path", lambda: creds)
 
     _load_credentials()

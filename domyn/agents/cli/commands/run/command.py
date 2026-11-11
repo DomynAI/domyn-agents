@@ -379,7 +379,7 @@ def _missing_skills_warning(agent: Agent, index: SkillIndex | None = None) -> st
 
 
 def _first_names(paths: list[Path]) -> str:
-    names = [str(path) for path in paths[:_MISSING_SHOWN]]
+    names = [path.as_posix() for path in paths[:_MISSING_SHOWN]]
     if len(paths) > _MISSING_SHOWN:
         names.append(f"and {len(paths) - _MISSING_SHOWN} more")
     return ", ".join(names)

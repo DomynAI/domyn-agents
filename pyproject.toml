@@ -188,7 +188,13 @@ select = [
     "D200", # a one-line docstring split over several lines
     "D301", # a backslash in a docstring that is not raw: \n renders as a newline
     "D419", # an empty docstring
+    # A file opened without an encoding is read in the locale's: cp1252 on
+    # Windows, where a SKILL.md with one accent fails to load. A preview rule.
+    "PLW1514",
 ]
+# For PLW1514. explicit-preview-rules keeps every other preview rule off.
+preview = true
+explicit-preview-rules = true
 ignore = [
     "E501",  # line too long (handled by formatter)
     "B008",  # do not perform function calls in argument defaults

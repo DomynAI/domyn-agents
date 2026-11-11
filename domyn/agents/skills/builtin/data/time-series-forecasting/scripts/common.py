@@ -105,7 +105,7 @@ def load_panel(args: argparse.Namespace) -> Panel:
     meta_path = data_utils.output_dir(args.out) / META_FILE
     if not meta_path.exists():
         sys.exit(f"{meta_path} not found: run forecast_split.py with --out {args.out} first.")
-    meta = json.loads(meta_path.read_text())
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
     settings = meta["settings"]
     args.windows_reason = meta.get("windows_reason")
     args.series = Path(settings["series"])
@@ -330,7 +330,7 @@ class Panel:
         }
         path = self.out / META_FILE
         if path.exists():
-            before = json.loads(path.read_text())
+            before = json.loads(path.read_text(encoding="utf-8"))
             keys = (
                 "series_file", "season_length", "horizon", "windows", "series", "periods",
                 "features",
@@ -341,7 +341,7 @@ class Panel:
                     f"{before.get('settings')}). Models trained there would not be comparable: "
                     "use a new --out folder."
                 )
-        path.write_text(json.dumps(meta, indent=2))
+        path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     def history(self, i: int, until: int) -> np.ndarray:
         """Series i before period index `until` (exclusive), from its first period."""

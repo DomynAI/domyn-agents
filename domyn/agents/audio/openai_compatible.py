@@ -19,6 +19,24 @@ from domyn.agents.audio.base import AudioSource, Transcriber
 from domyn.agents.audio.models import Segment, Transcript, TranscriptionError
 from domyn.agents.logger import get_logger
 
+# The formats the endpoint takes, typed the same on every machine: mimetypes fills
+# its table from the Windows registry or /etc/mime.types, so a .wav went as
+# audio/wav on one and audio/x-wav on another, and Python's own table alone has
+# no .ogg, which is what a Telegram voice message is.
+_AUDIO_TYPES = {
+    ".flac": "audio/flac",
+    ".m4a": "audio/mp4",
+    ".mp3": "audio/mpeg",
+    ".mp4": "audio/mp4",
+    ".mpeg": "audio/mpeg",
+    ".mpga": "audio/mpeg",
+    ".oga": "audio/ogg",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".wav": "audio/x-wav",
+    ".webm": "audio/webm",
+}
+
 
 class OpenAICompatibleTranscriber(Transcriber):
     """Speech to text by an OpenAI-compatible endpoint: OpenAI, vLLM, a gateway."""
@@ -66,7 +84,11 @@ class OpenAICompatibleTranscriber(Transcriber):
             except OSError as exc:
                 raise TranscriptionError(f"No audio file at {path}") from exc
             name = filename or path.name
-        mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        mime = (
+            _AUDIO_TYPES.get(Path(name).suffix.lower())
+            or mimetypes.guess_type(name)[0]
+            or "application/octet-stream"
+        )
         data: dict[str, str] = {"model": self.model, "response_format": self.response_format}
         if self.language:
             data["language"] = self.language

@@ -40,7 +40,7 @@ import io
 import re
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, replace
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import anydoc
@@ -166,7 +166,10 @@ def _matches(workspace: Workspace, base: Path, pattern: str, argument: str) -> l
     parts = PurePosixPath(pattern.replace("\\", "/")).parts
     if not pattern.strip():
         raise WorkspaceError(f"{argument} is empty. Give a pattern such as '**/*.py'.")
-    if pattern.startswith("~") or PurePosixPath(pattern).is_absolute() or ".." in parts:
+    # Absolute either way: `C:\…` or `C:…` is one on Windows, where PurePosixPath
+    # alone let it through to glob's own, unhelpful error.
+    absolute = PurePosixPath(pattern).is_absolute() or bool(PureWindowsPath(pattern).anchor)
+    if pattern.startswith("~") or absolute or ".." in parts:
         raise WorkspaceError(
             f"{argument} {pattern!r} must be relative to the folder searched and stay inside "
             "it: no absolute path, '~' or '..'. To search another folder, give it as 'path' "

@@ -153,6 +153,72 @@ jobs:
             | tee -a "$GITHUB_STEP_SUMMARY"
           exit "${PIPESTATUS[0]}"
 
+  # Windows, Intel and ARM, on the version in .python-version. Commands run in
+  # Git Bash (Git for Windows, preinstalled on the runners), as they do for a
+  # user. Pull requests and main alike: a change that breaks Windows is caught
+  # before it is merged.
+  test-windows:
+    needs: changes
+    if: >-
+      always() && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true')
+    name: test-windows (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    # An x64 Python on both: on ARM it runs emulated, which is what a Windows
+    # on ARM user runs, since cryptography, pdf-inspector and firecrawl-anydoc
+    # publish no win_arm64 wheel (built from source, cryptography needs OpenSSL).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        id: python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: .python-version
+          architecture: x64
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          enable-cache: true
+
+      # Left to itself uv picks a native ARM64 Python on the ARM runner.
+      - name: Use that Python
+        shell: bash
+        run: echo "UV_PYTHON=${{ steps.python.outputs.python-path }}" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        shell: bash
+        run: uv sync --all-extras
+
+      # A test that hangs is ended after two minutes and named, with its stack,
+      # rather than holding the job until its timeout with nothing to show:
+      # waiting on a process that never exits is how a POSIX assumption fails
+      # here. -rfE lists every failure and error at the end, by name.
+      # UTF-8 on the standard streams only: on the runner's cp1252 console, the
+      # first failure whose text has a character outside it (the banner art)
+      # ended pytest silently in the middle of its summary. Not PYTHONUTF8,
+      # which would also make every file read without an encoding read UTF-8
+      # and hide the very bugs this job is here to find.
+      - name: Run tests
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: >-
+          uv run --with pytest-timeout pytest tests/ examples/ -q --no-cov
+          -p no:cacheprovider --timeout=120 -rfE
+
   # Every Python version the package supports (pyproject.toml's classifiers,
   # and the Python badge in the README). On main and on release tags (called
   # from release.yml, where the event is the tag's push, or the dispatch of a

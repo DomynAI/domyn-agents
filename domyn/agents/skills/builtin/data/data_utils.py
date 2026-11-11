@@ -345,7 +345,7 @@ def load_table(path: Path) -> tuple[pd.DataFrame, dict[str, Any]]:
             f"{path} (with {TABLE_META} next to it) not found. Prepare the data first with "
             "prepare_table.py, and pass its table.csv."
         )
-    meta = json.loads(meta_path.read_text())
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
     types: dict[str, str] = meta["columns"]
     raw = pd.read_csv(path, dtype=str, keep_default_na=False, na_values=[""], encoding="utf-8")
     if list(raw.columns) != list(types):
@@ -398,7 +398,8 @@ def safe_name(text: str) -> str:
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     """Write JSON, turning numpy scalars into plain numbers."""
     path.write_text(
-        json.dumps(payload, indent=2, default=lambda o: o.item() if hasattr(o, "item") else str(o))
+        json.dumps(payload, indent=2, default=lambda o: o.item() if hasattr(o, "item") else str(o)),
+        encoding="utf-8",
     )
 
 
@@ -431,9 +432,10 @@ def _run_header(python: str) -> list[str]:
     The interpreter that ran the scripts is the default, because a bare `python` is
     whichever one comes first on PATH, which may not have the packages.
     `PY=/path/to/python sh run.sh` picks another one, and a default that no longer exists
-    (another machine, a deleted environment) falls back to `python`.
+    (another machine, a deleted environment) falls back to `python`. Written with
+    forward slashes, Windows too, where Git Bash runs `C:/…/python.exe` as is.
     """
-    quoted = re.sub(r'(["$`\\])', r"\\\1", python)
+    quoted = re.sub(r'(["$`\\])', r"\\\1", Path(python).as_posix())
     return [
         "#!/bin/sh",
         'cd "$(dirname "$0")"',
@@ -487,7 +489,7 @@ def record_run(out: Path, script: Path, order: Sequence[str], modules: Iterable[
     header = _run_header(sys.executable)
     commands: dict[str, str] = {}
     others: list[str] = []
-    for line in run.read_text().splitlines() if run.exists() else []:
+    for line in run.read_text(encoding="utf-8").splitlines() if run.exists() else []:
         name = _run_script(line)
         if name is not None:
             commands[name] = _BARE_PYTHON.sub(r'\1"$PY"', line, count=1)
@@ -500,4 +502,4 @@ def record_run(out: Path, script: Path, order: Sequence[str], modules: Iterable[
         return next((i for i, step in enumerate(order) if step in name), len(order))
 
     ordered = [commands[name] for name in sorted(commands, key=rank)]
-    run.write_text("\n".join([*header, *others, *ordered]) + "\n")
+    run.write_text("\n".join([*header, *others, *ordered]) + "\n", encoding="utf-8")

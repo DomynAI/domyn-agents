@@ -7,6 +7,7 @@ No link is followed. The rest is failure modes — a missing directory, an
 unreadable file, an empty one — every one of which must leave a turn able to run.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -403,6 +404,7 @@ class TestNothingTakesTheTurnDown:
 
         assert (await _load(home)).names == ("AGENTS.md",)
 
+    @pytest.mark.skipif(os.name == "nt", reason="a mode-000 file is still readable on Windows")
     @pytest.mark.asyncio
     async def test_an_unreadable_file_is_skipped(self, home: Path) -> None:
         soul = _write(home, "SOUL.md", "identity")
@@ -568,7 +570,7 @@ agents:
     standing_instructions:
       source:
         type: local_dir
-        paths: ["{expert_dir}"]
+        paths: ["{expert_dir.as_posix()}"]
       max_bytes: 1000
   - name: Orchestrator
     description: coordinator

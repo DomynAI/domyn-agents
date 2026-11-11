@@ -469,6 +469,7 @@ class TestHomeRelativePaths:
         home.mkdir()
         _write_flat(home / "skills", "alpha")
         monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))  # HOME on Windows
         elsewhere = tmp_path / "cwd"
         elsewhere.mkdir()
         monkeypatch.chdir(elsewhere)

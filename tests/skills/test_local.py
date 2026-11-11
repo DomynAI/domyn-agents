@@ -16,7 +16,9 @@ def _skill(path: Path, name: str, description: str = "does a thing") -> Path:
     else:
         path.mkdir(parents=True, exist_ok=True)
         file = path / "SKILL.md"
-    file.write_text(f"---\nname: {name}\ndescription: {description}\n---\nbody of {name}\n")
+    file.write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\nbody of {name}\n", encoding="utf-8"
+    )
     return path
 
 
@@ -49,7 +51,9 @@ class TestWhatCountsAsASkill:
 
     def test_the_lowercase_file_name_is_accepted(self, root: Path) -> None:
         (root / "tidy").mkdir(parents=True)
-        (root / "tidy" / "skill.md").write_text("---\nname: tidy\ndescription: d\n---\nb\n")
+        (root / "tidy" / "skill.md").write_text(
+            "---\nname: tidy\ndescription: d\n---\nb\n", encoding="utf-8"
+        )
 
         assert _names(discover_local_skills(root)) == ["tidy"]
 
@@ -72,7 +76,7 @@ class TestWhatCountsAsASkill:
         assert discover_local_skills(root).skills == []
 
     def test_a_file_where_the_folder_should_be_gives_nothing(self, tmp_path: Path) -> None:
-        (tmp_path / "skills").write_text("x")
+        (tmp_path / "skills").write_text("x", encoding="utf-8")
 
         assert discover_local_skills(tmp_path / "skills").skills == []
 
@@ -106,7 +110,7 @@ class TestGroups:
     def test_a_folder_holding_no_skill_is_no_group(self, root: Path) -> None:
         (root / "empty").mkdir(parents=True)
         (root / "docs").mkdir()
-        (root / "docs" / "readme.txt").write_text("x")
+        (root / "docs" / "readme.txt").write_text("x", encoding="utf-8")
 
         assert discover_local_skills(root).groups() == {}
 
@@ -232,13 +236,14 @@ class TestExternalFilesOfADiscoveredSkill:
         folder = root / name
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "SKILL.md").write_text(
-            f"---\nname: {name}\ndescription: d\nexternal_files:\n{listed}---\nbody\n"
+            f"---\nname: {name}\ndescription: d\nexternal_files:\n{listed}---\nbody\n",
+            encoding="utf-8",
         )
 
     def test_a_skill_with_every_file_there_reports_nothing(self, root: Path) -> None:
         self._with_external_files(root, "report", ["../shared/helper.py", "scripts/"])
         (root / "shared").mkdir()
-        (root / "shared" / "helper.py").write_text("h")
+        (root / "shared" / "helper.py").write_text("h", encoding="utf-8")
         (root / "report" / "scripts").mkdir()
 
         assert discover_local_skills(root).skills[0].missing == ()

@@ -33,12 +33,12 @@ def main() -> None:
     args = common.split_parser(__doc__.splitlines()[0]).parse_args()
     out = common.data_utils.output_dir(args.out)
     meta_path = out / common.META_FILE
-    before = json.loads(meta_path.read_text()) if meta_path.exists() else None
+    before = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else None
 
     ds = common.Dataset(args, task=args.task)
     if before and before.get("settings") != ds.settings():
         # Dataset has already refused another task, data or target; this is the rest.
-        meta_path.write_text(json.dumps(before, indent=2))
+        meta_path.write_text(json.dumps(before, indent=2), encoding="utf-8")
         now = ds.settings()
         changed = {k: (v, now.get(k)) for k, v in before["settings"].items() if now.get(k) != v}
         sys.exit(
@@ -57,7 +57,7 @@ def main() -> None:
         )
     common.record_run(out, Path(__file__), "split")
 
-    meta = json.loads(meta_path.read_text())
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
     print(f"rows: {meta['rows']}  dropped for a missing target: {meta['dropped_missing_target']}")
     print(f"features: {len(ds.num_cols)} numeric, {len(ds.cat_cols)} categorical")
     print(f"split written to {out / common.SPLIT_FILE}")

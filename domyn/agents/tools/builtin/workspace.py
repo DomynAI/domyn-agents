@@ -125,6 +125,11 @@ class Workspace:
         Absolute paths in a transcript are noise, and in an approval prompt they
         are worse than noise — a long path pushes the interesting part of the
         line off the screen.
+
+        Always with forward slashes, Windows included (``src/lib.py``,
+        ``C:/Users/…``): the model passes these back to the file tools, which
+        read either, and into commands, where Git Bash reads a backslash as an
+        escape. It is also the approval subject, so one spelling everywhere.
         """
         for root in self.roots:
             try:
@@ -134,8 +139,8 @@ class Workspace:
             # An extra root is named, because "SKILL.md" alone does not say which
             # of several places it is in — and in an approval prompt that is the
             # whole question.
-            return str(relative) if root == self.root else str(path)
-        return str(path)
+            return relative.as_posix() if root == self.root else path.as_posix()
+        return path.as_posix()
 
 
 # Directories that are never worth walking and frequently enormous. Skipped by

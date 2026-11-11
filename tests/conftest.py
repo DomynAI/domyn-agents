@@ -2,7 +2,9 @@
 
 import contextlib
 import os
+import shlex
 import signal
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -29,16 +31,63 @@ def _stop_background_commands(root: Path, pattern: str) -> int:
     and still in the recorded group first, as ``build_kill`` does, so a reused
     group id is never signalled.
     """
+    if os.name == "nt":
+        return _stop_background_commands_windows(root, pattern)
     stopped = 0
     for pgid_file in root.glob(pattern):
         with contextlib.suppress(OSError, ValueError):
-            pgid = int(pgid_file.read_text().strip())
-            pid = int((pgid_file.parent / "run.pid").read_text().strip())
+            pgid = int(pgid_file.read_text(encoding="utf-8").strip())
+            pid = int((pgid_file.parent / "run.pid").read_text(encoding="utf-8").strip())
             if pgid <= 1 or os.getpgid(pid) != pgid:
                 continue
             os.killpg(pgid, signal.SIGKILL)
             stopped += 1
     return stopped
+
+
+def _stop_background_commands_windows(root: Path, pattern: str) -> int:
+    """The same on Windows, where there are no process groups to signal.
+
+    ``run.pid`` holds the wrapper's pid as Git Bash numbers it (an MSYS pid);
+    Git Bash maps it to the Windows one in ``/proc/<pid>/winpid``, and
+    ``taskkill /T`` ends that process and everything it started.
+
+    The pid is checked to still be that wrapper first, by its command line
+    (``bash .domyn/processes/<conversation>/<handle>/run.sh``), as the POSIX
+    path checks the group: a pid is reused once its command has ended, and
+    ``taskkill /T`` on a reused one ends whatever tree it now heads. Measured:
+    without the check, the cleanup ended the CI step's own shell, pytest with it.
+    """
+    targets = []
+    for pgid_file in root.glob(pattern):
+        with contextlib.suppress(OSError, ValueError):
+            pid = int((pgid_file.parent / "run.pid").read_text(encoding="utf-8").strip())
+            run_sh = "/".join([*pgid_file.parent.parts[-2:], "run.sh"])
+            targets.append((pid, run_sh))
+    if not targets:
+        return 0
+    # One line printed per process ended, which is the count returned.
+    lines = [
+        f'if tr "\\0" " " < /proc/{pid}/cmdline 2>/dev/null | grep -qF -- {shlex.quote(run_sh)} '
+        f"&& w=$(cat /proc/{pid}/winpid 2>/dev/null) "
+        f"&& taskkill //F //T //PID $w >/dev/null 2>&1; then echo stopped; fi"
+        for pid, run_sh in targets
+    ]
+    with contextlib.suppress(Exception):
+        from domyn.agents.tools.builtin.git_bash import find_git_bash
+
+        # The script in the environment, as GitBashBackend sends a line: Git Bash
+        # re-reads its command line, single quotes included.
+        done = subprocess.run(
+            [str(find_git_bash()), "-c", 'eval "$DOMYN_COMMAND"'],
+            env={**os.environ, "DOMYN_COMMAND": "\n".join(lines)},
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        return done.stdout.count("stopped")
+    return 0
 
 
 @pytest.fixture(autouse=True)

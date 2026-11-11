@@ -46,7 +46,7 @@ def main() -> None:
     args = p.parse_args()
 
     out = common.data_utils.output_dir(args.out)
-    meta = json.loads((out / common.META_FILE).read_text())
+    meta = json.loads((out / common.META_FILE).read_text(encoding="utf-8"))
     if meta["task"] != "regression":
         raise SystemExit("This folder holds a classification run: use classification_compare.py.")
     target = meta["target"]
@@ -187,11 +187,12 @@ def main() -> None:
         f"{common.markdown_table(table)}\n\n"
         f"{args.main_label} − {args.baseline_label} {args.metric}: {gap:+.4g} "
         f"(95% CI {lo:+.4g} to {hi:+.4g}, {len(diffs)} bootstrap samples) — {verdict}\n\n"
-        f"{common.markdown_table(bands, 3)}\n"
+        f"{common.markdown_table(bands, 3)}\n",
+        encoding="utf-8",
     )
     common.record_run(out, Path(__file__), "compare")
 
-    print((out / "comparison.md").read_text())
+    print((out / "comparison.md").read_text(encoding="utf-8"))
     print(f"outputs in {out}")
 
 
