@@ -114,6 +114,7 @@ Verify against `domyn --help` before relying on this list.
 | `domyn run` | Chat with an agent, interactively or with a single prompt |
 | `domyn setup` | Configure provider, model and default agent (also runs automatically on first `run`); `--project <name>` creates or edits `~/.domyn/projects/<name>`; `--import <dir>` creates that project from an export (`~/.domyn/projects/<the folder's name>` without `--project`) |
 | `domyn export <dir>` | Copy the configuration, its skills and instruction files into a new folder laid out as a project |
+| `domyn clean` | Remove old conversations (`--older-than <days>` or `--all`, `--dry-run`, `--yes`) from the selected project's or the global history, with their `conversations/<id>/` environment folders and a `VACUUM` of `conversations.db` (`interfaces/cli/clean.py`) |
 | `domyn init` | Initialize a new project |
 | `domyn skills` | List available skills |
 | `domyn skill show\|remove <name>` | Show a configured skill (`<name>#<section>` for one section), or unlist it from the config |

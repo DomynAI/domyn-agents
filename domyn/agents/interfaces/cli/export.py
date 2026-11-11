@@ -1063,8 +1063,7 @@ class PrivatePlaces:
     def now(cls) -> PrivatePlaces:
         try:
             homes = frozenset(
-                place.resolve()
-                for place in (cli_config.home_dir(), cli_config.GLOBAL_DIR)
+                place.resolve() for place in (cli_config.home_dir(), cli_config.GLOBAL_DIR)
             )
             return cls(homes=homes, projects=cli_config.projects_dir().resolve())
         except (OSError, RuntimeError):

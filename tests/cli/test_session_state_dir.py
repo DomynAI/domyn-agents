@@ -1,6 +1,5 @@
-"""`domyn run` keeps the tools' state in ``config_dir()``, beside ``conversations.db``:
-the project's folder, a folder's own ``./.domyn`` when it holds the config, else
-``~/.domyn``."""
+"""`domyn run` keeps the tools' state in ``home_dir()``, beside ``conversations.db``:
+the project's folder, else ``~/.domyn``."""
 
 from pathlib import Path
 from typing import Any
@@ -28,7 +27,7 @@ async def test_the_session_agent_is_loaded_with_it(
         raise ValueError("stop here")
 
     monkeypatch.setattr(run_command_module, "load_application_from_file", _load)
-    monkeypatch.setattr(run_command_module, "config_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr(run_command_module, "home_dir", lambda: tmp_path / "state")
 
     with pytest.raises(ValueError, match="stop here"):
         await run_command_module.load_session_agent(config, run_command_module.SessionOptions())
