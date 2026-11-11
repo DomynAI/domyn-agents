@@ -259,6 +259,9 @@ async def start_session(
     index = await _startup_index(agent)
     if show_status:
         details = [agent.name]
+        commands = _commands_status(agent)
+        if commands:
+            details.append(commands)
         skills = _skills_status(agent, index)
         if skills:
             details.append(skills)
@@ -342,10 +345,12 @@ def _command_backends(agent: Any) -> list[Any]:
 async def _sandbox_is_usable(agent: Any, theme: Theme, config_file: Path | None) -> bool:
     """Check that the sandbox the configuration asks for can be used; say what to do if not.
 
-    The session stops here rather than falling back to running commands on this
-    machine: someone who chose a sandbox and gets none, without being told, has a
-    boundary that is not there. Both ways out are named — start Docker, or switch to
-    running commands locally — and the user runs `domyn run` again.
+    An explicit ``sandbox: docker`` stops here rather than falling back to running
+    commands on this machine: someone who chose a sandbox and gets none, without
+    being told, has a boundary that is not there. Both ways out are named — start
+    Docker, or switch to running commands locally — and the user runs `domyn run`
+    again. ``sandbox: auto`` (the default) never raises from ``check``: it falls back
+    to this machine, and the warning is printed by ``_say_fallback``.
     """
     for backend in _command_backends(agent):
         try:
@@ -375,7 +380,50 @@ async def _sandbox_is_usable(agent: Any, theme: Theme, config_file: Path | None)
                 markup=False,
             )
             return False
+    _say_fallback(agent, theme, config_file)
     return True
+
+
+def _commands_status(agent: Any) -> str | None:
+    """Where the shell commands run, for the line under the banner."""
+    backends = _command_backends(agent)
+    if not backends:
+        return None
+    if any(getattr(b, "is_isolated", False) for b in backends):
+        return "commands: docker sandbox"
+    return "commands: this machine (no sandbox)"
+
+
+def _say_fallback(agent: Any, theme: Theme, config_file: Path | None) -> None:
+    """Say, as a warning, that commands run on this machine because Docker could not
+    be used and the configuration did not insist on it (``sandbox: auto``)."""
+    for backend in _command_backends(agent):
+        problem = getattr(backend, "fallback", None)
+        if problem is None:
+            continue
+        style = theme.style("warning")
+        console.print(
+            f"\n  {problem.problem} Commands run on this machine, with no sandbox.",
+            style=style,
+            highlight=False,
+            markup=False,
+        )
+        if problem.fix:
+            console.print(
+                f"  To sandbox them: {problem.fix} Then run `domyn run` again.",
+                style=style,
+                highlight=False,
+                markup=False,
+            )
+        where = f" in {config_file}" if config_file is not None else ""
+        console.print(
+            f"  To always run on this machine (and not see this): set `sandbox: local` "
+            f"on the shell bundle{where}.\n",
+            style=style,
+            highlight=False,
+            markup=False,
+        )
+        return
 
 
 def _lacks_chosen_skills(config: dict[str, Any] | None, config_file: Path | None) -> bool:

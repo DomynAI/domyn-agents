@@ -257,10 +257,12 @@ class AgentConfig(BaseModel):
     the answer can be remembered for the conversation. See
     ``domyn.agents.tools.builtin``."""
 
-    sandbox: str = "local"
-    """Where `run_command` runs: ``local`` (this machine, no isolation) or
-    ``docker`` (a container per conversation that can write only the workspace;
-    see ``docker`` below). Visible in `/config` rather than implied."""
+    sandbox: str = "auto"
+    """Where `run_command` runs: ``auto`` (a Docker container when Docker can be
+    used, else this machine, with a warning), ``docker`` (a container per
+    conversation that can write only the workspace, or the session does not start;
+    see ``docker`` below) or ``local`` (this machine, no isolation). Visible in
+    `/config` rather than implied."""
 
     isolate_environment: bool = True
     """Give each conversation its own virtualenv under
@@ -291,8 +293,8 @@ class AgentConfig(BaseModel):
     browsing off and on again does not lose an allowlist."""
 
     docker: DockerOptions = Field(default_factory=DockerOptions)
-    """How the Docker sandbox runs. Only read when ``sandbox`` is ``docker``, and
-    kept when it is not, so switching back and forth does not lose an allowlist."""
+    """How the Docker sandbox runs. Only read when ``sandbox`` is not ``local``, and
+    kept when it is, so switching back and forth does not lose an allowlist."""
 
     stream: bool = True
     """Print the answer as it is generated rather than when it is finished.
@@ -1516,12 +1518,12 @@ def _tool_bundle_items(raw: dict[str, Any]) -> list[ConfigItem]:
             continue
         fields = [
             ("bundles", ", ".join(b.get("bundles") or []) or "(none)"),
-            ("sandbox", str(b.get("sandbox", "local"))),
+            ("sandbox", str(b.get("sandbox", "auto"))),
             ("workspace", b.get("workspace") or "(cwd)"),
             ("isolate_environment", str(b.get("isolate_environment", True))),
             ("allowed_env", ", ".join(b.get("allowed_env") or []) or "(none)"),
         ]
-        if str(b.get("sandbox", "local")) == "docker":
+        if str(b.get("sandbox", "auto")) != "local":
             fields += _docker_fields(_docker_options(b.get("docker")))
         if "browser" in (b.get("bundles") or []):
             fields += _browser_fields(_browser_options(b.get("browser")))

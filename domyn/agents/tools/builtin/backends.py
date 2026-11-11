@@ -341,6 +341,111 @@ async def _terminate_tree(process: asyncio.subprocess.Process) -> None:
         await asyncio.wait_for(process.wait(), timeout=_REAP_TIMEOUT_S)
 
 
+class AutoBackend(CommandBackend):
+    """Docker when it can be used, this machine when it cannot — decided once.
+
+    For a configuration that does not say where commands run (``sandbox: auto``,
+    the default). Unlike an explicit ``docker``, which refuses to start without a
+    sandbox, this one starts either way and *says* which it got: the fallback is
+    ``fallback`` and is printed by the front-end, so nobody believes they are
+    sandboxed when they are not. The decision is taken at the front-end's check, and
+    not again for this object: a Docker that goes down mid-session fails the
+    command with a message instead of moving the conversation to the host half way
+    (its files and installs would be in the other place). A rebuilt backend
+    (config reload, ``/model``) decides afresh.
+    """
+
+    name = "auto"
+    may_isolate = True
+    """The browser bundle reads this before the decision exists: it keeps a backend
+    of its own on this machine, as it does beside a container."""
+
+    def __init__(
+        self,
+        workspace: Workspace,
+        *,
+        isolate_environment: bool = True,
+        allowed_env: Iterable[str] = (),
+        docker: object | None = None,
+    ) -> None:
+        self._workspace = workspace
+        self._isolate_environment = isolate_environment
+        self._allowed_env = list(allowed_env)
+        self._docker_options = docker
+        self._chosen: CommandBackend | None = None
+        self._deciding = asyncio.Lock()
+        self.fallback: BackendUnavailableError | None = None
+        """Why Docker was not used, when it was not."""
+
+    async def decide(self) -> CommandBackend:
+        if self._chosen is not None:
+            return self._chosen
+        async with self._deciding:
+            if self._chosen is not None:
+                return self._chosen  # type: ignore[unreachable]  # set while we waited
+            candidate = build_backend(
+                "docker",
+                self._workspace,
+                allowed_env=self._allowed_env,
+                docker=self._docker_options,
+            )
+            try:
+                await candidate.check()
+                chosen = candidate
+            except BackendUnavailableError as exc:
+                self.fallback = exc
+                chosen = LocalBackend(
+                    self._workspace,
+                    isolate_environment=self._isolate_environment,
+                    allowed_env=self._allowed_env,
+                )
+                get_logger().warning(f"sandbox unavailable, commands run locally: {exc.problem}")
+                self._notice(f"{exc.problem} Commands run on this machine, with no sandbox.")
+            chosen.on_notice = self._notice
+            self.name = chosen.name
+            self.is_isolated = chosen.is_isolated
+            self.destroys_on_close = chosen.destroys_on_close
+            self._chosen = chosen
+            return chosen
+
+    def _notice(self, message: str) -> None:
+        if self.on_notice is not None:
+            self.on_notice(message)
+
+    async def check(self) -> None:
+        await self.decide()
+
+    async def start(self) -> None:
+        await (await self.decide()).start()
+
+    async def prepare(self) -> None:
+        await (await self.decide()).prepare()
+
+    async def warm_up(self, conversation_id: str) -> None:
+        await (await self.decide()).warm_up(conversation_id)
+
+    async def run(
+        self,
+        command: str,
+        *,
+        timeout: float,
+        conversation_id: str = "",
+        stdin: str | None = None,
+    ) -> CommandResult:
+        chosen = await self.decide()
+        return await chosen.run(
+            command, timeout=timeout, conversation_id=conversation_id, stdin=stdin
+        )
+
+    async def end_conversation(self, conversation_id: str) -> None:
+        if self._chosen is not None:
+            await self._chosen.end_conversation(conversation_id)
+
+    async def close(self) -> None:
+        if self._chosen is not None:
+            await self._chosen.close()
+
+
 def build_backend(
     name: str,
     workspace: Workspace,
@@ -363,6 +468,13 @@ def build_backend(
             allowed_env=allowed_env,
             state_dir=state_dir,
         )
+    if name == "auto":
+        return AutoBackend(
+            workspace,
+            isolate_environment=isolate_environment,
+            allowed_env=allowed_env,
+            docker=docker,
+        )
     if name == "docker":
         # Imported here: it needs pydantic models and a module that imports this one.
         from domyn.agents.tools.builtin.docker_backend import DockerBackend, DockerOptions
@@ -370,6 +482,6 @@ def build_backend(
         options = docker if isinstance(docker, DockerOptions) else DockerOptions()
         return DockerBackend(workspace, options=options, allowed_env=allowed_env)
     raise BackendUnavailableError(
-        f"unknown command backend '{name}' (available: local, docker). "
+        f"unknown command backend '{name}' (available: auto, local, docker). "
         "Refusing to fall back to running on this machine."
     )

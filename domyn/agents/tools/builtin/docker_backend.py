@@ -83,24 +83,41 @@ if TYPE_CHECKING:
 BASE_IMAGE = "python:3.12-slim"
 """What the default image is made from, and what the proxy container runs."""
 
-DERIVED_IMAGE = "domyn-sandbox:py312-1"
-"""``BASE_IMAGE`` plus ``procps``, built once on this machine. The background
-command wrapper needs ``ps`` and ``pkill``, which the slim image does not have."""
+NODE_IMAGE = "node:22-slim"
+"""Where the image takes Node and npm from (same Debian family as ``BASE_IMAGE``)."""
+
+DERIVED_IMAGE = "domyn-sandbox:py312-2"
+"""``BASE_IMAGE`` plus what an agent working on a project reaches for, built once on
+this machine: ``procps`` (the background command wrapper needs ``ps`` and ``pkill``,
+which the slim image does not have), ``git`` and ``curl``, and Node with npm."""
 
 _DOCKERFILE = (
+    f"FROM {NODE_IMAGE} AS node\n"
     f"FROM {BASE_IMAGE}\n"
     "RUN apt-get update \\\n"
-    " && apt-get install -y --no-install-recommends procps \\\n"
+    " && apt-get install -y --no-install-recommends procps git curl ca-certificates \\\n"
     " && rm -rf /var/lib/apt/lists/*\n"
+    "COPY --from=node /usr/local/bin/node /usr/local/bin/node\n"
+    "COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules\n"
+    "RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \\\n"
+    " && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx\n"
 )
 
-DEFAULT_ALLOW: tuple[str, ...] = ("pypi.org", "files.pythonhosted.org", "registry.npmjs.org")
-"""The package registries: what installing pip and npm packages needs, and no more."""
+DEFAULT_ALLOW: tuple[str, ...] = (
+    "pypi.org",
+    "files.pythonhosted.org",
+    "registry.npmjs.org",
+    "github.com",
+)
+"""The package registries, and GitHub for ``git clone`` over HTTPS. Anything else is
+added with ``docker: allow:``."""
 
 LABEL = "domyn.sandbox"
 PROXY_PORT = 3128
 SANDBOX_HOME = "/tmp/domyn-home"
 REQUIREMENTS_FILE = "requirements.txt"
+NPM_GLOBALS_FILE = "npm-global.txt"
+NPM_PREFIX = f"{SANDBOX_HOME}/.npm-global"
 
 # How much longer than the command's own limit the host waits. The limit is
 # enforced inside the container by `timeout`; this only bounds a `docker exec`
@@ -110,6 +127,12 @@ _EXEC_GRACE_S = 15.0
 _INSTALLS = re.compile(r"(?:^|[\s;&|(])(?:pip3?|pipx|uv|python3?\s+-m\s+pip)(?:\s|$)")
 """A command that may have changed what is installed. Checked on the text only to
 decide whether to look; what is recorded is what ``pip freeze`` then says."""
+
+_NPM_GLOBAL = re.compile(
+    r"(?:^|[\s;&|(])npm\s[^;&|\n]*?\s(?:-g|--global|--location[= ]global)(?:\s|$)"
+)
+"""An ``npm`` command that may have changed the global packages. A local install
+lands in the workspace's ``node_modules``, which is the host's and needs no record."""
 
 
 class DockerOptions(BaseModel):
@@ -406,7 +429,7 @@ class DockerBackend(CommandBackend):
             self._say(f"Pulled {image} in {time.time() - started:.0f}s.")
             return image
 
-        self._say("Preparing the sandbox image (first run only; python:3.12-slim + procps)…")
+        self._say("Preparing the sandbox image (first run only; Python, Node, git and curl)…")
         started = time.time()
         code, _, err = await self._docker("pull", BASE_IMAGE, timeout=1800)
         if code != 0:
@@ -611,6 +634,7 @@ class DockerBackend(CommandBackend):
             "-w", str(self._workspace.root),
             "-e", f"HOME={SANDBOX_HOME}",
             "-e", f"PYTHONUSERBASE={SANDBOX_HOME}/.local",
+            "-e", f"NPM_CONFIG_PREFIX={NPM_PREFIX}",
             "-e", "PIP_DISABLE_PIP_VERSION_CHECK=1",
             "-e", "PYTHONDONTWRITEBYTECODE=1",
         ]  # fmt: skip
@@ -638,7 +662,7 @@ class DockerBackend(CommandBackend):
         # home exists and is ours, and the tools the wrapper needs are there.
         code, _, err = await self._docker(
             "exec", name, "sh", "-c",
-            f"mkdir -p {SANDBOX_HOME}/.local && command -v bash timeout ps >/dev/null",
+            f"mkdir -p {SANDBOX_HOME}/.local {NPM_PREFIX} && command -v bash timeout ps >/dev/null",
             timeout=30,
         )  # fmt: skip
         if code != 0:
@@ -655,7 +679,7 @@ class DockerBackend(CommandBackend):
 
     def _summary(self) -> str:
         network = {
-            "allowlist": "network: package registries only",
+            "allowlist": "network: registries and GitHub only",
             "none": "no network",
             "open": "network: open",
         }[self._options.network]
@@ -728,7 +752,7 @@ class DockerBackend(CommandBackend):
         self, container: _Container, command: str, timeout: float, stdin: str | None
     ) -> CommandResult:
         limit = max(1, int(timeout))
-        script = 'export PATH="$HOME/.local/bin:$PATH"\n' + command
+        script = 'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"\n' + command
         argv = ["exec", "-i", "-w", str(self._workspace.root)]
         env = dict(os.environ)
         for name in self._allowed_env:
@@ -804,13 +828,15 @@ class DockerBackend(CommandBackend):
     ) -> CommandResult:
         if result.exit_code == 0 and _INSTALLS.search(command):
             await self._record_installs(container, conversation)
+        if result.exit_code == 0 and _NPM_GLOBAL.search(command):
+            await self._record_npm_globals(container, conversation)
         if result.exit_code != 0 and self._options.network == "allowlist":
             blocked = await self._blocked_since(started)
             if blocked:
                 hosts = ", ".join(blocked)
                 note = (
                     f"\n[sandbox] blocked connection(s) to: {hosts}. The sandbox only reaches "
-                    "package registries. To allow a host, add it under `docker: allow:` in "
+                    "an allowlist of hosts (package registries and GitHub). To allow a host, add it under `docker: allow:` in "
                     "the shell bundle's config."
                 )
                 return CommandResult(
@@ -866,30 +892,82 @@ class DockerBackend(CommandBackend):
             )
             get_logger().debug(f"sandbox requirements detail: {exc}")
 
-    async def _replay_installs(self, container: _Container, conversation: str) -> None:
-        target = self._requirements_path(conversation)
+    def _npm_globals_path(self, conversation: str) -> Path:
+        return self._conversation_home(conversation) / NPM_GLOBALS_FILE
+
+    async def _record_npm_globals(self, container: _Container, conversation: str) -> None:
+        """Write the global npm packages as ``name@version`` lines, so a new container
+        can install them again. Only what ``npm ls`` reports at the top level."""
+        _, out, _ = await self._docker(
+            "exec", container.name, "bash", "-c",
+            'export PATH="$HOME/.npm-global/bin:$PATH"; npm ls -g --depth=0 --json 2>/dev/null',
+            timeout=60,
+        )  # fmt: skip
+        try:
+            found = json.loads(out).get("dependencies") or {}
+            lines = sorted(
+                f"{name}@{info['version']}"
+                for name, info in found.items()
+                if isinstance(info, dict) and info.get("version")
+            )
+        except (ValueError, AttributeError):
+            return
+        text = "".join(f"{line}\n" for line in lines)
+        target = self._npm_globals_path(conversation)
+        try:
+            if target.is_symlink():
+                return
+            if target.exists() and target.read_text(encoding="utf-8") == text:
+                return
+            temporary = target.with_name(target.name + ".tmp")
+            temporary.write_text(text, encoding="utf-8")
+            os.replace(temporary, target)
+        except OSError as exc:
+            get_logger().warning(
+                f"sandbox: could not record installed npm packages: {type(exc).__name__}"
+            )
+            get_logger().debug(f"sandbox npm record detail: {exc}")
+
+    def _recorded(self, target: Path) -> list[str]:
         try:
             if target.is_symlink() or not target.is_file():
-                return
-            lines = [ln for ln in target.read_text(encoding="utf-8").splitlines() if ln.strip()]
+                return []
+            return [
+                ln.strip() for ln in target.read_text(encoding="utf-8").splitlines() if ln.strip()
+            ]
         except OSError:
-            return
-        if not lines:
+            return []
+
+    async def _replay_installs(self, container: _Container, conversation: str) -> None:
+        pip_lines = self._recorded(self._requirements_path(conversation))
+        npm_lines = self._recorded(self._npm_globals_path(conversation))
+        count = len(pip_lines) + len(npm_lines)
+        if not count:
             return
         if self._options.network == "none":
             self._say(
-                f"{len(lines)} packages were installed in this conversation, but the "
+                f"{count} packages were installed in this conversation, but the "
                 "sandbox has no network to restore them."
             )
             return
-        self._say(f"Restoring {len(lines)} package(s) installed earlier in this conversation…")
-        code, _, err = await self._docker(
-            "exec", "-w", str(self._workspace.root), container.name, "bash", "-c",
-            f"pip install --user --quiet -r {shlex.quote(str(target))}",
-            timeout=900,
-        )  # fmt: skip
-        if code != 0:
-            self._say(f"Could not restore every package: {err.strip()[-160:]}")
+        self._say(f"Restoring {count} package(s) installed earlier in this conversation…")
+        if pip_lines:
+            code, _, err = await self._docker(
+                "exec", "-w", str(self._workspace.root), container.name, "bash", "-c",
+                f"pip install --user --quiet -r {shlex.quote(str(self._requirements_path(conversation)))}",
+                timeout=900,
+            )  # fmt: skip
+            if code != 0:
+                self._say(f"Could not restore every Python package: {err.strip()[-160:]}")
+        if npm_lines:
+            packages = " ".join(shlex.quote(line) for line in npm_lines)
+            code, _, err = await self._docker(
+                "exec", "-w", str(self._workspace.root), container.name, "bash", "-c",
+                f"npm install -g --no-audit --no-fund --loglevel=error {packages}",
+                timeout=900,
+            )  # fmt: skip
+            if code != 0:
+                self._say(f"Could not restore every npm package: {err.strip()[-160:]}")
 
 
 def _container_is_gone(text: str) -> bool:

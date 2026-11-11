@@ -1046,6 +1046,7 @@ class TestOptions:
             name="x",
             bundles=["browser"],
             workspace=str(tmp_path),
+            sandbox="local",
             browser={"engine": "lightpanda", "allowed_domains": ["a.com"]},
         )
         built = entry.build()

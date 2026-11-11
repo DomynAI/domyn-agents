@@ -33,7 +33,10 @@ from domyn.agents.tools.builtin import (
     shell,
 )
 from domyn.agents.tools.builtin.docker_backend import (
+    _DOCKERFILE,
     _INSTALLS,
+    _NPM_GLOBAL,
+    DEFAULT_ALLOW,
     DockerBackend,
 )
 
@@ -355,6 +358,33 @@ class TestEgressProxyServer:
 # --- a real container -------------------------------------------------------
 
 
+class TestNpmGlobalDetection:
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "npm install -g cowsay",
+            "npm i --global cowsay",
+            "cd a && npm uninstall -g cowsay",
+            "npm install cowsay --location=global",
+        ],
+    )
+    def test_global_changes(self, command: str) -> None:
+        assert _NPM_GLOBAL.search(command)
+
+    @pytest.mark.parametrize("command", ["npm install cowsay", "echo npm -g", "ls -g", "npm test"])
+    def test_the_rest(self, command: str) -> None:
+        assert not _NPM_GLOBAL.search(command)
+
+
+class TestDefaults:
+    def test_github_is_allowed_by_default(self) -> None:
+        assert "github.com" in DEFAULT_ALLOW
+
+    def test_the_image_has_what_a_project_needs(self) -> None:
+        for wanted in ("git", "curl", "procps", "node"):
+            assert wanted in _DOCKERFILE
+
+
 @pytest_asyncio.fixture
 async def sandbox(tmp_path: Path) -> AsyncIterator[Callable[..., DockerBackend]]:
     """Builds backends over a workspace and removes every container, proxy and
@@ -516,6 +546,42 @@ class TestARealContainer:
         assert "cowsay" in recorded
 
     @pytest.mark.asyncio
+    async def test_the_image_has_git_curl_node_and_npm(self, sandbox: Any) -> None:
+        backend = sandbox()
+        result = await _sh(
+            backend, "git --version && curl --version | head -1 && node -v && npm -v"
+        )
+        assert result.exit_code == 0, result.stderr
+
+    @pytest.mark.asyncio
+    async def test_global_npm_packages_are_recorded_and_restored(self, sandbox: Any) -> None:
+        backend = sandbox()
+        install = await _sh(backend, "npm install -g --no-audit --no-fund cowsay", timeout=180)
+        assert install.exit_code == 0, install.stderr
+        assert "cowsay@" in backend._npm_globals_path("c1").read_text()
+        assert (await _sh(backend, "cowsay hi")).exit_code == 0
+        # A new container for the same conversation brings them back.
+        await backend.end_conversation("c1")
+        again = await _sh(backend, "cowsay hi", timeout=180)
+        assert again.exit_code == 0, again.stderr
+
+    @pytest.mark.asyncio
+    async def test_a_local_npm_install_lands_in_the_workspace(self, sandbox: Any) -> None:
+        backend = sandbox()
+        install = await _sh(backend, "npm install --no-audit --no-fund cowsay", timeout=180)
+        assert install.exit_code == 0, install.stderr
+        assert (sandbox.workspace / "node_modules" / "cowsay").is_dir()
+
+    @pytest.mark.asyncio
+    async def test_curl_reaches_an_allowed_host_and_not_another(self, sandbox: Any) -> None:
+        backend = sandbox()
+        ok = await _sh(backend, "curl -sS -o /dev/null -w '%{http_code}' https://pypi.org/simple/")
+        assert ok.exit_code == 0 and ok.stdout.strip() == "200", ok.stderr
+        blocked = await _sh(backend, "curl -sS https://example.org")
+        assert blocked.exit_code != 0
+        assert "example.org" in blocked.stderr
+
+    @pytest.mark.asyncio
     async def test_no_network_means_none(self, sandbox: Any) -> None:
         backend = sandbox(network="none")
         result = await _sh(
@@ -587,7 +653,7 @@ class TestTheContainersLife:
             [
                 "docker", "run", "-d", "--name", stale,
                 "--label", "domyn.sandbox=1", "--label", f"domyn.owner-pid={gone.pid}",
-                "domyn-sandbox:py312-1", "sleep", "60",
+                "domyn-sandbox:py312-2", "sleep", "60",
             ],
             capture_output=True,
             check=True,

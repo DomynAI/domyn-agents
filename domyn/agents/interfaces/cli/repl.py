@@ -1788,9 +1788,14 @@ class Repl:
                 backend.on_notice = self._say
 
     def _sandbox(self) -> Any:
-        """The command backend, when it is a sandbox (a container, not this machine)."""
+        """The command backend, when it is or may become a sandbox (a container, not
+        this machine): an ``auto`` one decides when it is first prepared."""
         backend = self._backend()
-        return backend if backend is not None and getattr(backend, "is_isolated", False) else None
+        if backend is None:
+            return None
+        if getattr(backend, "is_isolated", False) or getattr(backend, "may_isolate", False):
+            return backend
+        return None
 
     async def _prepare_sandbox(self) -> None:
         """Get the sandbox ready before the first prompt, saying what it is doing.

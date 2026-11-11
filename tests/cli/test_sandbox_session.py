@@ -236,3 +236,73 @@ class TestStartingWithoutDocker:
         assert await run_command._sandbox_is_usable(
             _agent(), Theme.build(allow_animation=False), None
         )
+
+
+class TestStartingWithAutoSandbox:
+    """`sandbox: auto` starts either way, says where commands run, and warns on a fallback."""
+
+    async def _start(self, backend: CommandBackend, show_status: bool) -> tuple[int, str]:
+        from domyn.agents.cli.commands.run import command as run_command
+
+        buffer = io.StringIO()
+        agent = _agent()
+        agent.builtin_tools.append(BuiltinTools(backend=backend))
+        with patch.object(run_command, "console", Console(file=buffer, width=120)):
+            code = await run_command.start_session(
+                agent,
+                Theme.build(allow_animation=False),
+                initial_prompt=None,
+                verbose=False,
+                show_status=show_status,
+                config_file=Path("/x/config.yaml"),
+            )
+        return code, buffer.getvalue()
+
+    @pytest.mark.asyncio
+    async def test_a_fallback_warns_and_the_session_starts(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from domyn.agents.cli.commands.run import command as run_command
+        from domyn.agents.tools.builtin import DockerOptions, Workspace
+        from domyn.agents.tools.builtin.backends import AutoBackend
+
+        started: list[bool] = []
+
+        class _Repl:
+            def __init__(self, *a: Any, **k: Any) -> None: ...
+
+            async def run(self, prompt: Any) -> int:
+                started.append(True)
+                return 0
+
+        monkeypatch.setattr(run_command, "Repl", _Repl)
+        backend = AutoBackend(
+            Workspace.at(tmp_path), docker=DockerOptions(docker_binary="/no/such/docker")
+        )
+
+        code, text = await self._start(backend, show_status=True)
+
+        assert code == 0 and started == [True]
+        flat = text.replace("\n", " ")
+        assert "Docker was not found" in text and "no sandbox" in text
+        assert "sandbox: local" in flat
+        assert "commands: this machine (no sandbox)" in flat
+
+    @pytest.mark.asyncio
+    async def test_a_usable_docker_shows_the_sandbox_and_no_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from domyn.agents.cli.commands.run import command as run_command
+
+        class _Repl:
+            def __init__(self, *a: Any, **k: Any) -> None: ...
+
+            async def run(self, prompt: Any) -> int:
+                return 0
+
+        monkeypatch.setattr(run_command, "Repl", _Repl)
+        code, text = await self._start(FakeSandbox(), show_status=True)
+
+        assert code == 0
+        assert "commands: docker sandbox" in text
+        assert "no sandbox" not in text

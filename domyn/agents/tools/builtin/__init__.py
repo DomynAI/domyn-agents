@@ -178,7 +178,7 @@ def bundle(
             # Chrome: there the browser stays on this machine, unsandboxed.
             resolved = resolved or LocalBackend(space, allowed_env=allowed_env)
             browser_backend = resolved
-            if resolved.is_isolated:
+            if resolved.is_isolated or getattr(resolved, "may_isolate", False):
                 get_logger().warning("the browser bundle runs on this machine, outside the sandbox")
                 browser_backend = LocalBackend(space, allowed_env=allowed_env)
             browser_list, sessions = browser_tools(backend=browser_backend, options=browser)
@@ -210,7 +210,10 @@ class BuiltinBundleConfig(BaseModel):
     name: str
     bundles: list[str] = PydanticField(default_factory=lambda: list(DEFAULT_BUNDLES))
     workspace: str | None = None
-    sandbox: str = "local"
+    sandbox: str = "auto"
+    """Where ``run_command`` runs: ``auto`` (a Docker container when Docker can be
+    used, else this machine, with a warning), ``docker`` (a container, or refuse to
+    start) or ``local`` (this machine)."""
     isolate_environment: bool = True
     allowed_env: list[str] = PydanticField(default_factory=list)
     """Extra environment variable names ``run_command``'s subprocess may see,
@@ -221,7 +224,7 @@ class BuiltinBundleConfig(BaseModel):
     browser: BrowserOptions = PydanticField(default_factory=BrowserOptions)
     """Options for the ``browser`` bundle; ignored unless it is listed."""
     docker: DockerOptions = PydanticField(default_factory=DockerOptions)
-    """Options for the Docker sandbox; ignored unless ``sandbox: docker``."""
+    """Options for the Docker sandbox; ignored when ``sandbox`` is ``local``."""
 
     def build(
         self,

@@ -46,7 +46,17 @@ A command detached by the shell itself, with `&`, `disown` or `setsid -f`, gets 
 
 ### Running commands in a Docker sandbox
 
-With `sandbox: docker`, the agent still runs in your terminal, and so do its file tools and its approvals. Only the commands it runs move into a Docker container that can write nothing of yours except the workspace. This needs Docker (or Podman, with `docker_binary`) running on your machine. `domyn setup` asks where commands should run when you choose the shell tools: sandboxed in Docker (the starting choice when Docker is installed) or on this machine. If the configuration is sandboxed and Docker is not running, `domyn run` does not start: it tells you how to start Docker, or how to switch to running commands on this machine, and you run it again.
+By default (`sandbox: auto`), the agent still runs in your terminal, and so do its file tools and its approvals. Only the commands it runs move into a Docker container that can write nothing of yours except the workspace. This needs Docker (or Podman, with `docker_binary`) running on your machine.
+
+If Docker is not installed or not running, `domyn run` still starts, warns you, and runs commands on your machine instead. The line under the banner says which one you got (`commands: docker sandbox` or `commands: this machine (no sandbox)`). Start Docker and run `domyn run` again to be sandboxed. Three values of `sandbox` say what you want:
+
+| Value | Meaning |
+|---|---|
+| `auto` | A container when Docker works, this machine, with a warning, when it does not |
+| `docker` | Always a container: `domyn run` does not start without Docker |
+| `local` | Always this machine, with no warning |
+
+If Docker stops during a session, a command fails with a message; the session does not switch to your machine half way, because the files and packages of the conversation are in the container. Restart `domyn run` to choose again.
 
 ```yaml
 tool_bundles:
@@ -54,11 +64,12 @@ tool_bundles:
   bundles:
   - files
   - shell
-  sandbox: docker
+  sandbox: auto
   docker:
     network: allowlist     # allowlist (default), none or open
     allow:
-    - github.com           # added to the package registries
+    - api.github.com       # added to the hosts below
+    - "*.githubusercontent.com"
 ```
 
 What the container can see:
@@ -66,19 +77,25 @@ What the container can see:
 - **The workspace**, readable and writable, at the same path as on your machine. A file a command writes is a file in your project, owned by you.
 - **The skill folders**, read-only, because built-in skills run their scripts through `run_command`.
 - **Nothing else.** Not your home folder, your credentials, the Docker socket or your environment variables, except the names you list under `allowed_env`.
-- **Some workspace paths read-only**, because a command that could write them would reach your machine afterwards: `.git/hooks` and `.git/config` (a planted hook runs at your next `git commit`), and `.domyn`, `.agents`, `AGENTS.md` and `SOUL.md`, which are read into the next prompt. A path is masked only if it exists when the container starts.
+- **Some workspace paths read-only**, because a command that could write them would reach your machine afterwards: `.git/hooks` and `.git/config` (a planted hook runs at your next `git commit`, and `git remote add` fails for the same reason), and `.domyn`, `.agents`, `AGENTS.md` and `SOUL.md`, which are read into the next prompt. A path is masked only if it exists when the container starts.
 
-The network is limited. By default a command reaches `pypi.org`, `files.pythonhosted.org` and `registry.npmjs.org` and nothing else, through a small proxy container that refuses every other host, every other port and any name that points at a private address. A command that fails on a blocked host says which one, and `allow` adds it. `network: none` turns the network off and `network: open` removes the limit. An allowed registry is still a way out for data, so the sandbox protects your machine, not what is in the workspace.
+What is in the container: Python with `pip`, Node with `npm`, `git` and `curl`. There is no root, so no `apt`; the agent can install packages with `pip` and `npm`.
+
+### The network allowlist
+
+By default a command reaches `pypi.org`, `files.pythonhosted.org`, `registry.npmjs.org` and `github.com` and nothing else, through a small proxy container that refuses every other host, every other port, plain `http://` and any name that points at a private address. `pip`, `npm`, `git clone https://github.com/...` and `curl https://...` all use it. A command that fails on a blocked host says which one.
+
+To allow more, add hosts under `docker: allow:` on the shell bundle in your `config.yaml` (above). An entry is a host (`api.github.com`) or `*.example.com` for its subdomains, and applies to HTTPS on port 443. The next command recreates the container, or waits if a background command is running. Two other settings: `network: none` turns the network off and `network: open` removes the limit. An allowed host is still a way out for data, so the sandbox protects your machine, not what is in the workspace.
 
 How it behaves:
 
-- **One container per conversation.** It starts the first time a command needs it, and `domyn run` prepares it while you type. The first run downloads Python and builds a small image, which takes a moment and happens once; the session says so while it does.
+- **One container per conversation.** It starts the first time a command needs it, and `domyn run` prepares it while you type. The first run downloads Python and Node and builds a small image, which takes a moment and happens once; the session says so while it does.
 - **It ends with the conversation.** `/clear`, `/resume` to another conversation and exiting stop and remove the container, and every command still running in it stops too. The session tells you when that is the case.
-- **Packages come back.** What the agent installs with `pip` is recorded in `<workspace>/.domyn/conversations/<conversation_id>/requirements.txt` and installed again when the conversation is resumed.
+- **Packages come back.** What the agent installs with `pip`, and globally with `npm install -g`, is recorded in `<workspace>/.domyn/conversations/<conversation_id>/` (`requirements.txt` and `npm-global.txt`) and installed again when the container is recreated or the conversation is resumed. A local `npm install` writes `node_modules` in your project, which stays.
 - **Changed skills reach it.** Edits to files in a skill folder are seen at once. A skill folder added in the configuration, or replaced by `domyn setup`, makes the session recreate the container, unless a background command is running, in which case it waits.
 - **Approvals are unchanged.** They run in your terminal before the command is sent, so `/auto` and the deny rules work as before.
 - **The browser is not in the sandbox.** The `browser` set still runs on your machine.
-- **Python only for now.** The default image has Python and `pip`; the agent can install more packages but not system ones (`apt` needs root). Set `docker.image` to use your own image, which needs `bash`, `timeout` and `ps`.
+- **Your own image.** Set `docker.image` to use one; it needs `bash`, `timeout` and `ps`.
 
 ### Browsing
 
