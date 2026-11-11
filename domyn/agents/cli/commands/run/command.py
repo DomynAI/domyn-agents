@@ -559,7 +559,8 @@ async def resolve_agent_from_file(
     skill_dirs = unique_paths(config_skill_dirs)
     try:
         agent = await load_application_from_file(
-            str(path), extra_workspace_roots=[str(d) for d in skill_dirs]
+            str(path),
+            extra_workspace_roots=[str(d) for d in skill_dirs],
         )
     except (ValueError, FileNotFoundError) as exc:
         console.print(
@@ -638,7 +639,8 @@ async def load_session_agent(path: Path, options: SessionOptions) -> tuple[Agent
         raise ValueError("incomplete: its agent has no usable model")
     skill_dirs = unique_paths(skill_workspace_roots(raw))
     agent = await load_application_from_file(
-        str(path), extra_workspace_roots=[str(d) for d in skill_dirs]
+        str(path),
+        extra_workspace_roots=[str(d) for d in skill_dirs],
     )
     return configure_session_agent(agent, options), raw
 

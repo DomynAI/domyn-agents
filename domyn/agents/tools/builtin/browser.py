@@ -95,6 +95,7 @@ from domyn.agents.tools.builtin.browser_sessions import (
     UrlPolicy,
     _ref_key,
 )
+from domyn.agents.tools.builtin.session import StateFolders
 from domyn.agents.tools.builtin.shell import flag
 
 # What an origin shown in an approval prompt may contain: a host (or bracketed
@@ -194,7 +195,13 @@ def browser_tools(
     """
     from domyn.agents.tools.function_tool import FunctionTool
 
-    sessions = BrowserSessions(backend, options or BrowserOptions())
+    # Beside the backend's other state: `.domyn/browser` in the workspace unless the
+    # backend names its own folder (the CLI's project folder or `~/.domyn`).
+    sessions = BrowserSessions(
+        backend,
+        options or BrowserOptions(),
+        browser_dir=f"{backend.state_dir}/{StateFolders.BROWSER}",
+    )
 
     async def browser_open(url: str, conversation_id: str = "") -> str:
         """Open a web page in this conversation's browser and show its interactive elements.

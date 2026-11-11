@@ -1,12 +1,15 @@
 """Per-conversation working directories, and the Python environment inside them.
 
-The agent gets a home in the project, like ``.git``, and each conversation gets
-a directory inside it named after its id. Named after the id and not after a
+The agent gets a state folder, and each conversation gets a directory inside it
+named after its id. The folder is the one ``DOMYN_PROJECT_DIR`` names
+(`PROJECT_DIR_VAR`), so a session leaves nothing in the folder it runs in. Without
+the variable it is ``.domyn`` in the workspace, like ``.git``; a caller can also
+name one (``state_dir``). Named after the id and not after a
 timestamp so it can be found again from a transcript, a log line or a
 ``/conversations`` listing — a folder you cannot map back to a conversation is a
 folder nobody will ever open.
 
-    <workspace>/.domyn/conversations/<conversation_id>/
+    <state folder>/conversations/<conversation_id>/
         venv/      where the agent's `pip install` goes
         output/    files it produced and may want to hand back
 
@@ -42,13 +45,57 @@ import sys
 import venv
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from domyn.agents.logger import get_logger
 
-# Name of the agent's home inside a project, matching the directory the CLI
-# already keeps its config in.
+# Name of the agent's state folder inside the workspace when no other is named,
+# matching the directory the CLI keeps a folder's own config in.
 HOME_DIRNAME = ".domyn"
+
+PROJECT_DIR_VAR = "DOMYN_PROJECT_DIR"
+"""The folder that plays ``~/.domyn`` for a session: its project's, or ``~/.domyn``
+itself. The built-in tools keep their state there (`state_dir_from_environment`)."""
+
+
+def state_dir_from_environment() -> Path | None:
+    """The state folder ``DOMYN_PROJECT_DIR`` names, or ``None`` when it is not set:
+    the tools then use ``.domyn`` in the workspace."""
+    value = os.environ.get(PROJECT_DIR_VAR)
+    return Path(value) if value else None
+
+
+class StateFolders(StrEnum):
+    """The folders the built-in tools write in a state folder (the one ``DOMYN_PROJECT_DIR``
+    or a caller names, else ``HOME_DIRNAME`` in the workspace).
+
+    Every member is a session's working state, kept for its owner: ``domyn export``
+    copies nothing below them and ``domyn setup --import`` brings none in. Membership
+    of a plain string: ``name in set(StateFolders)``
+    (``in StateFolders`` raises for one on Python 3.11)."""
+
+    CONVERSATIONS = "conversations"
+    """``<id>/venv`` and ``<id>/output`` of each conversation (`SessionPaths`)."""
+    PROCESSES = "processes"
+    """``<id>/<handle>`` of each background command (``ProcessRecord.home``)."""
+    BROWSER = "browser"
+    """The browser's saved pages (``BrowserSessions.browser_dir``)."""
+
+
+def linked_below(start: Path, target: Path) -> Path | None:
+    """The first link on the way from ``start`` down to ``target``, or ``None``.
+
+    ``start`` itself is not checked: a state folder named by the caller may be a link
+    (a ``~/.domyn`` kept with the dotfiles). What is below it may not, as a project
+    folder given by path can be someone else's export: ``processes -> ~/Library/LaunchAgents``
+    would have the next background command write its script there."""
+    here = start
+    for part in target.relative_to(start).parts:
+        here = here / part
+        if here.is_symlink():
+            return here
+    return None
 
 
 def safe_id(conversation_id: str) -> str:
@@ -71,10 +118,13 @@ class SessionPaths:
 
     root: Path
     conversation_id: str
+    state_dir: Path | None = None
+    """The state folder, when it is not ``<root>/.domyn``."""
 
     @property
     def home(self) -> Path:
-        return self.root / HOME_DIRNAME / "conversations" / safe_id(self.conversation_id)
+        base = self.state_dir if self.state_dir is not None else self.root / HOME_DIRNAME
+        return base / StateFolders.CONVERSATIONS / safe_id(self.conversation_id)
 
     @property
     def venv(self) -> Path:
@@ -97,12 +147,15 @@ class SessionPaths:
 class SessionEnvironment:
     """Builds and caches one virtualenv per conversation."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, state_dir: Path | None = None) -> None:
         self._root = root
+        self._state_dir = state_dir
         self._ready: set[str] = set()
 
     def paths(self, conversation_id: str) -> SessionPaths:
-        return SessionPaths(root=self._root, conversation_id=conversation_id)
+        return SessionPaths(
+            root=self._root, conversation_id=conversation_id, state_dir=self._state_dir
+        )
 
     def prepare(self, conversation_id: str) -> SessionPaths | None:
         """Make sure the conversation's venv exists. ``None`` if it cannot.
@@ -118,12 +171,14 @@ class SessionEnvironment:
 
         try:
             # A cloned repository can commit `.domyn` or `.domyn/conversations` as a
-            # link; mkdir and open would follow it and build the venv wherever it points.
-            here = self._root
-            for part in paths.home.relative_to(self._root).parts:
-                here = here / part
-                if here.is_symlink():
-                    raise OSError(f"{here} is a link")
+            # link, and a project folder given by path can be someone else's export
+            # holding a `conversations` link; mkdir and open would follow it and build
+            # the venv wherever it points. A state folder named by the caller may be a
+            # link itself (a `~/.domyn` kept with the dotfiles): only what is below it
+            # is checked.
+            start = self._root if self._state_dir is None else self._state_dir
+            if (link := linked_below(start, paths.home)) is not None:
+                raise OSError(f"{link} is a link")
             paths.output.mkdir(parents=True, exist_ok=True)
             _ignore_from_version_control(paths.home.parent)
             if not paths.python.exists():
@@ -228,11 +283,11 @@ _SAFE_ENV_NAMES = frozenset(
         "TERM",
         "SHELL",
         "TMPDIR",
-        # The CLI project the session runs in (`use_project`, interfaces/cli/config.py):
-        # a folder path, not a secret, and the only way a command the agent runs —
-        # `domyn skill remove`, an edit to the config — can tell which configuration
-        # is in use. Absent outside a project.
-        "DOMYN_PROJECT_DIR",
+        # The folder that plays ~/.domyn for the session: its project's, or ~/.domyn
+        # itself. A folder path, not a secret, and the only way a command the agent
+        # runs — `domyn skill remove`, an edit to the config — can tell which
+        # configuration is in use.
+        PROJECT_DIR_VAR,
         # Windows equivalents.
         "SystemRoot",
         "TEMP",

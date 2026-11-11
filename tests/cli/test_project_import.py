@@ -23,8 +23,9 @@ from domyn.agents.interfaces.cli.export import export_configuration
 from domyn.agents.interfaces.cli.project_import import ProjectImportError, import_project
 from domyn.agents.interfaces.cli.prompt import GoBack
 from domyn.agents.skills.catalog import install_skills, list_builtin_skills
+from domyn.agents.tools.builtin.session import StateFolders
 
-P = cfg.PROJECT_DIR_REF
+P = f"${{{cfg.PROJECT_DIR_VAR}}}"
 BUILTINS = cfg.BUILTIN_SKILLS_DIRNAME
 # Captured at import, before the CLI conftest replaces it for every test.
 _REAL_CHOOSE_INSTRUCTIONS = cli_setup._choose_instructions
@@ -155,14 +156,33 @@ class TestImportingAnExport:
         assert not (project / cfg.CONFIG_FILENAME).exists()
 
     def test_private_and_hidden_files_are_left_behind(self, exported: Path, tmp_path: Path) -> None:
-        (exported / cfg.CREDENTIALS_FILENAME).write_text("KEY=secret\n")
+        (exported / cfg.PrivateFiles.CREDENTIALS).write_text("KEY=secret\n")
         (exported / ".env").write_text("KEY=secret\n")
         project = tmp_path / "new"
 
         import_project(exported, project)
 
-        assert not (project / cfg.CREDENTIALS_FILENAME).exists()
+        assert not (project / cfg.PrivateFiles.CREDENTIALS).exists()
         assert not (project / ".env").exists()
+
+    @pytest.mark.parametrize("folder", list(StateFolders))
+    def test_a_sessions_working_state_is_left_behind_at_the_top_only(
+        self, exported: Path, tmp_path: Path, folder: str
+    ) -> None:
+        # Put there by hand, or a project folder handed over as an export: another
+        # session's environments and logs. Below the top it is anyone's folder.
+        (exported / folder / "c1").mkdir(parents=True)
+        (exported / folder / "c1" / "out.log").write_text("secret\n")
+        nested = next((exported / "skills").rglob("SKILL.md")).parent / folder
+        nested.mkdir()
+        (nested / "notes.md").write_text("mine\n")
+        project = tmp_path / "new"
+
+        imported = import_project(exported, project)
+
+        assert not (project / folder).exists()
+        assert folder not in imported.copied
+        assert (project / nested.relative_to(exported) / "notes.md").read_text() == "mine\n"
 
 
 class TestRefused:

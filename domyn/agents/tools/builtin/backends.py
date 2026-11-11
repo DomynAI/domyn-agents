@@ -40,13 +40,18 @@ import signal
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from domyn.agents.logger import get_logger
 from domyn.agents.tools.builtin.session import (
+    HOME_DIRNAME,
     SessionEnvironment,
+    StateFolders,
     environment_for,
+    linked_below,
     restricted_environment,
+    state_dir_from_environment,
 )
 
 if TYPE_CHECKING:
@@ -89,6 +94,22 @@ class CommandBackend(ABC):
     is_isolated: bool = False
     """Whether a destructive command is contained by something other than
     trust. See the module docstring: no policy consults this yet."""
+
+    @property
+    def state_dir(self) -> str:
+        """Where the tools keep their state on the machine commands run on: the
+        logs of background commands (``<state_dir>/processes``) and the browser's
+        files (``<state_dir>/browser``).
+
+        Relative to the directory commands run in, ``.domyn``, unless a backend
+        knows better: a remote one that answers nothing else keeps its state
+        beside the workspace it mounts, as before. Put into shell lines quoted."""
+        return HOME_DIRNAME
+
+    @property
+    def processes_dir(self) -> str:
+        """The background commands' folders: ``<state_dir>/processes``."""
+        return f"{self.state_dir}/{StateFolders.PROCESSES}"
 
     @abstractmethod
     async def run(
@@ -139,11 +160,41 @@ class LocalBackend(CommandBackend):
         *,
         isolate_environment: bool = True,
         allowed_env: Iterable[str] = (),
+        state_dir: str | os.PathLike[str] | None = None,
     ) -> None:
+        """``state_dir`` is the folder the conversations' environments, the
+        background commands' logs and the browser's files go in. When not given, the
+        folder ``DOMYN_PROJECT_DIR`` names (`state_dir_from_environment`), so nothing
+        is written into the workspace. Without either, ``.domyn`` in the workspace.
+        Read when the backend is built, so a session keeps the folder it started with."""
         self._workspace = workspace
         self._isolate = isolate_environment
-        self._sessions = SessionEnvironment(workspace.root) if isolate_environment else None
+        if state_dir is None:
+            state_dir = state_dir_from_environment()
+        self._state_dir = Path(state_dir).expanduser().absolute() if state_dir is not None else None
+        self._sessions = (
+            SessionEnvironment(workspace.root, state_dir=self._state_dir)
+            if isolate_environment
+            else None
+        )
         self._allowed_env = list(allowed_env)
+
+    @property
+    def state_dir(self) -> str:
+        # Relative when none was named: commands run in the workspace root, so it
+        # is `<workspace>/.domyn`, written as it always was.
+        return str(self._state_dir) if self._state_dir is not None else HOME_DIRNAME
+
+    def _linked_state_folder(self) -> Path | None:
+        """A link on the way to ``processes/`` or ``browser/``, checked from the
+        named state folder (which may be a link itself), or from the workspace, where
+        ``.domyn`` is a folder a cloned repository can commit as a link."""
+        start = self._state_dir if self._state_dir is not None else self._workspace.root
+        base = self._state_dir if self._state_dir is not None else start / HOME_DIRNAME
+        for name in (StateFolders.PROCESSES, StateFolders.BROWSER):
+            if (link := linked_below(start, base / name)) is not None:
+                return link
+        return None
 
     @property
     def sessions(self) -> SessionEnvironment | None:
@@ -160,6 +211,19 @@ class LocalBackend(CommandBackend):
         stdin: str | None = None,
     ) -> CommandResult:
         logger = get_logger()
+        if (link := self._linked_state_folder()) is not None:
+            # Refused rather than run: the background commands' wrapper and the
+            # browser write below these folders with `mkdir -p` and `>`, which follow
+            # a link wherever it leads.
+            return CommandResult(
+                exit_code=None,
+                stdout="",
+                stderr="",
+                backend_error=(
+                    f"{link} is a link. Commands keep their logs and the browser its "
+                    "files there, and links are not followed: remove it and try again."
+                ),
+            )
         restricted = restricted_environment(self._allowed_env)
         env = restricted
         if self._sessions is not None and conversation_id:
@@ -243,6 +307,7 @@ def build_backend(
     *,
     isolate_environment: bool = True,
     allowed_env: Iterable[str] = (),
+    state_dir: str | os.PathLike[str] | None = None,
 ) -> CommandBackend:
     """Resolve a backend by name.
 
@@ -252,7 +317,10 @@ def build_backend(
     """
     if name == "local":
         return LocalBackend(
-            workspace, isolate_environment=isolate_environment, allowed_env=allowed_env
+            workspace,
+            isolate_environment=isolate_environment,
+            allowed_env=allowed_env,
+            state_dir=state_dir,
         )
     raise BackendUnavailableError(
         f"unknown command backend '{name}' (available: local). "

@@ -22,7 +22,7 @@ from typing import Any, Self
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from domyn.agents.interfaces.cli.config import STATE_FILENAME, home_dir
+from domyn.agents.interfaces.cli.config import PrivateFiles, home_dir
 from domyn.agents.logger import get_logger
 
 
@@ -43,7 +43,7 @@ class CliState(BaseModel):
 
     @classmethod
     def path(cls) -> Path:
-        return home_dir() / STATE_FILENAME
+        return home_dir() / PrivateFiles.STATE
 
     @classmethod
     def _read_raw(cls) -> dict[str, Any]:
@@ -51,7 +51,7 @@ class CliState(BaseModel):
         try:
             raw = yaml.safe_load(path.read_text(encoding="utf-8")) if path.is_file() else None
         except (OSError, yaml.YAMLError) as exc:
-            get_logger().warning(f"cannot read {STATE_FILENAME}: {type(exc).__name__}")
+            get_logger().warning(f"cannot read {PrivateFiles.STATE}: {type(exc).__name__}")
             get_logger().debug(f"state read detail: {exc}")
             return {}
         return raw if isinstance(raw, dict) else {}
@@ -62,7 +62,7 @@ class CliState(BaseModel):
         try:
             return cls.model_validate(cls._read_raw())
         except ValidationError as exc:
-            get_logger().warning(f"invalid {STATE_FILENAME}: using the defaults")
+            get_logger().warning(f"invalid {PrivateFiles.STATE}: using the defaults")
             get_logger().debug(f"state validation detail: {exc}")
             return cls()
 
@@ -87,5 +87,5 @@ class CliState(BaseModel):
         except (OSError, yaml.YAMLError) as exc:
             if tmp is not None:
                 Path(tmp).unlink(missing_ok=True)
-            get_logger().warning(f"cannot save {STATE_FILENAME}: {type(exc).__name__}")
+            get_logger().warning(f"cannot save {PrivateFiles.STATE}: {type(exc).__name__}")
             get_logger().debug(f"state write detail: {exc}")

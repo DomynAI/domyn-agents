@@ -183,7 +183,6 @@ class TestWhatTheAgentLoads:
         _write(project / ".domyn" / "instructions" / "SOUL.md", "project soul")
         _write(project / ".domyn" / "AGENTS.md", "domyn brief")
         _write(project / ".domyn" / "instructions" / "extra" / "AGENTS.md", "domyn deep brief")
-        _write(project / ".domyn" / "conversations" / "c1" / "AGENTS.md", "scratch")
         _write(project / ".agents" / "AGENTS.md", "agents brief")
         monkeypatch.chdir(project)
 

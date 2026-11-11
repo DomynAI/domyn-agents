@@ -20,6 +20,7 @@ import os
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, overload
 from urllib.parse import urlsplit, urlunsplit
@@ -47,9 +48,28 @@ from domyn.agents.skills.catalog import BUILTIN_SKILLS_ROOT
 from domyn.agents.skills.layout import listed_path_is_linked
 from domyn.agents.tools.builtin import BUNDLE_TOOL_NAMES, DEFAULT_BUNDLES, BrowserOptions
 
+# `DOMYN_PROJECT_DIR`, defined with the tools, which read it: always set by `use_project`, to
+# the folder that plays ~/.domyn for the session (the selected project's, else ~/.domyn
+# itself). A project's config names its own files with it, as `${DOMYN_PROJECT_DIR}/...`,
+# and the built-in tools keep their state there.
+from domyn.agents.tools.builtin.session import PROJECT_DIR_VAR
+
 CONFIG_FILENAME = "config.yaml"
-CREDENTIALS_FILENAME = "credentials"
-STATE_FILENAME = "state.yaml"
+
+
+class PrivateFiles(StrEnum):
+    """The files a domyn home (``~/.domyn`` or a project) keeps for its owner alone.
+    Never exported, and never brought in by an import (`is_private`, ``export.py``)."""
+
+    CREDENTIALS = "credentials"
+    """API keys as ``NAME=value``, 0600."""
+    APPROVALS = "approvals.yaml"
+    """The grants given with "always"; also the per-folder ones under ``projects/``."""
+    STATE = "state.yaml"
+    """What the CLI remembers between sessions (`CliState`, ``state.py``)."""
+    CONVERSATIONS = "conversations.db"
+    """The conversation history; SQLite's side files (``-wal``, ``-shm``) start with it."""
+
 
 GLOBAL_DIR = Path.home() / ".domyn"
 
@@ -240,7 +260,8 @@ class AgentConfig(BaseModel):
 
     isolate_environment: bool = True
     """Give each conversation its own virtualenv under
-    ``.domyn/conversations/<id>/venv``, so what the agent installs stays there.
+    ``conversations/<id>/venv`` in the project's folder, or in ``~/.domyn``
+    (``home_dir``), so what the agent installs stays there.
 
     On by default because the alternative is what the CLI used to do: inherit
     whatever environment it was launched from, which under ``uv run domyn`` is
@@ -295,11 +316,6 @@ _APPROVALS_FOLDER_NAME = re.compile(r".*-[0-9a-f]{12}")
 
 _active_project: Path | None = None
 """The folder of the project selected with ``--project``, for the rest of the process."""
-
-
-PROJECT_DIR_VAR = "DOMYN_PROJECT_DIR"
-"""Set to the selected project's folder; its config names its own files with it."""
-PROJECT_DIR_REF = f"${{{PROJECT_DIR_VAR}}}"
 
 
 class ProjectError(ValueError):
@@ -371,16 +387,17 @@ def use_project(name: str | None, *, must_exist: bool = True) -> Path | None:
 
     ``must_exist`` refuses a project with no configuration yet, which is what every
     command but `domyn setup` wants: a typo should not open the wizard on a new one.
-    ``None`` selects no project, and removes `PROJECT_DIR_VAR` from the environment:
-    the agent's shell reads it to tell which configuration the session runs, so a
-    value inherited from the user's shell or a ``.env`` would point it at a project
-    the session is not using. A config file run by name that uses the variable is run
-    with ``--project <its folder>`` instead.
+    ``None`` selects no project. Either way `PROJECT_DIR_VAR` is set, over any value
+    the environment had, to the folder that plays ``~/.domyn`` (`home_dir`): the
+    project's, or ``~/.domyn`` itself. The agent's shell reads it to tell which
+    configuration the session runs, and the built-in tools keep their state there, so a
+    value inherited from the user's shell or a ``.env`` must not stay. A config file run
+    by name that uses the variable is run with ``--project <its folder>`` instead.
     """
     global _active_project
     if name is None:
         _active_project = None
-        os.environ.pop(PROJECT_DIR_VAR, None)
+        os.environ[PROJECT_DIR_VAR] = str(GLOBAL_DIR)
         return None
     by_path = is_project_path(name)
     folder = Path(name).expanduser().resolve() if by_path else project_dir(name)
@@ -410,6 +427,21 @@ def use_project(name: str | None, *, must_exist: bool = True) -> Path | None:
 
 def active_project() -> Path | None:
     return _active_project
+
+
+def names_global_dir(name: str) -> bool:
+    """Whether ``--project <name>`` is the path of ``~/.domyn`` itself: no project.
+
+    `PROJECT_DIR_VAR` names ``~/.domyn`` in a session without a project, and the agent
+    passes ``--project "$DOMYN_PROJECT_DIR"`` to the ``domyn`` commands it runs; read
+    as a project path, that would be checked as a folder from anywhere, and refused
+    without a terminal to ask on."""
+    if not is_project_path(name):
+        return False
+    try:
+        return Path(name).expanduser().resolve() == GLOBAL_DIR.expanduser().resolve()
+    except OSError:
+        return False
 
 
 def describe_project(folder: Path) -> str:
@@ -469,7 +501,11 @@ def in_project_terms(raw: dict[str, Any], folder: Path | None) -> dict[str, Any]
             path = Path(str(entry)).expanduser()
             if path.is_absolute() and path.absolute().is_relative_to(root):
                 inside = path.absolute().relative_to(root).as_posix()
-                paths[i] = PROJECT_DIR_REF if inside == "." else f"{PROJECT_DIR_REF}/{inside}"
+                paths[i] = (
+                    f"${{{PROJECT_DIR_VAR}}}"
+                    if inside == "."
+                    else f"${{{PROJECT_DIR_VAR}}}/{inside}"
+                )
     return written
 
 
@@ -485,8 +521,9 @@ def expand_project_dir(raw: dict[str, Any], folder: Path | None) -> dict[str, An
         return expanded
     for paths in _config_paths(expanded):
         for i, entry in enumerate(paths):
-            if isinstance(entry, str) and entry.startswith(PROJECT_DIR_REF):
-                paths[i] = str(folder) + entry[len(PROJECT_DIR_REF) :]
+            reference = f"${{{PROJECT_DIR_VAR}}}"
+            if isinstance(entry, str) and entry.startswith(reference):
+                paths[i] = str(folder) + entry[len(reference) :]
     return expanded
 
 
@@ -497,7 +534,7 @@ def config_path() -> Path:
 def credentials_path() -> Path:
     """``credentials`` in the active project's folder, else in ``~/.domyn``: the file
     setup writes to. Reading falls back to ``~/.domyn`` (`credential_files`)."""
-    return home_dir() / CREDENTIALS_FILENAME
+    return home_dir() / PrivateFiles.CREDENTIALS
 
 
 def credential_files() -> list[Path]:
@@ -506,7 +543,7 @@ def credential_files() -> list[Path]:
     so a key kept at home serves every project, and a project overrides it by setting
     its own."""
     files = [credentials_path()]
-    global_file = GLOBAL_DIR / CREDENTIALS_FILENAME
+    global_file = GLOBAL_DIR / PrivateFiles.CREDENTIALS
     if global_file != files[0]:
         files.append(global_file)
     return files
@@ -1629,9 +1666,6 @@ def is_configuration_v1_usable(raw: dict[str, Any]) -> bool:
     )
 
 
-APPROVALS_FILENAME = "approvals.yaml"
-
-
 def approvals_paths() -> dict[str, Path]:
     """Where each persisted scope keeps its grants, by scope name.
 
@@ -1640,7 +1674,7 @@ def approvals_paths() -> dict[str, Path]:
     under one configuration does not carry over to another.
     """
     return {
-        "user": home_dir() / APPROVALS_FILENAME,
+        "user": home_dir() / PrivateFiles.APPROVALS,
         "project": _project_approvals_path(),
     }
 
@@ -1651,7 +1685,7 @@ def _project_approvals_path() -> Path:
     cwd = Path.cwd().resolve()
     slug = re.sub(r"[^A-Za-z0-9._-]", "_", cwd.name) or "root"
     digest = hashlib.sha256(str(cwd).encode()).hexdigest()[:12]
-    return home_dir() / PROJECTS_DIRNAME / f"{slug}-{digest}" / APPROVALS_FILENAME
+    return home_dir() / PROJECTS_DIRNAME / f"{slug}-{digest}" / PrivateFiles.APPROVALS
 
 
 def _launched_from_home() -> bool:

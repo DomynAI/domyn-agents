@@ -34,6 +34,8 @@ class _FakeBackend:
     it: the view asks the machine what is there rather than being told.
     """
 
+    processes_dir = processes.HOME
+
     def __init__(
         self,
         *,
@@ -123,6 +125,8 @@ class TestListing:
         self, console: Console, theme: Theme
     ) -> None:
         class _Broken:
+            processes_dir = processes.HOME
+
             async def run(self, command: str, **_: object) -> CommandResult:
                 return CommandResult(
                     exit_code=None, stdout="", stderr="", backend_error="pod is gone"
@@ -256,6 +260,8 @@ class TestItListsOnlyWhatIsStillGoing:
         saying nothing is worse than a short list."""
 
         class _Broken:
+            processes_dir = processes.HOME
+
             async def run(self, command: str, **_: object) -> CommandResult:
                 return CommandResult(exit_code=None, stdout="", stderr="", backend_error="gone")
 

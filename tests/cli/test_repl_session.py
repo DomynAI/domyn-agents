@@ -343,7 +343,7 @@ class TestChangeModelKeepsTheSessionsSkills:
         reloaded = _agent()
         seen_roots: list[str] = []
 
-        async def _load(path: str, *, extra_workspace_roots: Any = ()) -> Agent:
+        async def _load(path: str, *, extra_workspace_roots: Any = (), **_: Any) -> Agent:
             seen_roots.extend(extra_workspace_roots)
             return reloaded
 
@@ -386,7 +386,7 @@ class TestChangeModelKeepsTheSessionsSkills:
         reloaded = _agent()
         seen_roots: list[str] = []
 
-        async def _load(path: str, *, extra_workspace_roots: Any = ()) -> Agent:
+        async def _load(path: str, *, extra_workspace_roots: Any = (), **_: Any) -> Agent:
             seen_roots.extend(extra_workspace_roots)
             return reloaded
 

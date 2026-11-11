@@ -95,23 +95,17 @@ class TestWhatIsSkipped:
         assert find_instruction_files(tmp_path / "missing").paths == []
 
 
-class TestSkip:
-    def test_it_drops_the_named_folders_below_the_root(self, tmp_path: Path) -> None:
-        _write(tmp_path / "conversations" / "c1" / "AGENTS.md")
-        _write(tmp_path / "skills" / "s" / "SOUL.md")
-        kept = _write(tmp_path / "instructions" / "AGENTS.md")
+class TestNothingIsSkippedByName:
+    """Below the walked folder only hidden and dependency folders and links are
+    skipped: a ``skills`` or ``conversations`` folder is walked like any other."""
 
-        found = find_instruction_files(tmp_path, skip=frozenset({"conversations", "skills"}))
+    def test_the_skills_folder_is_walked(self, tmp_path: Path) -> None:
+        top = _write(tmp_path / "AGENTS.md")
+        skill = _write(tmp_path / "skills" / "s" / "AGENTS.md")
 
-        assert found.paths == [kept]
+        assert find_instruction_files(tmp_path).agents == [top, skill]
 
-    def test_a_folder_of_that_name_deeper_down_is_walked(self, tmp_path: Path) -> None:
-        """The state folders sit directly under ``.domyn``; a user's ``docs/skills`` is theirs."""
-        deeper = _write(tmp_path / "docs" / "skills" / "AGENTS.md")
-
-        assert find_instruction_files(tmp_path, skip=frozenset({"skills"})).agents == [deeper]
-
-    def test_nothing_is_skipped_by_default(self, tmp_path: Path) -> None:
-        agents = _write(tmp_path / "skills" / "AGENTS.md")
+    def test_a_folder_named_as_a_state_folder_is_walked(self, tmp_path: Path) -> None:
+        agents = _write(tmp_path / "conversations" / "c1" / "AGENTS.md")
 
         assert find_instruction_files(tmp_path).agents == [agents]

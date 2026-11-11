@@ -44,10 +44,11 @@ async def render(
 
     Returns the state to persist when something turned out to have finished.
     """
-    known = processes.registry(state)
+    home = backend.processes_dir if backend else processes.HOME
+    known = processes.registry(state, home=home)
     seen: dict[str, dict[str, Any]] = {}
     if backend is not None:
-        result = await backend.run(processes.build_discover(conversation_id), timeout=60)
+        result = await backend.run(processes.build_discover(conversation_id, home=home), timeout=60)
         if not result.backend_error:
             seen = processes.parse_discover(result.stdout)
 
@@ -89,7 +90,13 @@ async def render(
         console.print(f"      $ {_trim(command)}", style=theme.style("meta"), highlight=False)
         # The log, so it can be followed from another terminal without going
         # through the agent at all.
-        where = record.dir if record else f"{processes.HOME}/{handle}"
+        where = (
+            record.dir
+            if record
+            else processes.ProcessRecord(
+                handle=handle, command="", conversation=conversation_id, home=home
+            ).dir
+        )
         console.print(f"      {where}/out.log", style=theme.style("meta"), highlight=False)
         if record is None:
             console.print(
@@ -109,7 +116,8 @@ async def stop(
     handle: str,
 ) -> dict[str, Any] | None:
     """Stop one command. Returns the state to persist, or ``None`` if unchanged."""
-    known = processes.registry(state)
+    home = backend.processes_dir if backend else processes.HOME
+    known = processes.registry(state, home=home)
     if not handle:
         console.print(
             "  Which one? /stop <handle> — /ps lists them.",

@@ -90,7 +90,9 @@ async def load_application_from_config_new(
 
 
 async def load_application_from_file(
-    file_path: str, *, extra_workspace_roots: Iterable[str] = ()
+    file_path: str,
+    *,
+    extra_workspace_roots: Iterable[str] = (),
 ) -> Agent:
     """Load application configuration from a YAML file. Return the root agent."""
     config = load_from_file(file_path)

@@ -16,6 +16,9 @@ pytest_plugins = ["tests.fake_platform"]
 # Where a background command started by the built-in tools keeps its pid and
 # group (`tools/builtin/processes.py`), relative to the workspace it ran in.
 _PROCESS_FILES = ".domyn/processes/*/*/run.pgid"
+# The same, under a state folder a caller named (`LocalBackend(state_dir=...)`). It
+# also matches the first pattern's files: stopping a group twice is a no-op.
+_STATE_PROCESS_FILES = "processes/*/*/run.pgid"
 
 
 def _stop_background_commands(root: Path, pattern: str) -> int:
@@ -54,6 +57,19 @@ def _state_off_the_real_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.fixture(autouse=True)
+def _no_session_home_from_the_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every test without ``DOMYN_PROJECT_DIR``.
+
+    The built-in tools keep their state in the folder it names (`LocalBackend`), and a
+    developer running the suite from a domyn session has it set: every backend a test
+    builds would put its venvs and logs in that session's real home folder.
+    """
+    from domyn.agents.tools.builtin.session import PROJECT_DIR_VAR
+
+    monkeypatch.delenv(PROJECT_DIR_VAR, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _forget_context_windows() -> None:
     """Start every test with no context window remembered.
 
@@ -84,6 +100,8 @@ def _no_background_commands_left(tmp_path: Path) -> Iterator[None]:
     """
     yield
     _stop_background_commands(tmp_path, f"**/{_PROCESS_FILES}")
+    # And those started with a state folder of their own (`state_dir`, the CLI's).
+    _stop_background_commands(tmp_path, f"**/{_STATE_PROCESS_FILES}")
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
@@ -94,6 +112,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         return
     with contextlib.suppress(OSError, ValueError):
         _stop_background_commands(factory.getbasetemp(), f"**/{_PROCESS_FILES}")
+        _stop_background_commands(factory.getbasetemp(), f"**/{_STATE_PROCESS_FILES}")
 
 
 @pytest.fixture(autouse=True)

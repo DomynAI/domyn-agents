@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator, Coroutine, Generator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -91,7 +92,7 @@ def tool_end_event() -> BaseEvent:
 
 @pytest.fixture(autouse=True)
 def _approvals_off_the_real_home(
-    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+    tmp_path_factory: pytest.TempPathFactory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Keep persisted approvals out of the developer's ``~/.domyn``.
 
@@ -118,6 +119,12 @@ def _approvals_off_the_real_home(
         "approvals_paths",
         lambda: {"user": root / "user.yaml", "project": root / "project.yaml"},
     )
+    # `domyn run` puts the tools' state (venvs, background commands' logs, the
+    # browser's files) in `home_dir()`; a test running a command would otherwise
+    # build a venv in the real `~/.domyn/conversations`. Redirected at the source,
+    # so every caller is covered, and under the test's own `tmp_path`, where
+    # `tests/conftest.py` stops the background commands it leaves after each test.
+    monkeypatch.setattr(cli_config, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
     # A Repl built without a runner also wires the persistent conversation store,
     # which is the product behaviour and would otherwise leave every test's
     # transcript in the real history — and offer it back on the next /resume.

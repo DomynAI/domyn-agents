@@ -35,7 +35,7 @@ Commands also start in the workspace, but a command can reach any path you could
 
 ### What commands can see
 
-- **Their own Python environment.** Each conversation gets a virtual environment under `<workspace>/.domyn/conversations/<conversation_id>/venv`, so a package the agent installs stays there and cannot break the environment you run `domyn` from. To let commands use your own environment instead, for example when the agent works on that project, set `isolate_environment: false` (see [Configuring the CLI](configuration.md)).
+- **Their own Python environment.** Each conversation gets a virtual environment under `conversations/<conversation_id>/venv` next to your conversation history: in the project's folder when you run one with `--project`, otherwise in `~/.domyn`. So a package the agent installs stays there and cannot break the environment you run `domyn` from. To let commands use your own environment instead, for example when the agent works on that project, set `isolate_environment: false` (see [Configuring the CLI](configuration.md)).
 - **Only safe environment variables.** Commands see a fixed set such as `PATH` and `HOME`, not your API keys or anything loaded from `.env`. To pass a variable through, list its name under `allowed_env`.
 
 ### Long-running commands

@@ -215,7 +215,11 @@ class BuiltinBundleConfig(BaseModel):
     browser: BrowserOptions = PydanticField(default_factory=BrowserOptions)
     """Options for the ``browser`` bundle; ignored unless it is listed."""
 
-    def build(self, *, extra_roots: Iterable[str | os.PathLike[str]] = ()) -> BuiltinTools:
+    def build(
+        self,
+        *,
+        extra_roots: Iterable[str | os.PathLike[str]] = (),
+    ) -> BuiltinTools:
         """Build the bundle's tools.
 
         ``extra_roots`` widens the workspace the same way the CLI's own
@@ -223,8 +227,15 @@ class BuiltinBundleConfig(BaseModel):
         rather than declared in the YAML, because which directories those are
         is resolved at run time (the CLI's configured skill directories), not
         something a persisted file should freeze.
+
+        Where the tools keep their state is the folder ``DOMYN_PROJECT_DIR`` names
+        (``LocalBackend``); without it, ``.domyn`` in the workspace. It is not added to the
+        workspace: outside a project ``~/.domyn`` is shared by every
+        folder a session runs in, so the ungated file tools would read the logs and
+        output of conversations started anywhere. Those are read through the shell
+        (``check_command``, ``run_command``), as the browser's files already are.
         """
-        space = Workspace.at(self.workspace, also=extra_roots)
+        space = Workspace.at(self.workspace, also=list(extra_roots))
         backend = build_backend(
             self.sandbox,
             space,

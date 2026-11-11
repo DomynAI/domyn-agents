@@ -1412,7 +1412,8 @@ class Repl:
         workspace_roots = unique_paths([*config_skill_dirs, *runtime_skill_dirs])
         try:
             reloaded = await load_application_from_file(
-                str(config_path()), extra_workspace_roots=[str(d) for d in workspace_roots]
+                str(config_path()),
+                extra_workspace_roots=[str(d) for d in workspace_roots],
             )
         except Exception as exc:
             self._console.print(

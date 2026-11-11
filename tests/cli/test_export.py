@@ -17,6 +17,7 @@ from domyn.agents.interfaces.cli import export as cli_export
 from domyn.agents.interfaces.cli.config import collect_skill_workspace_roots
 from domyn.agents.interfaces.cli.export import ExportError, export_configuration
 from domyn.agents.skills import LocalDirSkillSource, SkillQuery
+from domyn.agents.tools.builtin.session import StateFolders
 
 
 def _skill(folder: Path, name: str, *, external: list[str] | None = None) -> Path:
@@ -687,6 +688,53 @@ class TestOnlyWhatASkillListsTravels:
         assert reason is not None and "gone.py" in reason
 
 
+class TestTheSessionsWorkingStateStaysBehind:
+    """``conversations/``, ``processes/`` and ``browser/`` of a domyn home are the
+    session's (`home_dir`); a folder of the same name elsewhere is anyone's."""
+
+    @pytest.mark.parametrize("folder", list(StateFolders))
+    def test_a_skill_reaching_into_the_home_copies_nothing_from_it(
+        self, machine: dict[str, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, folder: str
+    ) -> None:
+        home = machine["home"] / ".domyn"
+        monkeypatch.setattr(cli_config, "GLOBAL_DIR", home)
+        (home / folder / "c1").mkdir(parents=True)
+        (home / folder / "c1" / "out.log").write_text("secret\n", encoding="utf-8")
+        # A skill in the home whose `external_files` walks up into the state folder.
+        _skill(home / "mine" / "s", "s", external=[f"../../{folder}/c1/out.log"])
+
+        report = _export(_config(str(home / "mine" / "s")), machine, tmp_path / "out")
+
+        assert not list(report.dest.rglob("out.log"))
+        assert any("out.log" in d and "never exported" in d for d in report.dropped)
+
+    def test_in_a_project_too(
+        self, machine: dict[str, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = machine["home"] / ".domyn"
+        monkeypatch.setattr(cli_config, "GLOBAL_DIR", home)
+        project = home / "projects" / "alpha"
+        (project / "processes" / "c1").mkdir(parents=True)
+        (project / "processes" / "c1" / "out.log").write_text("secret\n", encoding="utf-8")
+        _skill(project / "skills" / "s", "s", external=["../../processes/c1/out.log"])
+
+        report = _export(_config(str(project / "skills" / "s")), machine, tmp_path / "out")
+
+        assert not list(report.dest.rglob("out.log"))
+
+    @pytest.mark.parametrize("folder", list(StateFolders))
+    def test_a_skills_own_folder_of_that_name_travels(
+        self, machine: dict[str, Path], tmp_path: Path, folder: str
+    ) -> None:
+        skill = _skill(tmp_path / "s", "s", external=[f"{folder}/"])
+        (skill / folder).mkdir()
+        (skill / folder / "notes.md").write_text("mine\n", encoding="utf-8")
+
+        report = _export(_config(str(skill)), machine, tmp_path / "out")
+
+        assert (report.dest / "skills/s" / folder / "notes.md").read_text() == "mine\n"
+
+
 class TestSecrets:
     def test_a_literal_api_key_becomes_a_reference(
         self, machine: dict[str, Path], tmp_path: Path
@@ -853,20 +901,20 @@ class TestInstructionsNesting:
         assert (report.dest / "instructions/agents/SOUL.md").read_text() == ".agents\n"
         assert (report.dest / "instructions/agents/AGENTS.md").read_text() == "task\n"
 
-    def test_a_local_folder_is_walked_without_domyn_s_own_folders(
+    def test_a_local_folder_is_walked_as_the_loader_walks_it(
         self, machine: dict[str, Path], tmp_path: Path
     ) -> None:
-        """As the loader walks it: subfolders included, the state folders skipped."""
+        """Subfolders included, the skills folder like any other."""
         self._write(machine["cwd"] / ".domyn", "AGENTS.md", "top\n")
+        self._write(machine["cwd"] / ".domyn" / "skills", "AGENTS.md", "skills\n")
         self._write(machine["cwd"] / ".domyn" / "team", "AGENTS.md", "team\n")
-        self._write(machine["cwd"] / ".domyn" / "skills", "AGENTS.md", "not an instruction\n")
 
         report = _export(self._raw(".domyn"), machine, tmp_path / "out")
 
         declared = self._declared(report.dest)
-        assert len(declared) == 2
+        assert len(declared) == 3
         texts = [(report.dest / d.removeprefix(P)).read_text() for d in declared]
-        assert texts == ["top\n", "team\n"]
+        assert texts == ["top\n", "skills\n", "team\n"]
 
     def test_a_local_folder_with_neither_file_is_left_out_quietly(
         self, machine: dict[str, Path], tmp_path: Path
@@ -1110,7 +1158,9 @@ class TestTheCopyChecksBothEnds:
         staging = tmp_path / "staging"
         staging.mkdir()
 
-        cli_export._copy_into(staging, Path("skills/a.md"), source, {source})
+        cli_export._copy_into(
+            staging, Path("skills/a.md"), source, {source}, cli_export.PrivatePlaces.now()
+        )
 
         assert (staging / "skills/a.md").read_text(encoding="utf-8") == "x\n"
 
@@ -1121,7 +1171,9 @@ class TestTheCopyChecksBothEnds:
         staging.mkdir()
 
         with pytest.raises(ExportError, match="outside the exported folder"):
-            cli_export._copy_into(staging, Path(relative), source, {source})
+            cli_export._copy_into(
+                staging, Path(relative), source, {source}, cli_export.PrivatePlaces.now()
+            )
         assert not (tmp_path / "escape.md").exists()
 
     def test_a_source_the_plan_did_not_choose_is_refused(self, tmp_path: Path) -> None:
@@ -1130,7 +1182,9 @@ class TestTheCopyChecksBothEnds:
         staging.mkdir()
 
         with pytest.raises(ExportError, match="not chosen"):
-            cli_export._copy_into(staging, Path("a.md"), source, set())
+            cli_export._copy_into(
+                staging, Path("a.md"), source, set(), cli_export.PrivatePlaces.now()
+            )
 
     @pytest.mark.parametrize("kind", ["link", "credentials", "folder"])
     def test_a_source_that_is_not_a_plain_file_is_refused(self, tmp_path: Path, kind: str) -> None:
@@ -1146,4 +1200,6 @@ class TestTheCopyChecksBothEnds:
             source.mkdir(parents=True)
 
         with pytest.raises(ExportError, match="not a file export may copy"):
-            cli_export._copy_into(staging, Path("x"), source, {source})
+            cli_export._copy_into(
+                staging, Path("x"), source, {source}, cli_export.PrivatePlaces.now()
+            )

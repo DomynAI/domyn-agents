@@ -26,7 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from domyn.agents.logger import get_logger
 from domyn.agents.tools.builtin import browser_install
 from domyn.agents.tools.builtin.backends import CommandBackend, CommandResult
-from domyn.agents.tools.builtin.session import HOME_DIRNAME
+from domyn.agents.tools.builtin.session import HOME_DIRNAME, StateFolders
 
 _REF = re.compile(
     r"^@?(e\d{1,7})$"
@@ -464,7 +464,7 @@ class BrowserSessions:
         backend: CommandBackend,
         options: BrowserOptions,
         *,
-        browser_dir: str = f"{HOME_DIRNAME}/browser",
+        browser_dir: str = f"{HOME_DIRNAME}/{StateFolders.BROWSER}",
     ) -> None:
         """``browser_dir`` is where the browser's files go: the full text of a
         page too long to show.

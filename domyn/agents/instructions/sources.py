@@ -19,7 +19,6 @@ from domyn.agents.instructions.discovery import (
     AGENTS_FILENAMES,
     AUTODISCOVERY_DIRS,
     SOUL_FILENAME,
-    STATE_DIRS,
     find_instruction_files,
     is_regular_file,
 )
@@ -115,9 +114,8 @@ class LocalDirInstructionsSource(InstructionsSource):
 
     A directory contributes only the files directly in it, except the two
     autodiscovery entries ``.domyn`` and ``.agents`` (`AUTODISCOVERY_DIRS`, as
-    written): those are walked on every load, breadth first, with domyn's own
-    state folders skipped (`find_instruction_files`, `STATE_DIRS`), so their
-    souls come shallowest first and their ``AGENTS.md`` files from the most
+    written): those are walked on every load, breadth first (`find_instruction_files`),
+    so their souls come shallowest first and their ``AGENTS.md`` files from the most
     general to the most specific.
 
     A relative entry is resolved against the working directory on every load:
@@ -184,7 +182,7 @@ class LocalDirInstructionsSource(InstructionsSource):
             get_logger().debug(f"instructions: nothing at {source}")
             return []
         if source in AUTODISCOVERY_DIRS:
-            walked = find_instruction_files(source, skip=STATE_DIRS)
+            walked = find_instruction_files(source)
             # Every soul, so the first-soul rule in `_load_sync` records the others.
             souls = [*([walked.soul] if walked.soul else []), *walked.superseded]
             return [one.resolve() for one in [*souls, *walked.agents]]

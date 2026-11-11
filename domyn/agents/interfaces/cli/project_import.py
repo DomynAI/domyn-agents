@@ -36,9 +36,11 @@ edit; a project imported is used by name, and trusted as it is (`select_project`
 
 Everything else at the export's top — ``instructions/``, and any file a skill shares
 from there — is copied as it is, so the config's paths into it stay true. Hidden entries,
-links and the files a domyn home keeps for its owner alone (`is_private`) are not.
+links and the files a domyn home keeps for its owner alone (`is_private`) are not,
+nor the session's working state at the top (`StateFolders`).
 """
 
+import functools
 import shutil
 import tempfile
 from dataclasses import dataclass, field
@@ -55,11 +57,13 @@ from domyn.agents.interfaces.cli.export import (
     CODE_DIR,
     INFO_FILENAME,
     INFO_VERSION_KEY,
+    PrivatePlaces,
     external_files_outside,
     installed_version,
     is_private,
     paths_outside_project,
 )
+from domyn.agents.tools.builtin.session import StateFolders
 
 
 class ProjectImportError(Exception):
@@ -118,7 +122,10 @@ def import_project(source: Path, project: Path) -> ProjectImport:
     source = source.expanduser().resolve()
     project = project.expanduser().absolute()
     raw = _read_export(source)
-    if outside := paths_outside_project(raw) + external_files_outside(skill_files_in(source)):
+    places = PrivatePlaces.now()
+    if outside := paths_outside_project(raw) + external_files_outside(
+        skill_files_in(source, places)
+    ):
         # An export can be edited after it is made: a path out of the project would
         # have this machine read, run or write what the export's author chose.
         raise ProjectImportError(
@@ -138,7 +145,7 @@ def import_project(source: Path, project: Path) -> ProjectImport:
             "with --project <name>, or remove that folder first."
         )
 
-    plan = _copy_plan(source)
+    plan = _copy_plan(source, places)
 
     project.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{project.name}.", dir=project.parent))
@@ -146,7 +153,7 @@ def import_project(source: Path, project: Path) -> ProjectImport:
         for origin in plan:
             target = staging / origin.name
             if origin.is_dir():
-                shutil.copytree(origin, target, ignore=_ignore)
+                shutil.copytree(origin, target, ignore=functools.partial(_ignore, places=places))
             else:
                 shutil.copy2(origin, target)
         if project.exists():
@@ -200,44 +207,57 @@ def _read_info(source: Path) -> dict[str, str]:
     }
 
 
-def _copy_plan(source: Path) -> list[Path]:
+def _copy_plan(source: Path, places: PrivatePlaces) -> list[Path]:
     """The export's top-level entries to copy, each to the same name in the project."""
     plan: list[Path] = []
     for child in sorted(source.iterdir()):
         # `code/` is what the export's tools and hooks run, and setup writes neither
         # back: copied, it would be code nothing names, waiting for a hand edit to run.
-        # The manifest describes the export, not the project made from it.
-        if child.name in (CONFIG_FILENAME, CODE_DIR, INFO_FILENAME) or _left_behind(child):
+        # The manifest describes the export, not the project made from it. The
+        # session's working state is no export's (`domyn export` writes none): one
+        # put there by hand, or a project folder imported as an export, would bring
+        # in another session's environments and logs.
+        if child.name in (
+            CONFIG_FILENAME,
+            CODE_DIR,
+            INFO_FILENAME,
+            *StateFolders,
+        ) or _left_behind(child, places):
             continue
         plan.append(child)
     return plan
 
 
-def skill_files_in(source: Path) -> list[tuple[PurePosixPath, Path]]:
+def skill_files_in(
+    source: Path, places: PrivatePlaces | None = None
+) -> list[tuple[PurePosixPath, Path]]:
     """Every ``.md`` in the folder ``source`` but hidden ones, links and what is below
     them, with its place in it, for `external_files_outside`. In an export, a skill's
     place is its place in the project imported from it. A file that is not a skill
-    declares no ``external_files``."""
+    declares no ``external_files``. ``places`` defaults to `PrivatePlaces.now`."""
+    places = places or PrivatePlaces.now()
     return [
         (PurePosixPath(path.relative_to(source).as_posix()), path)
         for path in sorted(source.rglob("*.md"))
         if path.is_file()
         and not any(
-            _left_behind(source.joinpath(*path.relative_to(source).parts[: i + 1]))
+            _left_behind(source.joinpath(*path.relative_to(source).parts[: i + 1]), places)
             for i in range(len(path.relative_to(source).parts))
         )
     ]
 
 
-def _left_behind(path: Path) -> bool:
-    return path.name.startswith(".") or path.is_symlink() or is_private(path)
+def _left_behind(path: Path, places: PrivatePlaces) -> bool:
+    return path.name.startswith(".") or path.is_symlink() or is_private(path, places)
 
 
-def _ignore(directory: str, names: list[str]) -> set[str]:
+def _ignore(directory: str, names: list[str], *, places: PrivatePlaces) -> set[str]:
     """What `shutil.copytree` leaves out below a copied folder: what `_left_behind`
     does at the top, and bytecode."""
     return {
         name
         for name in names
-        if name == "__pycache__" or name.endswith(".pyc") or _left_behind(Path(directory) / name)
+        if name == "__pycache__"
+        or name.endswith(".pyc")
+        or _left_behind(Path(directory) / name, places)
     }

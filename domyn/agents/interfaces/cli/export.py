@@ -66,7 +66,11 @@ Secrets are not exported. A literal API key, header or client secret becomes a
 approvals, the state file and conversation history are never copied: nothing names them, and a file
 called like one is refused even when an ``external_files`` entry does (`is_private`),
 since a project keeps all three in its own folder, next to the files that are exported.
+Nor is the session's working state (`StateFolders`): what is below a home's or
+project's ``conversations/``, ``processes/`` or ``browser/`` is refused the same way.
 """
+
+from __future__ import annotations
 
 import ast
 import contextlib
@@ -94,31 +98,27 @@ import domyn.agents
 from domyn.agents.instructions import LocalDirInstructionsSource
 from domyn.agents.instructions.discovery import (
     AUTODISCOVERY_DIRS,
-    STATE_DIRS,
     find_instruction_files,
 )
 from domyn.agents.interfaces.cli import config as cli_config
 from domyn.agents.interfaces.cli.config import (
-    APPROVALS_FILENAME,
     BUILTIN_SKILLS_DIRNAME,
     CONFIG_FILENAME,
-    CREDENTIALS_FILENAME,
-    PROJECT_DIR_REF,
     PROJECT_DIR_VAR,
     PROVIDER_HINTS,
-    STATE_FILENAME,
+    PrivateFiles,
     ProjectError,
     is_skill_autodiscovery,
     project_dir,
     projects_dir,
     skills_install_dir,
 )
-from domyn.agents.interfaces.cli.conversations import STORE_FILENAME
 from domyn.agents.interfaces.cli.theme import Theme
 from domyn.agents.loader import interpolate_env_vars
 from domyn.agents.skills import LocalDirSkillSource, parse_skill_file
 from domyn.agents.skills.external_files import expand_files, resolve_external_files
 from domyn.agents.skills.layout import own_skill_file, walk_skill_tree
+from domyn.agents.tools.builtin.session import StateFolders
 
 SKILLS_DIR = "skills"
 INSTRUCTIONS_DIR = "instructions"
@@ -257,6 +257,7 @@ class _Exporter:
         """Every skill file read, resolved: whose ``external_files`` the copy must keep
         inside the export (`_refuse_paths_outside`)."""
         self.report = ExportReport(dest=Path())
+        self.places = PrivatePlaces.now()
 
     # -- paths ------------------------------------------------------------
 
@@ -272,10 +273,11 @@ class _Exporter:
         return path if path.is_absolute() else self.cwd / path
 
     def _copy(self, source: Path, dest: Path) -> None:
-        if is_private(source):
-            # Only an `external_files` entry walking up into a domyn home can name one:
+        if is_private(source, self.places):
+            # Only an `external_files` entry walking up into a domyn home can name one
+            # (a file, or what is in its `conversations/`, `processes/` or `browser/`):
             # refused all the same, as the export is for someone else.
-            note = f"{source} (API keys, approvals and history are never exported)"
+            note = f"{source} (API keys, approvals, history and session state are never exported)"
             if note not in self.report.dropped:
                 self.report.dropped.append(note)
             return
@@ -682,7 +684,7 @@ class _Exporter:
                     # folder (`resolve_instruction_dirs`).
                     if listed.is_symlink() or not listed.is_dir() or listed.resolve() == home:
                         continue
-                    found = find_instruction_files(listed.resolve(), skip=STATE_DIRS)
+                    found = find_instruction_files(listed.resolve())
                     for file in found.paths:
                         file = file.resolve()
                         sources.setdefault(file, _InstructionSource(file, [file]))
@@ -808,7 +810,7 @@ class _Exporter:
                 "be read on the machine that imports it:\n"
                 + "".join(f"  - {line}\n" for line in outside)
                 + f"Remove them, or put the files in the project and name them as "
-                f"{PROJECT_DIR_REF}/…"
+                f"${{{PROJECT_DIR_VAR}}}/…"
             )
 
     # -- the whole thing --------------------------------------------------
@@ -954,7 +956,9 @@ def external_files_outside(skill_files: Iterable[tuple[PurePosixPath, Path]]) ->
     return found
 
 
-def _copy_into(staging: Path, relative: Path, source: Path, chosen: set[Path]) -> None:
+def _copy_into(
+    staging: Path, relative: Path, source: Path, chosen: set[Path], places: PrivatePlaces
+) -> None:
     """Copy ``source`` to ``staging / relative``, checking both ends first.
 
     What reaches here was planned by `_Exporter`, which already refuses what may not
@@ -968,7 +972,7 @@ def _copy_into(staging: Path, relative: Path, source: Path, chosen: set[Path]) -
         raise ExportError(f"{relative} would be written outside the exported folder")
     if source not in chosen:
         raise ExportError(f"{source} was not chosen for the export")
-    if source.is_symlink() or not source.is_file() or is_private(source):
+    if source.is_symlink() or not source.is_file() or is_private(source, places):
         raise ExportError(f"{source} is not a file export may copy")
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target, follow_symlinks=False)
@@ -1025,11 +1029,11 @@ def _inside_project(value: Any) -> bool:
     variable, which could be set to anything where it is run."""
     if not isinstance(value, str):
         return False
-    if value == PROJECT_DIR_REF:
+    if value == f"${{{PROJECT_DIR_VAR}}}":
         return True
-    if not value.startswith(f"{PROJECT_DIR_REF}/"):
+    if not value.startswith(f"${{{PROJECT_DIR_VAR}}}/"):
         return False
-    rest = value.removeprefix(f"{PROJECT_DIR_REF}/")
+    rest = value.removeprefix(f"${{{PROJECT_DIR_VAR}}}/")
     if "$" in rest:
         return False
     normal = posixpath.normpath(rest)
@@ -1038,20 +1042,60 @@ def _inside_project(value: Any) -> bool:
 
 def _in_project(relative: str) -> str:
     """A path inside the export, as its config names it."""
-    return f"{PROJECT_DIR_REF}/{relative}"
+    return f"${{{PROJECT_DIR_VAR}}}/{relative}"
 
 
-def is_private(path: Path) -> bool:
+@dataclass(frozen=True)
+class PrivatePlaces:
+    """Where a domyn home's session state can be: the folders `is_private` looks
+    for a `StateFolders` folder in. Resolved once per export or import
+    (`PrivatePlaces.now`), since `is_private` is asked about every file they copy."""
+
+    homes: frozenset[Path]
+    """The active home (`home_dir`) and ``~/.domyn``, resolved."""
+    projects: Path | None
+    """``~/.domyn/projects``, resolved: each project in it is a home too."""
+
+    @classmethod
+    def now(cls) -> PrivatePlaces:
+        try:
+            homes = frozenset(
+                place.resolve() for place in (cli_config.home_dir(), cli_config.GLOBAL_DIR)
+            )
+            return cls(homes=homes, projects=cli_config.projects_dir().resolve())
+        except (OSError, RuntimeError):
+            return cls(homes=frozenset(), projects=None)
+
+
+_STATE_FOLDER_NAMES = frozenset(StateFolders)
+
+
+def is_private(path: Path, places: PrivatePlaces) -> bool:
     """Whether ``path`` is one of the files a domyn home keeps for its owner alone:
-    the credentials, the approvals, the state file (what the CLI remembers between sessions), the conversation
-    history (with SQLite's side files). Matched by name wherever it is, so no layout of skills can carry one out.
+    the credentials, the approvals, the state file (what the CLI remembers
+    between sessions), the conversation history (with SQLite's side
+    files), matched by name wherever it is, so no layout of skills can carry one out;
+    and anything in the session's working state (`StateFolders`: the
+    conversations' environments and output, the commands' logs, the browser's files)
+    of one of ``places``. Those folders are matched by place, not by name: a skill
+    may well have a ``browser/`` folder of its own.
     """
     name = path.name
-    return name in (
-        CREDENTIALS_FILENAME,
-        APPROVALS_FILENAME,
-        STATE_FILENAME,
-    ) or name.startswith(STORE_FILENAME)
+    if name in (
+        PrivateFiles.CREDENTIALS,
+        PrivateFiles.APPROVALS,
+        PrivateFiles.STATE,
+    ) or name.startswith(PrivateFiles.CONVERSATIONS):
+        return True
+    try:
+        resolved = path.absolute().resolve()
+    except (OSError, RuntimeError):
+        return False
+    return any(
+        folder.name in _STATE_FOLDER_NAMES
+        and (folder.parent in places.homes or folder.parent.parent == places.projects)
+        for folder in (resolved, *resolved.parents)
+    )
 
 
 def _listed_skills(listed: Path) -> list[tuple[Path, Path]]:
@@ -1196,7 +1240,7 @@ def export_configuration(
     try:
         chosen = set(exporter.copies.values())
         for relative, source in exporter.copies.items():
-            _copy_into(staging, relative, source, chosen)
+            _copy_into(staging, relative, source, chosen, exporter.places)
         (staging / CONFIG_FILENAME).write_text(
             yaml.safe_dump(exporter.config, sort_keys=False), encoding="utf-8"
         )
@@ -1270,7 +1314,7 @@ def _print_list(console: Console, title: str, items: list[str], style: str) -> N
 
 def _in_export(path: str) -> str:
     """A path of the exported config as the reader sees it: relative to the export."""
-    return path.removeprefix(f"{PROJECT_DIR_REF}/")
+    return path.removeprefix(f"${{{PROJECT_DIR_VAR}}}/")
 
 
 def _with_tilde(path: Path) -> str:

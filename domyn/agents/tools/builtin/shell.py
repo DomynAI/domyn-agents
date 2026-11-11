@@ -183,6 +183,8 @@ def build_run_command(
     max_lifetime_s: float = processes.DEFAULT_MAX_LIFETIME_S,
 ) -> Callable[..., Awaitable[Any]]:
     """Build the ``run_command`` callable bound to one backend."""
+    # Where this backend keeps its processes; the record never stores it.
+    home = backend.processes_dir
 
     async def run_command(
         command: str,
@@ -231,7 +233,7 @@ def build_run_command(
         # never runs a command never pays to prepare the backend.
         await backend.start()
 
-        live = [r for r in processes.registry(state).values() if not r.finished]
+        live = [r for r in processes.registry(state, home=home).values() if not r.finished]
         if len(live) >= processes.MAX_PROCESSES:
             # Look before refusing: nothing marks a command finished on its
             # own, so a conversation that never looked would believe all of
@@ -240,7 +242,7 @@ def build_run_command(
                 processes.build_sweep(live), timeout=60, conversation_id=conversation_id
             )
             if not sweep.backend_error:
-                live = processes.refresh(state, processes.parse_sweep(sweep.stdout))
+                live = processes.refresh(state, processes.parse_sweep(sweep.stdout), home=home)
 
         if len(live) >= processes.MAX_PROCESSES:
             listed = "\n".join(f"  `{r.handle}` — $ {r.command}" for r in live)
@@ -250,7 +252,7 @@ def build_run_command(
                 state,
             )
 
-        record = processes.new_record(command, conversation_id)
+        record = processes.new_record(command, conversation_id, home=home)
         result = await backend.run(
             processes.build_launch(
                 record, yield_s=limit, max_lifetime=max_lifetime_s, stdin=stdin or None
@@ -299,6 +301,8 @@ PROGRESS_STEP_S = 10
 
 def build_check_command(backend: CommandBackend) -> Callable[..., Any]:
     """Build the ``check_command`` callable bound to one backend."""
+    # Where this backend keeps its processes; the record never stores it.
+    home = backend.processes_dir
 
     async def check_command(
         handle: str,
@@ -312,8 +316,8 @@ def build_check_command(backend: CommandBackend) -> Callable[..., Any]:
         it last printed anything** — a run that has said nothing for ten minutes
         is usually stuck — and whatever is new since you last looked.
 
-        Only what is new: to see the whole log, or to search it, use the file
-        tools on the path given when the command started.
+        Only what is new: to see the whole log, or to search it, run `tail` or
+        `grep` on the path given when the command started, with `run_command`.
 
         Use `wait` when something should finish shortly and you would rather
         carry on afterwards than answer now — it comes back the moment the
@@ -330,7 +334,7 @@ def build_check_command(backend: CommandBackend) -> Callable[..., Any]:
                 returns at once.
         """
         await backend.start()
-        known = processes.registry(state)
+        known = processes.registry(state, home=home)
         record = known.get(handle)
         if record is None:
             yield _result(
@@ -405,6 +409,8 @@ def build_check_command(backend: CommandBackend) -> Callable[..., Any]:
 
 def build_list_commands(backend: CommandBackend) -> Callable[..., Awaitable[Any]]:
     """Build the ``list_commands`` callable bound to one backend."""
+    # Where this backend keeps its processes; the record never stores it.
+    home = backend.processes_dir
 
     async def list_commands(conversation_id: str = "", state: dict[str, Any] | None = None) -> Any:
         """List the commands you started that are still around, with their handles.
@@ -421,13 +427,15 @@ def build_list_commands(backend: CommandBackend) -> Callable[..., Awaitable[Any]
         only need one if they are going to type `/stop` themselves.
         """
         await backend.start()
-        known = processes.registry(state)
+        known = processes.registry(state, home=home)
 
         # One call, and it asks the directory rather than the registry — so it
         # also finds anything this conversation started whose record was lost.
         seen: dict[str, Any] = {}
         result = await backend.run(
-            processes.build_discover(conversation_id), timeout=60, conversation_id=conversation_id
+            processes.build_discover(conversation_id, home=home),
+            timeout=60,
+            conversation_id=conversation_id,
         )
         if not result.backend_error:
             seen = processes.parse_discover(result.stdout)
@@ -441,6 +449,7 @@ def build_list_commands(backend: CommandBackend) -> Callable[..., Awaitable[Any]
                 handle=handle,
                 command=seen.get(handle, {}).get("command", ""),
                 conversation=conversation_id,
+                home=home,
             )
             observed = seen.get(handle)
             if observed is None:
@@ -464,6 +473,8 @@ def build_stop_command(
     backend: CommandBackend, grace_s: int | None = None
 ) -> Callable[..., Awaitable[Any]]:
     """Build the ``stop_command`` callable bound to one backend."""
+    # Where this backend keeps its processes; the record never stores it.
+    home = backend.processes_dir
 
     async def stop_command(
         handle: str, conversation_id: str = "", state: dict[str, Any] | None = None
@@ -477,7 +488,7 @@ def build_stop_command(
             handle: The handle of the command to stop.
         """
         await backend.start()
-        known = processes.registry(state)
+        known = processes.registry(state, home=home)
         record = known.get(handle)
         if record is None:
             return _result(f"No command with handle `{handle}`.", state)

@@ -15,7 +15,7 @@ from domyn.agents.cli.cli import app
 from domyn.agents.interfaces.cli import Theme
 from domyn.agents.interfaces.cli import config as cfg
 
-P = cfg.PROJECT_DIR_REF
+P = f"${{{cfg.PROJECT_DIR_VAR}}}"
 
 
 @pytest.fixture(autouse=True)

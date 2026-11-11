@@ -16,7 +16,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from domyn.agents.interfaces.cli.config import home_dir, list_projects, projects_dir
+from domyn.agents.interfaces.cli.config import (
+    PrivateFiles,
+    home_dir,
+    list_projects,
+    projects_dir,
+)
 from domyn.agents.logger import get_logger
 
 if TYPE_CHECKING:
@@ -27,8 +32,6 @@ if TYPE_CHECKING:
     from domyn.agents.conversation_manager import BaseConversationManager, ConversationInfo
     from domyn.agents.core import BaseEvent
     from domyn.agents.interfaces.cli.theme import Theme
-
-STORE_FILENAME = "conversations.db"
 
 PREVIEW_CHARS = 60
 
@@ -41,7 +44,7 @@ HISTORY_TURNS = 20
 def store_path() -> Path:
     """Beside the config: ``~/.domyn``, or the active project's folder, so a project
     keeps its own history and does not spill into the user's global one."""
-    return home_dir() / STORE_FILENAME
+    return home_dir() / PrivateFiles.CONVERSATIONS
 
 
 def build_manager(path: Path | None = None) -> BaseConversationManager:
@@ -283,7 +286,7 @@ async def project_holding(application_name: str, user_id: str, conversation_id: 
     ``~/.domyn/projects`` are read, and none is created.
     """
     for name in list_projects():
-        path = projects_dir() / name / STORE_FILENAME
+        path = projects_dir() / name / PrivateFiles.CONVERSATIONS
         if not path.is_file():
             continue
         if await find(build_manager(path), application_name, user_id, conversation_id) is not None:
