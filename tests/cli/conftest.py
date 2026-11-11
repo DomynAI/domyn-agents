@@ -187,6 +187,10 @@ def _approvals_off_the_real_home(
     # scripted re-run goes through every section's questions as it did before the
     # question existed. `test_keep_sections_setup.py` puts it back.
     monkeypatch.setattr(cli_setup, "_keep", lambda *_, **__: False)
+    # A vLLM or custom endpoint's models are listed from its `/models`: a scripted setup
+    # must not reach the network for it, so the listing is empty and the model is typed,
+    # as before the listing existed. `test_endpoint_models_setup.py` puts it back.
+    monkeypatch.setattr(cli_setup, "_discover_endpoint_models", lambda *_, **__: {})
     nowhere = root / "no-local-skills"
     for module in (cli_config, cli_setup, cli_repl):
         monkeypatch.setattr(

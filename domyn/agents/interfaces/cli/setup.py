@@ -47,6 +47,7 @@ from domyn.agents.interfaces.cli.config import (
     DEFAULT_DECISION_MODEL,
     DEFAULT_DECISION_URL,
     LOCAL_SKILLS_DIRS,
+    OPENAI_COMPATIBLE,
     PROVIDER_HINTS,
     REQUIRES_URL,
     AgentConfig,
@@ -54,6 +55,7 @@ from domyn.agents.interfaces.cli.config import (
     ProviderConfig,
     _scrub_url,
     active_project,
+    chat_completions_url,
     config_path,
     configuration_v1_dict_from,
     credentials_path,
@@ -72,11 +74,11 @@ from domyn.agents.interfaces.cli.config import (
     read_credentials,
     resolve_api_key,
     skills_install_dir,
-    vllm_chat_url,
     write_credential,
 )
 from domyn.agents.interfaces.cli.prompt import GoBack, back_key, interactive_terminal, read_line
 from domyn.agents.interfaces.cli.select import multiselect, select
+from domyn.agents.llm.context_window import get_json, models_url, window_from_model_entry
 from domyn.agents.skills.catalog import (
     BuiltinSkill,
     SkillInstallError,
@@ -609,10 +611,10 @@ def _discover_models(console: Console, theme: Theme, settings: PlatformSettings)
     return models
 
 
-def _choose_domyn_model(
+def _choose_listed_model(
     console: Console, theme: Theme, models: dict[str, str], current: str
 ) -> str:
-    """Pick one of the space's models from the list, or type a name that is not on it.
+    """Pick one of the listed models, or type a name that is not on it.
 
     Ctrl-B on the typed name goes back to the list."""
     options = [*models, _OTHER_MODEL]
@@ -635,6 +637,53 @@ def _choose_domyn_model(
         except GoBack:
             _back_to(mark)
             continue
+
+
+def _discover_endpoint_models(
+    console: Console, theme: Theme, url: str, api_key: str | None
+) -> dict[str, str]:
+    """The models an OpenAI-compatible endpoint lists at the ``/models`` beside ``url``,
+    by id with the window each states; empty when unknown.
+
+    Asked with the key just settled, so a wrong URL or key shows up here rather than on
+    the first message. Best effort: a failure says why and the model is typed instead.
+    """
+    listing = models_url(url)
+    if listing is None:
+        return {}
+    console.print(
+        f"  Looking up the models at {_scrub_url(listing)}...",
+        style=theme.style("meta"),
+        highlight=False,
+    )
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        found = run_sync(get_json(listing, headers))
+    except Exception as error:
+        status = getattr(getattr(error, "response", None), "status_code", None)
+        what = f"{type(error).__name__}, HTTP {status}" if status else type(error).__name__
+        why = {401: " (check the API key)", 403: " (check the API key)", 404: " (check the URL)"}
+        console.print(
+            f"  Could not list the models ({what}){why.get(status or 0, '')}: "
+            "type the name instead",
+            style=theme.style("warning"),
+            highlight=False,
+        )
+        return {}
+    entries = found.get("data") if isinstance(found, dict) else None
+    models: dict[str, str] = {}
+    for entry in entries if isinstance(entries, list) else ():
+        if not isinstance(entry, dict) or not entry.get("id"):
+            continue
+        window = window_from_model_entry(entry)
+        models[str(entry["id"])] = f"{window:,} tokens" if window else ""
+    if not models:
+        console.print(
+            "  The endpoint lists no models: type the name instead",
+            style=theme.style("warning"),
+            highlight=False,
+        )
+    return models
 
 
 def _ensure_api_key(console: Console, theme: Theme, provider: ProviderConfig) -> None:
@@ -1522,6 +1571,7 @@ def run_setup(
     # The space's models by what they were asked with. Outside the draft, so going
     # back over the lookup does not ask the platform again.
     domyn_models: dict[tuple[str, ...], dict[str, str]] = {}
+    endpoint_models: dict[tuple[str, str], dict[str, str]] = {}
 
     console.print()
     title = (
@@ -1621,7 +1671,7 @@ def run_setup(
             domyn_models[asked_with] = _discover_models(console, theme, settings)
         models = domyn_models[asked_with]
         if models:
-            d.model_name = _choose_domyn_model(console, theme, models, d.provider.model_name)
+            d.model_name = _choose_listed_model(console, theme, models, d.provider.model_name)
         else:
             ask_model(d)
 
@@ -1632,10 +1682,31 @@ def run_setup(
             else "URL (empty = provider default)"
         )
         url = _ask(console, theme, label, d.url)
-        if d.provider_type == "vllm" and url and (completed := vllm_chat_url(url)) != url:
+        if (
+            d.provider_type in OPENAI_COMPATIBLE
+            and url
+            and (completed := chat_completions_url(url)) != url
+        ):
             url = completed
             console.print(f"  URL: {_scrub_url(url)}", style=theme.style("meta"), highlight=False)
         d.url = url
+
+    def endpoint_key(d: _Draft) -> ProviderConfig:
+        return ProviderConfig(
+            type=d.provider_type,
+            api_key_env=PROVIDER_HINTS.get(d.provider_type, {}).get("env", "LLM_API_KEY"),
+        )
+
+    def choose_endpoint_model(d: _Draft) -> None:
+        api_key = resolve_api_key(endpoint_key(d)) or ""
+        asked_with = (d.url, api_key)
+        if asked_with not in endpoint_models:
+            endpoint_models[asked_with] = _discover_endpoint_models(console, theme, d.url, api_key)
+        models = endpoint_models[asked_with]
+        if models:
+            d.model_name = _choose_listed_model(console, theme, models, d.provider.model_name)
+        else:
+            ask_model(d)
 
     def ask_max_tokens(d: _Draft) -> None:
         d.max_tokens = _ask_max_tokens(console, theme, d.provider.max_tokens)
@@ -1776,7 +1847,10 @@ def run_setup(
         return not d.keep_model and d.provider_type == "domyn"
 
     def asks_other(d: _Draft) -> bool:
-        return not d.keep_model and d.provider_type != "domyn"
+        return not d.keep_model and d.provider_type not in ("domyn", *OPENAI_COMPATIBLE)
+
+    def asks_endpoint(d: _Draft) -> bool:
+        return not d.keep_model and d.provider_type in OPENAI_COMPATIBLE
 
     model_steps = [
         _Step("keep model", keep_model, lambda d: ask_keep_model),
@@ -1789,18 +1863,16 @@ def run_setup(
         _Step("domyn api key", lambda d: _ensure_api_key(console, theme, domyn_key), asks_domyn),
         _Step("domyn model", choose_domyn_model, asks_domyn),
         _Step("url", ask_url, asks_other),
+        _Step("api key", lambda d: _ensure_api_key(console, theme, endpoint_key(d)), asks_other),
+        # An OpenAI-compatible endpoint: URL and key first, then the models it lists,
+        # which also checks both before the first message.
+        _Step("endpoint url", ask_url, asks_endpoint),
         _Step(
-            "api key",
-            lambda d: _ensure_api_key(
-                console,
-                theme,
-                ProviderConfig(
-                    type=d.provider_type,
-                    api_key_env=PROVIDER_HINTS.get(d.provider_type, {}).get("env", "LLM_API_KEY"),
-                ),
-            ),
-            asks_other,
+            "endpoint api key",
+            lambda d: _ensure_api_key(console, theme, endpoint_key(d)),
+            asks_endpoint,
         ),
+        _Step("endpoint model", choose_endpoint_model, asks_endpoint),
         _Step("max tokens", ask_max_tokens, asks_model),
         _Step("context window", ask_context_window, asks_model),
     ]
