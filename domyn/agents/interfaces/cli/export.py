@@ -40,18 +40,13 @@ Everything a resource reads that is not a built-in is under ``resources/``. The
 config's paths are rewritten one by one, so their order, which settles a name clash,
 is kept.
 
-The ``.domyn/skills`` and ``.agents/skills`` autodiscovery entries are
-**snapshotted** and **merged**: the skills in those folders of the folder the export
-runs in are copied straight into ``resources/skills/``, categories kept
-(``.domyn/skills/<category>/<name>`` → ``resources/skills/<category>/<name>``), and listed one
-by one where the first entry was, so the export carries what a run here would load. A
-name both folders hold is settled before copying, as the loader settles it: the
-earlier folder's skill (``.domyn``'s, in the order setup writes) is copied, the other
-is named in the report. A place already taken in ``resources/skills/`` gets a suffix, unless
-what holds it is the same skill, reached through another listed path (named on its
-own, or inside a listed folder), or an identical copy of it from elsewhere (every
-file the same, byte for byte, and nothing more): that one is copied once, and listed
-by that copy. A folder missing there is left out quietly.
+The ``autodiscovery`` resource (``.domyn`` and ``.agents`` of wherever a session
+starts) is **kept as it is**, so the project still reads the folder it runs in, and
+what it holds in the folder exported from is **copied and added to the user's own
+resources**: each copied ``skills`` folder first in the one the skills source reads
+right after ``autodiscovery``, each instruction file the walk found, one by one, last
+in the one read right before it (`_snapshot_autodiscovery`). The copies are then the
+project's own, as an import shows them. A folder missing there is left out quietly.
 
 The file a ``tools`` or ``hooks`` entry runs is copied into ``code/`` (the file
 alone), and the report warns about what it imports that the machine running the
@@ -120,10 +115,6 @@ from domyn.agents.skills.external_files import expand_files, resolve_external_fi
 from domyn.agents.skills.layout import own_skill_file, walk_skill_tree
 from domyn.agents.tools.builtin.session import StateFolders
 
-AUTODISCOVERY_EXPORT = "autodiscovery_export"
-"""What the autodiscovery resource found when the export was made, copied: read beside
-it, which goes on reading the folder the project runs in."""
-
 RESOURCES_DIR = "resources"
 """Where every folder the configuration's skills and instructions are read from is
 copied, one folder each (`_Exporter._place_roots`)."""
@@ -173,11 +164,10 @@ def export_info() -> dict[str, Any]:
 
 LOCAL_INSTRUCTION_DIRS: tuple[Path, ...] = AUTODISCOVERY_DIRS
 """The instruction counterpart of `LOCAL_SKILLS_DIRS`: ``./.domyn`` and ``./.agents``
-of the folder ``domyn run`` starts in, listed relative under an agent's
-``standing_instructions`` and walked by the loader on every load. Export **snapshots**
-them: it walks them as the loader does (`find_instruction_files`, domyn's own state
-folders skipped) and lists every file it uses one by one, as a copied folder would be
-read flat. One with no file is left out quietly, as most folders have none."""
+of the folder ``domyn run`` starts in: the roots of the autodiscovery resource. Read
+relative to wherever a session starts, so export and the trust check treat them like
+``.`` (`_working_folder`), and missing ones are left out quietly, as most folders have
+none."""
 
 _ENV_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 # Header names whose value is a credential. Anything else (``Accept``, a tenant id)
@@ -534,26 +524,24 @@ class _Exporter:
         """Every list of paths, rewritten in place: each path that was copied, as its copy,
         in its order; one that was not, left out.
 
-        Except the autodiscovery resource (`_snapshot_autodiscovery`): it keeps its
-        paths, and its copies become a resource beside it."""
+        Except the autodiscovery resource: it keeps its paths, and what it found here is
+        added to the user's own resources (`_snapshot_autodiscovery`)."""
         rewritten: dict[int, tuple[dict[str, Any], list[str]]] = {}
         for holder, _ in reads.values():
             rewritten.setdefault(id(holder), (holder, []))
+        found: list[_Root] = []
         for root in sorted(roots, key=lambda r: r.index):
-            relative = root.path.relative_to(root.anchor).as_posix()
-            base = bases[root.anchor]
-            path = _in_project(base if relative == "." else f"{base}/{relative}")
+            if _is_autodiscovery(self.config, root.holder):
+                found.append(root)
+                continue
+            path = _in_project(_copy_of(root.path, root, bases))
             paths = rewritten[id(root.holder)][1]
             if path not in paths:
                 paths.append(path)
-        snapshot: list[str] = []
         for holder, paths in rewritten.values():
-            if _is_autodiscovery(self.config, holder):
-                snapshot = paths
-            else:
+            if not _is_autodiscovery(self.config, holder):
                 holder["paths"] = paths
-        # Last: a snapshot an earlier export left is rewritten above, then added to.
-        self._snapshot_autodiscovery(snapshot)
+        self._snapshot_autodiscovery(found, bases)
         cli_config.drop_empty_resources(self.config)
         for agent in self.config.get("agents") or []:
             if isinstance(agent, dict):
@@ -563,27 +551,25 @@ class _Exporter:
                     if written not in self.report.skill_paths:
                         self.report.skill_paths.append(written)
 
-    def _snapshot_autodiscovery(self, copies: list[str]) -> None:
-        """Keep ``autodiscovery`` reading the folder the project runs in, and add what
-        it found here, copied, as `AUTODISCOVERY_EXPORT`, read beside it.
+    def _snapshot_autodiscovery(self, found: list[_Root], bases: dict[Path, str]) -> None:
+        """Keep ``autodiscovery`` reading the folder the project runs in, and add what it
+        found here, copied, to the user's own resources, as `main`'s export did.
 
-        Skills name the snapshot just after the live folders, so the folder a session
-        starts in wins a name; instructions just before them, so its brief is still the
-        last one read. An export of a project that already has a snapshot adds to it,
-        and the sources already name it.
+        - skills: each copied folder's skills folder (``resources/domyn/skills``…), first
+          in the resource the skills source reads whole right after ``autodiscovery``:
+          the folder a session starts in still wins a name, then this snapshot, then the
+          user's skills;
+        - instructions: each file the walk found, one by one, last in the resource read
+          right before ``autodiscovery``: the user's soul still comes first, the folder a
+          session starts in still has the last brief. Listed rather than walked, as the
+          copy will not change.
+
+        That resource is reused only when it is a ``local_dir`` read whole, by that source
+        alone (`_snapshot_target`); otherwise a new one is added in its place. Nothing in
+        the export marks these paths as a snapshot: they are the project's own from now.
         """
-        if not copies:
+        if not found:
             return
-        declared = cli_config.declared_resources(self.config)
-        existing = declared.get(AUTODISCOVERY_EXPORT)
-        if existing is not None:
-            paths = existing.get("paths") or []
-            paths = [paths] if isinstance(paths, str) else list(paths)
-            existing["paths"] = [*paths, *(c for c in copies if c not in paths)]
-            return
-        self.config.setdefault("resources", []).append(
-            {"id": AUTODISCOVERY_EXPORT, "type": "local_dir", "paths": copies}
-        )
         for agent in self.config.get("agents") or []:
             if not isinstance(agent, dict):
                 continue
@@ -592,20 +578,87 @@ class _Exporter:
                 source = runtime.get("source") if isinstance(runtime, dict) else None
                 if not isinstance(source, dict) or source.get("type") != "resource":
                     continue
-                entries = source.get("resource")
-                entries = [entries] if isinstance(entries, str | dict) else list(entries or [])
-                for at, entry in enumerate(entries):
-                    entry_id = entry if isinstance(entry, str) else (entry or {}).get("id")
-                    if entry_id != cli_config.CLI_AUTODISCOVERY_RESOURCE:
-                        continue
-                    copy_entry = (
-                        AUTODISCOVERY_EXPORT
-                        if isinstance(entry, str)
-                        else {**entry, "id": AUTODISCOVERY_EXPORT}
-                    )
-                    entries.insert(at + 1 if key == "skills" else at, copy_entry)
-                    break
-                source["resource"] = entries
+                refs = cli_config.source_refs(source, key)
+                at = next(
+                    (
+                        n
+                        for n, (one, _, _) in enumerate(refs)
+                        if one == cli_config.CLI_AUTODISCOVERY_RESOURCE
+                    ),
+                    None,
+                )
+                if at is None:
+                    continue
+                subpath = refs[at][1]
+                if key == "skills":
+                    add = [
+                        _in_project(_copy_of(root.path / subpath, root, bases))
+                        for root in found
+                        if any(
+                            f.is_relative_to(root.path / subpath) and f not in root.instructions
+                            for f in root.files
+                        )
+                    ]
+                else:
+                    add = [
+                        _in_project(_copy_of(file, root, bases))
+                        for root in found
+                        for file in root.instructions
+                    ]
+                if not add:
+                    continue
+                target = self._snapshot_target(agent, key, source, at)
+                paths = target.get("paths") or []
+                paths = [paths] if isinstance(paths, str) else list(paths)
+                if key == "skills":
+                    target["paths"] = [*add, *(p for p in paths if p not in add)]
+                else:
+                    target["paths"] = [*paths, *(p for p in add if p not in paths)]
+
+    def _snapshot_target(
+        self, agent: dict[str, Any], key: str, source: dict[str, Any], at: int
+    ) -> dict[str, Any]:
+        """The resource a source's snapshot goes in: the entry right after
+        ``autodiscovery`` for skills, right before it for instructions, when that entry
+        is a ``local_dir`` resource read whole, not walked, not the built-ins' install
+        folder and read by nothing else (adding to it must not change what another
+        consumer sees). Otherwise a new resource, named as setup names the user's own
+        when that id is free, with its entry put in that place."""
+        entries = source.get("resource")
+        entries = [entries] if isinstance(entries, str | dict) else list(entries or [])
+        refs = cli_config.source_refs(source, key)
+        neighbour = at + 1 if key == "skills" else at - 1
+        declared = cli_config.declared_resources(self.config)
+        if 0 <= neighbour < len(refs):
+            resource_id, subpath, walk = refs[neighbour]
+            resource = declared.get(resource_id)
+            if (
+                isinstance(resource, dict)
+                and resource.get("type") == "local_dir"
+                and subpath == "."
+                and not walk
+                and resource_id != cli_config.CLI_BUILTIN_SKILLS_RESOURCE
+                and _consumers(self.config, resource_id) == 1
+            ):
+                return resource
+        taken = set(declared) | {
+            str(a.get("name")) for a in self.config.get("agents") or [] if isinstance(a, dict)
+        }
+        base = (
+            cli_config.CLI_SKILLS_RESOURCE
+            if key == "skills"
+            else cli_config.CLI_INSTRUCTIONS_RESOURCE
+        )
+        new_id, n = base, 2
+        while new_id in taken:
+            new_id, n = f"{base}-{n}", n + 1
+        resource = {"id": new_id, "type": "local_dir", "paths": []}
+        self.config.setdefault("resources", []).append(resource)
+        default = cli_config.source_subpath(source, key)
+        entry: Any = new_id if default == "." else {"id": new_id, "path": "."}
+        entries.insert(at + 1 if key == "skills" else at, entry)
+        source["resource"] = entries
+        return resource
 
     # -- secrets and what is not copied -----------------------------------
 
@@ -918,6 +971,32 @@ def _working_folder(path: Any) -> bool:
     export carries, nor a place outside a project."""
     written = str(path).rstrip("/")
     return written in (".", "") or Path(written) in LOCAL_INSTRUCTION_DIRS
+
+
+def _copy_of(path: Path, root: _Root, bases: dict[Path, str]) -> str:
+    """Where ``path``, inside ``root``'s anchor, is in the export."""
+    relative = path.relative_to(root.anchor).as_posix()
+    base = bases[root.anchor]
+    return base if relative == "." else f"{base}/{relative}"
+
+
+def _consumers(config: dict[str, Any], resource_id: str) -> int:
+    """How many places name a resource: every agent's skills and instructions source,
+    tool bundle entry and ``resources`` list."""
+    count = 0
+    for agent in config.get("agents") or []:
+        if not isinstance(agent, dict):
+            continue
+        for key in ("skills", "standing_instructions"):
+            runtime = agent.get(key)
+            source = runtime.get("source") if isinstance(runtime, dict) else None
+            if isinstance(source, dict) and source.get("type") == "resource":
+                count += cli_config.source_resource_ids(source).count(resource_id)
+        for entry in agent.get("tool_bundles") or []:
+            if isinstance(entry, dict) and entry.get("workspace") == resource_id:
+                count += 1
+        count += list(agent.get("resources") or []).count(resource_id)
+    return count
 
 
 def _is_autodiscovery(config: dict[str, Any], holder: dict[str, Any]) -> bool:

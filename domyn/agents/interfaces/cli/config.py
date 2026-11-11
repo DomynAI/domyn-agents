@@ -1210,9 +1210,9 @@ def as_local_source(raw: dict[str, Any], key: str, mapping: Any) -> Any:
     setup owns, in the shapes it writes them, as the ``local_dir`` paths setup edits —
     the built-ins' install folder as the folder of each skill installed in it, and the
     autodiscovery resource as the entries setup lists for it (``.domyn/skills`` for
-    skills, ``.domyn`` for instructions). Entries naming other resources (an export's
-    ``autodiscovery_export``, a hand-written one) are kept aside with their place
-    (``keep``) and written back there. A source naming none of setup's own, or one of
+    skills, ``.domyn`` for instructions). Entries naming other resources (a
+    hand-written one) are kept aside with their place (``keep``) and written back
+    there. A source naming none of setup's own, or one of
     them in another shape, is returned as it is, and setup leaves it alone."""
     if not isinstance(mapping, dict):
         return mapping
@@ -1227,7 +1227,10 @@ def as_local_source(raw: dict[str, Any], key: str, mapping: Any) -> Any:
             CLI_BUILTIN_SKILLS_RESOURCE: (".", False),
         }
         if key == "skills"
-        else {CLI_INSTRUCTIONS_RESOURCE: (".", False), CLI_AUTODISCOVERY_RESOURCE: (".", True)}
+        else {
+            CLI_INSTRUCTIONS_RESOURCE: (".", False),
+            CLI_AUTODISCOVERY_RESOURCE: (".", True),
+        }
     )
     owned = [ref for ref in refs if ref[0] in expected]
     if not owned or any(expected[one] != (subpath, walk) for one, subpath, walk in owned):

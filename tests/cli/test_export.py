@@ -272,9 +272,9 @@ def _entries(raw: dict[str, Any], key: str) -> Any:
 
 class TestAutodiscovery:
     """The autodiscovery resource keeps reading the folder the project runs in, and what
-    it found here travels beside it, copied, as ``autodiscovery_export``."""
+    it found here is copied and added to the user's own resources, as `main` did."""
 
-    def test_the_live_folders_stay_and_a_snapshot_is_added(
+    def test_the_live_folders_stay_and_what_they_held_joins_the_users_own(
         self, machine: dict[str, Path], tmp_path: Path
     ) -> None:
         cwd = machine["cwd"]
@@ -289,16 +289,18 @@ class TestAutodiscovery:
 
         exported = _exported(report.dest)
         resources = {r["id"]: r["paths"] for r in exported["resources"]}
-        assert resources["autodiscovery"] == [".domyn", ".agents"]
-        assert resources["autodiscovery_export"] == [P + "resources/domyn", P + "resources/agents"]
+        assert resources == {
+            "autodiscovery": [".domyn", ".agents"],
+            # The copied skills folders, read whole like any skills folder of the user's.
+            "skills": [P + "resources/domyn/skills", P + "resources/agents/skills"],
+            # The instruction files the walk found, listed one by one: a copy is frozen.
+            "instructions": [P + "resources/domyn/SOUL.md", P + "resources/domyn/deeper/AGENTS.md"],
+        }
         # Skills: the folder a session runs in first, so it wins a name.
-        assert _entries(exported, "skills") == [
-            {"id": "autodiscovery", "path": "skills"},
-            {"id": "autodiscovery_export", "path": "skills"},
-        ]
-        # Instructions: the snapshot first, so the live brief is still read last.
+        assert _entries(exported, "skills") == [{"id": "autodiscovery", "path": "skills"}, "skills"]
+        # Instructions: the copies first, so the live brief is still read last.
         assert _entries(exported, "standing_instructions") == [
-            {"id": "autodiscovery_export", "walk": True},
+            "instructions",
             {"id": "autodiscovery", "walk": True},
         ]
         copied = sorted(
@@ -313,7 +315,7 @@ class TestAutodiscovery:
             "resources/domyn/skills/writing/essay/SKILL.md",
         ]
 
-    def test_run_elsewhere_it_reads_the_snapshot_and_that_folder(
+    def test_run_elsewhere_it_reads_the_copies_and_that_folder(
         self, machine: dict[str, Path], tmp_path: Path
     ) -> None:
         from domyn.agents.loader import load_from_file
@@ -392,7 +394,7 @@ class TestAutodiscovery:
             _export(_setup_config([".agents/skills"]), machine, tmp_path / "out")
         assert not (tmp_path / "out").exists()
 
-    def test_an_export_of_an_export_adds_to_its_snapshot(
+    def test_an_export_of_an_export_adds_to_what_the_first_copied(
         self, machine: dict[str, Path], tmp_path: Path
     ) -> None:
         _skill(machine["cwd"] / ".domyn" / "skills" / "essay", "essay")
@@ -404,12 +406,10 @@ class TestAutodiscovery:
         report = export_configuration(raw, tmp_path / "second", cwd=again)
 
         exported = _exported(report.dest)
-        snapshot = next(r for r in exported["resources"] if r["id"] == "autodiscovery_export")
-        assert len(snapshot["paths"]) == 2
-        assert _entries(exported, "skills") == [
-            {"id": "autodiscovery", "path": "skills"},
-            {"id": "autodiscovery_export", "path": "skills"},
-        ]
+        skills = next(r for r in exported["resources"] if r["id"] == "skills")
+        # This folder's copy first, then the first export's, now the project's own.
+        assert len(skills["paths"]) == 2
+        assert _entries(exported, "skills") == [{"id": "autodiscovery", "path": "skills"}, "skills"]
 
 
 class TestWhatIsLeftOut:
@@ -1039,3 +1039,32 @@ class TestTheCopyChecksBothEnds:
             cli_export._copy_into(
                 staging, Path("x"), source, {source}, cli_export.PrivatePlaces.now()
             )
+
+
+class TestWhereTheCopiesGo:
+    """The copies join the user's own resource only when nothing else reads it."""
+
+    def test_a_resource_another_agent_reads_is_left_as_it_is(
+        self, machine: dict[str, Path], tmp_path: Path
+    ) -> None:
+        _skill(machine["cwd"] / ".domyn" / "skills" / "essay", "essay")
+        _skill(tmp_path / "mine" / "notes", "notes")
+        raw = _setup_config([".domyn/skills", str(tmp_path / "mine" / "notes")])
+        raw["agents"].append(
+            {
+                "name": "Helper",
+                "llm_provider": raw["agents"][0]["llm_provider"],
+                "skills": {"source": {"type": "resource", "resource": "skills", "path": "."}},
+            }
+        )
+
+        report = _export(raw, machine, tmp_path / "out")
+
+        resources = {r["id"]: r["paths"] for r in _exported(report.dest)["resources"]}
+        assert resources["skills"] == [P + "resources/notes"]
+        assert resources["skills-2"] == [P + "resources/domyn/skills"]
+        assert _entries(_exported(report.dest), "skills") == [
+            {"id": "autodiscovery", "path": "skills"},
+            "skills-2",
+            "skills",
+        ]
