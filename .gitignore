@@ -26,3 +26,6 @@ coverage.xml
 
 # Local guidance for coding agents: the shared one is AGENTS.md
 CLAUDE.md
+
+# Private notes or files
+plans/

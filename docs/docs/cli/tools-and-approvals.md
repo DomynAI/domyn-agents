@@ -44,6 +44,42 @@ A command that is still running after its timeout (two minutes unless the agent 
 
 A command detached by the shell itself, with `&`, `disown` or `setsid -f`, gets no handle: it does not appear in `/ps` and cannot be stopped with `/stop`. The agent is told so when it runs one. They keep running after the session ends, and the session tells you which ones are still running when you leave.
 
+### Running commands in a Docker sandbox
+
+With `sandbox: docker`, the agent still runs in your terminal, and so do its file tools and its approvals. Only the commands it runs move into a Docker container that can write nothing of yours except the workspace. This needs Docker (or Podman, with `docker_binary`) running on your machine. `domyn setup` asks where commands should run when you choose the shell tools: sandboxed in Docker (the starting choice when Docker is installed) or on this machine. If the configuration is sandboxed and Docker is not running, `domyn run` does not start: it tells you how to start Docker, or how to switch to running commands on this machine, and you run it again.
+
+```yaml
+tool_bundles:
+- name: cli_tools
+  bundles:
+  - files
+  - shell
+  sandbox: docker
+  docker:
+    network: allowlist     # allowlist (default), none or open
+    allow:
+    - github.com           # added to the package registries
+```
+
+What the container can see:
+
+- **The workspace**, readable and writable, at the same path as on your machine. A file a command writes is a file in your project, owned by you.
+- **The skill folders**, read-only, because built-in skills run their scripts through `run_command`.
+- **Nothing else.** Not your home folder, your credentials, the Docker socket or your environment variables, except the names you list under `allowed_env`.
+- **Some workspace paths read-only**, because a command that could write them would reach your machine afterwards: `.git/hooks` and `.git/config` (a planted hook runs at your next `git commit`), and `.domyn`, `.agents`, `AGENTS.md` and `SOUL.md`, which are read into the next prompt. A path is masked only if it exists when the container starts.
+
+The network is limited. By default a command reaches `pypi.org`, `files.pythonhosted.org` and `registry.npmjs.org` and nothing else, through a small proxy container that refuses every other host, every other port and any name that points at a private address. A command that fails on a blocked host says which one, and `allow` adds it. `network: none` turns the network off and `network: open` removes the limit. An allowed registry is still a way out for data, so the sandbox protects your machine, not what is in the workspace.
+
+How it behaves:
+
+- **One container per conversation.** It starts the first time a command needs it, and `domyn run` prepares it while you type. The first run downloads Python and builds a small image, which takes a moment and happens once; the session says so while it does.
+- **It ends with the conversation.** `/clear`, `/resume` to another conversation and exiting stop and remove the container, and every command still running in it stops too. The session tells you when that is the case.
+- **Packages come back.** What the agent installs with `pip` is recorded in `<workspace>/.domyn/conversations/<conversation_id>/requirements.txt` and installed again when the conversation is resumed.
+- **Changed skills reach it.** Edits to files in a skill folder are seen at once. A skill folder added in the configuration, or replaced by `domyn setup`, makes the session recreate the container, unless a background command is running, in which case it waits.
+- **Approvals are unchanged.** They run in your terminal before the command is sent, so `/auto` and the deny rules work as before.
+- **The browser is not in the sandbox.** The `browser` set still runs on your machine.
+- **Python only for now.** The default image has Python and `pip`; the agent can install more packages but not system ones (`apt` needs root). Set `docker.image` to use your own image, which needs `bash`, `timeout` and `ps`.
+
 ### Browsing
 
 The `browser` set drives a real browser through [agent-browser](https://github.com/vercel-labs/agent-browser). The standalone build of domyn includes it. Otherwise install it yourself, with `npm install -g agent-browser` or `brew install agent-browser`; the setup wizard warns you when it is not on your `PATH`.

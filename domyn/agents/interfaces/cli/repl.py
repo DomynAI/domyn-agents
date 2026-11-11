@@ -319,6 +319,9 @@ class Repl:
         reload: Callable[[], Awaitable[tuple[Any, dict[str, Any]]]] | None = None,
     ) -> None:
         self._agent = agent
+        # Tasks started in the background (the sandbox's container); held so they are
+        # not collected while they run.
+        self._background: set[asyncio.Future[Any]] = set()
         self._route_browser_notices()
         # What the exit hint puts before `--resume <id>`: the agent file too, when
         # the session was started from one.
@@ -427,6 +430,11 @@ class Repl:
         """Release what the tools hold. Safe to call more than once."""
         await self._say_what_survives_us()
         self._say_where_to_find_us()
+        if self._background:
+            # A container being started in the background finishes first: cancelling
+            # it would not stop the `docker run` already sent, and it would then
+            # outlive the session.
+            await asyncio.wait(set(self._background), timeout=60)
         await self._agent.close()
 
     def _say_where_to_find_us(self) -> None:
@@ -463,6 +471,14 @@ class Repl:
             return
         if not running:
             return
+        if getattr(self._backend(), "destroys_on_close", False):
+            # In a sandbox they live in the container, which goes with the session.
+            self._console.print(
+                f"  {running}, and will be stopped: the sandbox they run in ends with this session.",
+                style=self._theme.style("warning"),
+                highlight=False,
+            )
+            return
         self._console.print(
             f"  {running} and will keep going after this session. "
             "Resume this conversation to follow them.",
@@ -482,6 +498,7 @@ class Repl:
                 style=self._theme.style("auto_mode"),
                 highlight=False,
             )
+        await self._prepare_sandbox()
 
         while True:
             # Drained before asking, so nobody is prompted for something they have
@@ -1030,7 +1047,10 @@ class Repl:
         if name == "/help":
             self._render_help()
         elif name == "/clear":
+            left = self._state.conversation_id
             self._state.reset_conversation()
+            await self._end_sandbox_conversation(left)
+            self._warm_sandbox()
             # The screen holds the conversation just left: kept, it would read as
             # part of the new one. rich's clear() leaves the scrollback, so ESC[3J
             # erases that too, after it: some terminals move the cleared screen
@@ -1116,7 +1136,10 @@ class Repl:
             if info is None:
                 return
 
+        left = self._state.conversation_id
         self._state.resume_conversation(info)
+        await self._end_sandbox_conversation(left)
+        self._warm_sandbox()
         # The screen holds the conversation that was left, and the one resumed
         # is about to be drawn in full: below it, the two would read as one.
         self._console.clear()
@@ -1441,6 +1464,7 @@ class Repl:
             attach_decisions(reloaded, decisions_runtime)
         self._agent = reloaded
         self._route_browser_notices()
+        self._warm_sandbox()
         # Written by this command: not a change for `_reload_if_changed` to redo.
         self._config_content = self._read_config()
 
@@ -1653,6 +1677,8 @@ class Repl:
             )
             return False
         self._agent, self._config = agent, raw
+        self._route_browser_notices()
+        self._warm_sandbox()
         if announce:
             self._say(f"  Reloaded {self._config_file}: it changed since the last message.")
         return True
@@ -1751,11 +1777,64 @@ class Repl:
         return resolve_transcriber(configured or {"type": "local"})
 
     def _route_browser_notices(self) -> None:
-        """Have the browser tools say, on screen, what they download on first use."""
+        """Have the browser tools and the command backend say, on screen, what they
+        download or start on first use."""
         for built in getattr(self._agent, "builtin_tools", None) or []:
             browser = getattr(built, "browser", None)
             if browser is not None:
                 browser.on_notice = self._say
+            backend = getattr(built, "backend", None)
+            if backend is not None and hasattr(backend, "on_notice"):
+                backend.on_notice = self._say
+
+    def _sandbox(self) -> Any:
+        """The command backend, when it is a sandbox (a container, not this machine)."""
+        backend = self._backend()
+        return backend if backend is not None and getattr(backend, "is_isolated", False) else None
+
+    async def _prepare_sandbox(self) -> None:
+        """Get the sandbox ready before the first prompt, saying what it is doing.
+
+        The slow part — pulling or building the image — happens once, here, under a
+        spinner and a message, rather than inside the first command the user asks
+        for. The container itself is made in the background.
+        """
+        backend = self._sandbox()
+        if backend is None:
+            return
+        try:
+            with self._console.status("Preparing the sandbox…", spinner="dots"):
+                await backend.prepare()
+        except Exception as exc:
+            self._console.print(
+                f"  Sandbox unavailable: {exc}",
+                style=self._theme.style("warning"),
+                highlight=False,
+            )
+            return
+        self._warm_sandbox()
+
+    def _warm_sandbox(self) -> None:
+        """Start the conversation's container in the background."""
+        backend = self._sandbox()
+        if backend is None:
+            return
+        task = asyncio.ensure_future(backend.warm_up(self._state.conversation_id))
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+    async def _end_sandbox_conversation(self, conversation_id: str) -> None:
+        """A conversation is over: stop and destroy what it ran in."""
+        backend = self._backend()
+        if backend is None:
+            return
+        try:
+            await backend.end_conversation(conversation_id)
+        except Exception as exc:
+            get_logger().warning(
+                f"could not end the sandbox of a conversation: {type(exc).__name__}"
+            )
+            get_logger().debug(f"end_conversation detail: {exc}")
 
     def _say(self, message: str) -> None:
         self._console.print(message, style=self._theme.style("meta"), highlight=False)

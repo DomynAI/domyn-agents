@@ -49,6 +49,7 @@ from domyn.agents.skills import (
 from domyn.agents.skills.external_files import missing_external_files
 from domyn.agents.skills.integration import attach_skills
 from domyn.agents.skills.layout import listed_path_is_linked
+from domyn.agents.tools.builtin.backends import BackendUnavailableError
 
 # markup=False for the whole session: nothing here writes rich's square-bracket
 # tags, and everything here prints text from somewhere else — tool arguments, a
@@ -248,6 +249,13 @@ async def start_session(
     """
     # Read once, for the status line and for the warning below: each listed skill file
     # is parsed here once and not once per use.
+    # Before anything is said or asked: a configuration that runs commands in a
+    # sandbox cannot do its job without one, and finding that out at the first
+    # command, after the user has typed a request, is the worse moment.
+    if not await _sandbox_is_usable(agent, theme, config_file):
+        await agent.close()
+        return 1
+
     index = await _startup_index(agent)
     if show_status:
         details = [agent.name]
@@ -309,6 +317,65 @@ async def start_session(
     if voice:
         await repl.toggle_voice()
     return await repl.run(initial_prompt)
+
+
+def _command_backends(agent: Any) -> list[Any]:
+    """The command backends of the agent and of every sub-agent that has its own."""
+    found: list[Any] = []
+    seen: set[int] = set()
+
+    def walk(one: Any) -> None:
+        if id(one) in seen:
+            return
+        seen.add(id(one))
+        for built in getattr(one, "builtin_tools", None) or []:
+            backend = getattr(built, "backend", None)
+            if backend is not None and all(backend is not b for b in found):
+                found.append(backend)
+        for sub in getattr(one, "sub_agents", None) or []:
+            walk(sub)
+
+    walk(agent)
+    return found
+
+
+async def _sandbox_is_usable(agent: Any, theme: Theme, config_file: Path | None) -> bool:
+    """Check that the sandbox the configuration asks for can be used; say what to do if not.
+
+    The session stops here rather than falling back to running commands on this
+    machine: someone who chose a sandbox and gets none, without being told, has a
+    boundary that is not there. Both ways out are named — start Docker, or switch to
+    running commands locally — and the user runs `domyn run` again.
+    """
+    for backend in _command_backends(agent):
+        try:
+            await backend.check()
+        except BackendUnavailableError as exc:
+            style = theme.style("warning")
+            console.print(f"\n  {exc.problem}", style=style, highlight=False, markup=False)
+            console.print(
+                "  Shell commands in this configuration run in a Docker sandbox, so it cannot start.",
+                style=style,
+                highlight=False,
+            )
+            if exc.fix:
+                console.print(
+                    f"\n  To use the sandbox: {exc.fix} Then run `domyn run` again.",
+                    style=style,
+                    highlight=False,
+                    markup=False,
+                )
+            where = f" in {config_file}" if config_file is not None else ""
+            console.print(
+                "\n  To run commands on this machine instead (no sandbox):\n"
+                '    - run `domyn setup` and choose "local" for where commands run '
+                f"(or set `sandbox: local` on the shell bundle{where}).\n",
+                style=style,
+                highlight=False,
+                markup=False,
+            )
+            return False
+    return True
 
 
 def _lacks_chosen_skills(config: dict[str, Any] | None, config_file: Path | None) -> bool:

@@ -1,7 +1,8 @@
 """Where a command actually runs.
 
-One backend ships here (the local machine); the interface is meant for others,
-e.g. a remote executor, implemented outside the package.
+Two backends ship here: the local machine, and a Docker container
+(``docker_backend.py``). The interface is meant for others too, e.g. a remote
+executor, implemented outside the package.
 
 Each member is there for what a remote backend needs and a local one does not:
 
@@ -38,7 +39,7 @@ import contextlib
 import os
 import signal
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -69,7 +70,16 @@ class BackendUnavailableError(RuntimeError):
 
     Raised, never swallowed into a fallback: running on the host while the user
     believes they are sandboxed turns a safety feature into a hazard.
+
+    ``problem`` says what is wrong and ``fix`` what to do about it, when the backend
+    knows: a front-end can lay them out, while ``str(error)`` has both in one line
+    for everyone else (a tool error the model reads).
     """
+
+    def __init__(self, problem: str, *, fix: str | None = None) -> None:
+        super().__init__(f"{problem} {fix}" if fix else problem)
+        self.problem = problem
+        self.fix = fix
 
 
 @dataclass(frozen=True)
@@ -111,6 +121,15 @@ class CommandBackend(ABC):
         """The background commands' folders: ``<state_dir>/processes``."""
         return f"{self.state_dir}/{StateFolders.PROCESSES}"
 
+    destroys_on_close: bool = False
+    """Whether what a command started is stopped when its conversation ends or the
+    session closes. A container backend answers ``True``: unlike the local one,
+    a command left running in it does not outlive the session."""
+
+    on_notice: Callable[[str], None] | None = None
+    """Where a backend says what it is doing that takes a while (pulling an
+    image, starting a container). The front-end sets it; ``None`` is silent."""
+
     @abstractmethod
     async def run(
         self,
@@ -141,6 +160,27 @@ class CommandBackend(ABC):
 
     async def close(self) -> None:  # noqa: B027
         """Release whatever ``start`` acquired. Must tolerate never having started."""
+
+    # The three below are defaulted and empty for the same reason as the two
+    # above, and because this class has consumers outside the repository: a
+    # method added without a default would break each of them.
+    async def check(self) -> None:  # noqa: B027
+        """Raise :class:`BackendUnavailableError` if this backend cannot be used at
+        all (Docker not installed, daemon not running). Fast, and downloads
+        nothing: a front-end calls it at start-up to refuse to run, rather than
+        discover it at the first command. Defaults to nothing."""
+
+    async def prepare(self) -> None:  # noqa: B027
+        """Do the slow, first-time part of ``start`` now, in the foreground, so the
+        front-end can say what is happening. Defaults to nothing."""
+
+    async def warm_up(self, conversation_id: str) -> None:  # noqa: B027
+        """Have what ``conversation_id`` will need ready before its first command.
+        Quiet, and must not raise: the first command meets the same failure."""
+
+    async def end_conversation(self, conversation_id: str) -> None:  # noqa: B027
+        """The conversation is over: release what it holds (a container). Defaults
+        to nothing."""
 
 
 class LocalBackend(CommandBackend):
@@ -308,6 +348,7 @@ def build_backend(
     isolate_environment: bool = True,
     allowed_env: Iterable[str] = (),
     state_dir: str | os.PathLike[str] | None = None,
+    docker: object | None = None,
 ) -> CommandBackend:
     """Resolve a backend by name.
 
@@ -322,7 +363,13 @@ def build_backend(
             allowed_env=allowed_env,
             state_dir=state_dir,
         )
+    if name == "docker":
+        # Imported here: it needs pydantic models and a module that imports this one.
+        from domyn.agents.tools.builtin.docker_backend import DockerBackend, DockerOptions
+
+        options = docker if isinstance(docker, DockerOptions) else DockerOptions()
+        return DockerBackend(workspace, options=options, allowed_env=allowed_env)
     raise BackendUnavailableError(
-        f"unknown command backend '{name}' (available: local). "
+        f"unknown command backend '{name}' (available: local, docker). "
         "Refusing to fall back to running on this machine."
     )

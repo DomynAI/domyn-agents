@@ -46,7 +46,12 @@ from domyn.agents.planner_strategy.context_management.compaction import Compacti
 from domyn.agents.skills import LocalDirSkillSource
 from domyn.agents.skills.catalog import BUILTIN_SKILLS_ROOT
 from domyn.agents.skills.layout import listed_path_is_linked
-from domyn.agents.tools.builtin import BUNDLE_TOOL_NAMES, DEFAULT_BUNDLES, BrowserOptions
+from domyn.agents.tools.builtin import (
+    BUNDLE_TOOL_NAMES,
+    DEFAULT_BUNDLES,
+    BrowserOptions,
+    DockerOptions,
+)
 
 # `DOMYN_PROJECT_DIR`, defined with the tools, which read it: always set by `use_project`, to
 # the folder that plays ~/.domyn for the session (the selected project's, else ~/.domyn
@@ -253,10 +258,9 @@ class AgentConfig(BaseModel):
     ``domyn.agents.tools.builtin``."""
 
     sandbox: str = "local"
-    """Where `run_command` runs. Only ``local`` exists today — on this machine,
-    with no isolation. Named now so an isolated backend can be selected later
-    without a config migration, and so what you are running under is visible in
-    `/config` rather than implied."""
+    """Where `run_command` runs: ``local`` (this machine, no isolation) or
+    ``docker`` (a container per conversation that can write only the workspace;
+    see ``docker`` below). Visible in `/config` rather than implied."""
 
     isolate_environment: bool = True
     """Give each conversation its own virtualenv under
@@ -285,6 +289,10 @@ class AgentConfig(BaseModel):
     """How the ``browser`` bundle launches and fences its browser. Only read
     when ``browser`` is in ``tools``, and kept when it is not, so turning
     browsing off and on again does not lose an allowlist."""
+
+    docker: DockerOptions = Field(default_factory=DockerOptions)
+    """How the Docker sandbox runs. Only read when ``sandbox`` is ``docker``, and
+    kept when it is not, so switching back and forth does not lose an allowlist."""
 
     stream: bool = True
     """Print the answer as it is generated rather than when it is finished.
@@ -886,6 +894,9 @@ def configuration_v1_dict_from(
         browser = agent.browser.model_dump(exclude_defaults=True)
         if browser:
             config["tool_bundles"][0]["browser"] = browser
+        docker = agent.docker.model_dump(exclude_defaults=True)
+        if docker:
+            config["tool_bundles"][0]["docker"] = docker
         agent_dict["tool_bundles"] = [CLI_DEFAULT_TOOL_BUNDLE_NAME]
 
     kept = _keep_unowned(config, existing)
@@ -1014,6 +1025,21 @@ def _entrypoint_agent_and_provider(raw: dict[str, Any]) -> tuple[dict[str, Any],
     return agent_dict, provider_dict
 
 
+def _docker_options(raw: Any) -> DockerOptions:
+    """The bundle's ``docker`` block, or the defaults when it cannot be read.
+    Lenient for the same reason as ``_browser_options``."""
+    if not raw:
+        return DockerOptions()
+    try:
+        return DockerOptions.model_validate(raw)
+    except ValidationError as exc:
+        get_logger().warning(
+            f"ignoring an invalid docker block in the config: {type(exc).__name__}"
+        )
+        get_logger().debug(f"docker block detail: {exc}")
+        return DockerOptions()
+
+
 def _browser_options(raw: Any) -> BrowserOptions:
     """The bundle's ``browser`` block, or the defaults when it cannot be read.
 
@@ -1083,6 +1109,7 @@ def current_settings_from(
         # here is a field every `domyn setup` and `/model` silently dropped.
         allowed_env=list(bundle.get("allowed_env") or []) if bundle else default_agent.allowed_env,
         browser=_browser_options(bundle.get("browser") if bundle else None),
+        docker=_docker_options(bundle.get("docker") if bundle else None),
         stream=agent_dict.get("stream", default_agent.stream),
         skills=agent_dict.get("skills", default_agent.skills),
         standing_instructions=agent_dict.get(
@@ -1417,6 +1444,15 @@ def _oauth_provider_items(raw: dict[str, Any]) -> list[ConfigItem]:
     return items
 
 
+def _docker_fields(options: DockerOptions) -> list[tuple[str, str]]:
+    return [
+        ("docker image", options.image),
+        ("docker network", options.network),
+        ("docker allow", ", ".join(options.allow) or "(registries only)"),
+        ("docker memory / cpus", f"{options.memory} / {options.cpus:g}"),
+    ]
+
+
 def _browser_fields(options: BrowserOptions) -> list[tuple[str, str]]:
     return [
         ("browser engine", options.engine),
@@ -1485,6 +1521,8 @@ def _tool_bundle_items(raw: dict[str, Any]) -> list[ConfigItem]:
             ("isolate_environment", str(b.get("isolate_environment", True))),
             ("allowed_env", ", ".join(b.get("allowed_env") or []) or "(none)"),
         ]
+        if str(b.get("sandbox", "local")) == "docker":
+            fields += _docker_fields(_docker_options(b.get("docker")))
         if "browser" in (b.get("bundles") or []):
             fields += _browser_fields(_browser_options(b.get("browser")))
         items.append(ConfigItem(name=str(b.get("name", "?")), fields=fields))

@@ -190,6 +190,9 @@ def _approvals_off_the_real_home(
     # The same for the tool bundles, asked after the instructions path: the step keeps
     # what the config already mounts. `test_tool_bundles_setup.py` puts it back.
     monkeypatch.setattr(cli_setup, "_choose_tools", lambda console, theme, current, **_: current)
+    # And the question after it, where shell commands run: it keeps what the config
+    # says. `test_sandbox_setup.py` puts it back.
+    monkeypatch.setattr(cli_setup, "_choose_sandbox", lambda console, theme, current, **_: current)
     # A re-run asks, before each section, whether to keep it: answered no here, so a
     # scripted re-run goes through every section's questions as it did before the
     # question existed. `test_keep_sections_setup.py` puts it back.

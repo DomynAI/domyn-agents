@@ -21,6 +21,7 @@ from __future__ import annotations
 import copy
 import os
 import shutil
+import subprocess
 from collections.abc import Callable, Collection, Iterable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -751,6 +752,84 @@ def _choose_tools(
             highlight=False,
         )
     return tools
+
+
+SANDBOXED = "sandboxed (docker)"
+LOCAL_SHELL = "local (this machine)"
+_SANDBOX_DESCRIPTIONS = {
+    SANDBOXED: "commands run in an isolated container (safest)",
+    LOCAL_SHELL: "commands run on this machine",
+}
+
+
+def _docker_installed(binary: str = "docker") -> bool:
+    return shutil.which(binary) is not None
+
+
+def _docker_answers(binary: str = "docker") -> bool:
+    """Whether the Docker daemon is up. Asked quickly: a hung daemon must not hang setup."""
+    try:
+        return (
+            subprocess.run([binary, "info"], capture_output=True, timeout=8, check=False).returncode
+            == 0
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _choose_sandbox(
+    console: Console, theme: Theme, current: str, *, first_setup: bool, docker_binary: str
+) -> str:
+    """Where the shell tool runs its commands: in a Docker sandbox, or on this machine.
+
+    Sandboxed is the starting choice, except where Docker is not installed, where it
+    would only be an answer that stops `domyn run`. A re-run starts on what the config
+    says. The choice is only made here and written as ``sandbox``; whether Docker is
+    up is checked every time ``domyn run`` starts, and a warning here is only a heads-up.
+
+    Raises ``KeyboardInterrupt`` when the picker is aborted, like every other question.
+    """
+    installed = _docker_installed(docker_binary)
+    if first_setup:
+        start = SANDBOXED if installed else LOCAL_SHELL
+    else:
+        start = SANDBOXED if current == "docker" else LOCAL_SHELL
+
+    console.print()
+    chosen = _select(
+        console,
+        theme,
+        "Where should shell commands run?",
+        [SANDBOXED, LOCAL_SHELL],
+        current=start,
+        descriptions=_SANDBOX_DESCRIPTIONS,
+        max_tries=3,
+    )
+    if chosen is None:
+        raise KeyboardInterrupt
+
+    sandbox = "docker" if chosen == SANDBOXED else "local"
+    console.print(
+        "  Commands: sandboxed in Docker" if sandbox == "docker" else "  Commands: on this machine",
+        style=theme.style("meta"),
+        highlight=False,
+    )
+    if sandbox == "docker":
+        if not installed:
+            console.print(
+                "  Docker was not found. Install it from https://docs.docker.com/get-docker/ "
+                "before `domyn run`, or choose local.",
+                style=theme.style("warning"),
+                highlight=False,
+            )
+        elif not _docker_answers(docker_binary):
+            console.print(
+                "  Docker is installed but not running. Start it before `domyn run`: "
+                "`domyn run` stops with instructions while it is down.",
+                style=theme.style("warning"),
+                highlight=False,
+            )
+    return sandbox
 
 
 def _choose_project_skills(
@@ -1725,6 +1804,15 @@ def run_setup(
             browser_binary=d.agent.browser.binary,
         )
 
+    def choose_sandbox(d: _Draft) -> None:
+        d.agent.sandbox = _choose_sandbox(
+            console,
+            theme,
+            d.agent.sandbox,
+            first_setup=first_setup,
+            docker_binary=d.agent.docker.docker_binary,
+        )
+
     def keep_skills(d: _Draft) -> None:
         d.keep_skills = _keep(console, theme, "skills", _source_paths(d.agent.skills))
 
@@ -1816,6 +1904,11 @@ def run_setup(
         _Step("extra instructions", ask_instruction, lambda d: not d.keep_instructions),
         _Step("keep tools", keep_tools, lambda d: ask_keep),
         _Step("tools", choose_tools, lambda d: not d.keep_tools),
+        _Step(
+            "sandbox",
+            choose_sandbox,
+            lambda d: not d.keep_tools and "shell" in d.agent.tools,
+        ),
         _Step("keep skills", keep_skills, lambda d: ask_keep),
         _Step("skills", choose_listed_skills, lambda d: not d.keep_skills),
         _Step("custom skills", choose_custom_skills, lambda d: not d.keep_skills),

@@ -19,11 +19,11 @@ at construction, so a tool physically cannot reach outside it — the root is no
 an argument the model can pass.
 
 Where commands run is a separate axis, the
-:class:`~domyn.agents.tools.builtin.backends.CommandBackend`. Only the local one
-exists today; :func:`bundle` accepts one and returns it via :class:`BuiltinTools`
-so the caller can shut it down, because the backend that will eventually need
-shutting down is a container and finding the end of a session later, under
-pressure, is how teardown gets forgotten.
+:class:`~domyn.agents.tools.builtin.backends.CommandBackend`. Two ship: the local
+machine, and a Docker container (``sandbox: docker``, ``docker_backend.py``).
+:func:`bundle` accepts one and returns it via :class:`BuiltinTools` so the caller
+can shut it down, because a container has to be removed and finding the end of a
+session later, under pressure, is how teardown gets forgotten.
 
 The ``browser`` bundle runs on that same backend — every browser command is a
 shell line — so it goes wherever the shell goes. It is known but never on by
@@ -49,6 +49,7 @@ from domyn.agents.tools.builtin.backends import (
 )
 from domyn.agents.tools.builtin.browser import browser_tools
 from domyn.agents.tools.builtin.browser_sessions import BrowserOptions, BrowserSessions
+from domyn.agents.tools.builtin.docker_backend import DockerOptions
 from domyn.agents.tools.builtin.files import file_tools
 from domyn.agents.tools.builtin.shell import run_command_tool, shell_tools
 from domyn.agents.tools.builtin.workspace import Workspace, WorkspaceError, is_ignored
@@ -173,9 +174,14 @@ def bundle(
             tools.extend(shell_tools(space, backend=resolved))
         elif name == "browser":
             # The same backend as the shell, so the browser is wherever the
-            # commands are — on this machine, or in the sandbox.
+            # commands are — except in a container, which has no agent-browser or
+            # Chrome: there the browser stays on this machine, unsandboxed.
             resolved = resolved or LocalBackend(space, allowed_env=allowed_env)
-            browser_list, sessions = browser_tools(backend=resolved, options=browser)
+            browser_backend = resolved
+            if resolved.is_isolated:
+                get_logger().warning("the browser bundle runs on this machine, outside the sandbox")
+                browser_backend = LocalBackend(space, allowed_env=allowed_env)
+            browser_list, sessions = browser_tools(backend=browser_backend, options=browser)
             tools.extend(browser_list)
         else:
             get_logger().warning(
@@ -214,6 +220,8 @@ class BuiltinBundleConfig(BaseModel):
     here."""
     browser: BrowserOptions = PydanticField(default_factory=BrowserOptions)
     """Options for the ``browser`` bundle; ignored unless it is listed."""
+    docker: DockerOptions = PydanticField(default_factory=DockerOptions)
+    """Options for the Docker sandbox; ignored unless ``sandbox: docker``."""
 
     def build(
         self,
@@ -241,6 +249,7 @@ class BuiltinBundleConfig(BaseModel):
             space,
             isolate_environment=self.isolate_environment,
             allowed_env=self.allowed_env,
+            docker=self.docker,
         )
         return bundle(*self.bundles, workspace=space, backend=backend, browser=self.browser)
 
@@ -257,6 +266,7 @@ __all__ = [
     "BuiltinTools",
     "CommandBackend",
     "CommandResult",
+    "DockerOptions",
     "LocalBackend",
     "Workspace",
     "WorkspaceError",
