@@ -106,7 +106,7 @@ The folders are declared once, under `resources`, and the agent names them by id
 
 A configuration written before resources existed (`tool_bundles: [cli_tools]`, `workspace` on the bundle, or skills and instructions with `type: local_dir`) no longer loads: `domyn run` names the line to change. Run `domyn setup` again to rewrite it.
 
-`domyn export` keeps `autodiscovery` as it is, so the exported project still reads the `.domyn` and `.agents` of wherever it runs, and adds what they held when you exported, copied into the project, as `autodiscovery_export`, read beside it.
+`domyn export` keeps `autodiscovery` as it is, so the exported project still reads the `.domyn` and `.agents` of wherever it runs. What they held when you exported is copied into the project and added to its own `skills` and `instructions`, after what the running folder holds and before your own skills, so an import shows them, and can drop them, like any of yours.
 
 The settings you are most likely to change:
 

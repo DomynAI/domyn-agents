@@ -390,12 +390,8 @@ class TestAutodiscovery:
     def test_an_entry_setup_does_not_own_is_kept_in_its_place(self, monkeypatch: Any) -> None:
         self._real(monkeypatch)
         raw = _written(skills=_local(".domyn/skills", "/me/review"))
-        raw["resources"].append(
-            {"id": "autodiscovery_export", "type": "local_dir", "paths": ["/p/resources/domyn"]}
-        )
-        raw["agents"][0]["skills"]["source"]["resource"].insert(
-            1, {"id": "autodiscovery_export", "path": "skills"}
-        )
+        raw["resources"].append({"id": "team", "type": "local_dir", "paths": ["/team"]})
+        raw["agents"][0]["skills"]["source"]["resource"].insert(1, {"id": "team", "path": "skills"})
 
         _, agent, _ = cfg.current_settings_from(raw)
         rerun = cfg.configuration_v1_dict_from(
@@ -407,10 +403,10 @@ class TestAutodiscovery:
 
         assert rerun["agents"][0]["skills"]["source"]["resource"] == [
             {"id": "autodiscovery", "path": "skills"},
-            {"id": "autodiscovery_export", "path": "skills"},
+            {"id": "team", "path": "skills"},
             "skills",
         ]
-        assert "autodiscovery_export" in {r["id"] for r in rerun["resources"]}
+        assert "team" in {r["id"] for r in rerun["resources"]}
 
     def test_autodiscover_off_keeps_the_instructions_use(self, monkeypatch: Any) -> None:
         """The two share the resource: turning skills off leaves it to instructions."""

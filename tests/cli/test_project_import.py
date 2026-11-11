@@ -6,6 +6,7 @@ import platform
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -531,7 +532,11 @@ class TestTheImportedInstructions:
             _console(), THEME, self._current(project), discard=discard
         )
 
-        assert discard == [project / "instructions"]
+        # The files the folder contributes, never the folder: it may hold skills too.
+        assert discard == [
+            project / "instructions" / "SOUL.md",
+            project / "instructions" / "AGENTS.md",
+        ]
         assert (project / "instructions" / "SOUL.md").is_file()
 
     def test_an_undeclared_file_is_not_the_project_s_and_stays(
@@ -796,3 +801,35 @@ class TestTheCommand:
         assert result.exit_code == 1
         assert "--import cannot be combined with --show" in result.output
         assert not cfg.projects_dir().exists()
+
+
+class TestErasingImportedInstructions:
+    """Only instruction files are deleted, never a folder: an export puts what one
+    folder holds in one place, so the folder of an instruction may hold skills too."""
+
+    def test_a_folder_loses_its_instructions_and_keeps_its_skills(self, tmp_path: Path) -> None:
+        folder = tmp_path / "project" / "resources" / "domyn"
+        _skill(folder / "skills" / "essay", "essay")
+        (folder / "SOUL.md").write_text("soul\n")
+        (folder / "deep").mkdir()
+        (folder / "deep" / "AGENTS.md").write_text("deep\n")
+        current = {
+            "source": {
+                "type": "local_dir",
+                "paths": [str(folder), str(folder / "deep" / "AGENTS.md")],
+            }
+        }
+        discard: list[Path] = []
+
+        with patch.object(cli_setup, "_choose_instructions", lambda *_: None):
+            cli_setup._choose_imported_instructions(_console(), THEME, current, discard=discard)
+        for path in discard:
+            cli_setup._discard_imported(path, tmp_path / "project")
+
+        assert sorted(p.relative_to(folder).as_posix() for p in discard) == [
+            "SOUL.md",
+            "deep/AGENTS.md",
+        ]
+        assert not (folder / "SOUL.md").exists()
+        assert not (folder / "deep").exists(), "a folder left empty goes too"
+        assert (folder / "skills" / "essay" / "SKILL.md").is_file()
