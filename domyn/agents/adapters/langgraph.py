@@ -228,7 +228,8 @@ class LangGraphAdapter:
 
         This method is called by ``PlatformTool._arun`` through the bound
         ``PlatformRelay``, with the model's ``thought`` for the call when the
-        callback handler kept one: this TOOL_START is the one the platform renders.  ``emit_priority`` is retrieved from a ``ContextVar``
+        callback handler kept one: this TOOL_START is the one forwarded for a
+        delegate tool call. ``emit_priority`` is retrieved from a ``ContextVar``
         so concurrent invocations each use their own closure.
         """
         ctx = invocation_ctx.get()

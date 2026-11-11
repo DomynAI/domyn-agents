@@ -63,9 +63,10 @@ class PlatformRelay:
     on startup via ``bind()``/``unbind()``; calls before binding raise.
 
     Any object exposing an async ``call_platform_tool(name, kwargs, thought=...)``
-    method can be bound here (``thought`` is the model's thought for the call,
-    ``None`` when it gave none, and is always passed) (duck-typed on purpose, so this relay works with both
-    ``LangGraphAdapter`` and any future adapter with the same contract).
+    method can be bound here, duck-typed on purpose so this relay works with both
+    ``LangGraphAdapter`` and any future adapter with the same contract. ``thought``
+    is the model's thought for the call, ``None`` when it gave none, and is always
+    passed.
     """
 
     def __init__(self) -> None:
@@ -121,23 +122,23 @@ class PlatformTool(BaseTool):
         # rejecting `"cloudId": null` with "expected: string, received: null").
         kwargs = {k: v for k, v in kwargs.items() if v is not None}
         return await self._relay.call_platform_tool(
-            self.name, kwargs, thought=_platform_thought(run_manager)
+            self.name, kwargs, thought=_delegate_thought(run_manager)
         )
 
 
-def _platform_thought(run_manager: AsyncCallbackManagerForToolRun | None) -> str | None:
+def _delegate_thought(run_manager: AsyncCallbackManagerForToolRun | None) -> str | None:
     """The model's thought for this tool call, from the callback handler that kept it.
 
     ``PlatformCallbackHandler.on_tool_start`` (awaited before ``_arun``) keeps the
     thought of the model response that made this call under the tool's run id. The
-    handler does not emit a platform tool's TOOL_START, the adapter does, so the
-    thought has to reach the call this way. Duck-typed: the handler module imports
+    handler does not emit a delegate tool's TOOL_START, the adapter forwards it, so
+    the thought has to reach the call this way. Duck-typed: the handler module imports
     this one.
     """
     if run_manager is None:
         return None
     for handler in [*run_manager.handlers, *run_manager.inheritable_handlers]:
-        take = getattr(handler, "take_platform_thought", None)
+        take = getattr(handler, "take_delegate_thought", None)
         if take is not None:
             thought = take(run_manager.run_id)
             if thought:

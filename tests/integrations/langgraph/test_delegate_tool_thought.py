@@ -1,8 +1,8 @@
-"""The model's thought reaches a platform tool's TOOL_START under LangGraph.
+"""The model's thought reaches a delegate tool's TOOL_START under LangGraph.
 
-The callback handler does not emit a platform tool's TOOL_START (the adapter
-does), so it used to return before taking the thought it had stashed for that
-call: the platform got thought=None, and the thought stayed in
+The callback handler does not emit a delegate tool's TOOL_START (the adapter
+forwards it), so it used to return before taking the thought it had stashed for
+that call: the TOOL_START was forwarded with thought=None, and the thought stayed in
 ``_pending_thoughts``. Now the handler keeps it under the tool's run id and
 ``PlatformTool._arun`` hands it to the relay.
 """
@@ -62,7 +62,7 @@ async def _handler_with_thought(thought: str, tool_call_id: str) -> PlatformCall
 
 
 @pytest.mark.asyncio
-async def test_platform_tool_call_carries_the_thought() -> None:
+async def test_delegate_tool_call_carries_the_thought() -> None:
     tool, runtime = _tool_and_runtime()
     handler = await _handler_with_thought("Let me search for that.", "t1")
 
@@ -74,7 +74,7 @@ async def test_platform_tool_call_carries_the_thought() -> None:
     assert runtime.calls == [("web_search", {"query": "news"}, "Let me search for that.")]
     # Consumed, not left behind for the handler's lifetime.
     assert handler._pending_thoughts == {}
-    assert handler._platform_thoughts == {}
+    assert handler._delegate_thoughts == {}
 
 
 @pytest.mark.asyncio
@@ -91,7 +91,7 @@ async def test_a_call_from_another_response_gets_no_thought() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_platform_tool_invoked_directly_still_works() -> None:
+async def test_a_delegate_tool_invoked_directly_still_works() -> None:
     tool, runtime = _tool_and_runtime()
     assert await tool.ainvoke({"query": "news"}) == "result"
     assert runtime.calls == [("web_search", {"query": "news"}, None)]

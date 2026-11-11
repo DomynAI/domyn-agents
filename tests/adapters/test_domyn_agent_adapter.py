@@ -380,8 +380,8 @@ async def test_delegate_tool_relay_round_trip_via_real_runner() -> None:
     await adapter.close()
 
 
-async def _platform_tool_start(planner: Any, reasoning: str | None) -> BaseEvent:
-    """Run one turn calling a relay-backed DelegateTool; the TOOL_START sent to the platform."""
+async def _delegate_tool_start(planner: Any, reasoning: str | None) -> BaseEvent:
+    """Run one turn calling a relay-backed DelegateTool; the TOOL_START forwarded for it."""
     tool = DelegateTool(
         tool_name="search",
         tool_description="search",
@@ -418,11 +418,11 @@ async def _platform_tool_start(planner: Any, reasoning: str | None) -> BaseEvent
 
 
 @pytest.mark.asyncio
-async def test_platform_tool_start_carries_the_models_thought() -> None:
+async def test_delegate_tool_start_carries_the_models_thought() -> None:
     """The runner's TOOL_START (the one with the thought) is not forwarded for a
-    delegate tool, so the adapter's own TOOL_START has to carry it: it is the one
-    the platform renders. It used to go out with thought=None."""
-    tool_start = await _platform_tool_start(
+    delegate tool, so the adapter's own TOOL_START has to carry it. It used to be
+    forwarded with thought=None."""
+    tool_start = await _delegate_tool_start(
         ToolUseWithThoughtPlannerStrategy(), reasoning="I should search the knowledge base."
     )
     assert isinstance(tool_start.action, ToolAction)
@@ -431,14 +431,14 @@ async def test_platform_tool_start_carries_the_models_thought() -> None:
 
 
 @pytest.mark.asyncio
-async def test_platform_tool_start_without_a_thought() -> None:
-    tool_start = await _platform_tool_start(ToolUsePlannerStrategy(), reasoning=None)
+async def test_delegate_tool_start_without_a_thought() -> None:
+    tool_start = await _delegate_tool_start(ToolUsePlannerStrategy(), reasoning=None)
     assert isinstance(tool_start.action, ToolAction)
     assert tool_start.action.thought is None
 
 
 @pytest.mark.asyncio
-async def test_platform_tool_start_carries_invocation_correlation_ids() -> None:
+async def test_delegate_tool_start_carries_invocation_correlation_ids() -> None:
     """The relay TOOL_START must carry the INBOUND AGENT_START's correlation ids.
 
     The relay routes frames to the platform by conversation_id, turn_id feeds
@@ -451,7 +451,7 @@ async def test_platform_tool_start_carries_invocation_correlation_ids() -> None:
     has rewritten the event in place with the runner's own freshly minted
     interaction_id, so the TOOL_START went out under an interaction the platform
     had never issued. Mirrors the sibling
-    test_langgraph_adapter.py::test_platform_tool_start_carries_invocation_correlation_ids.
+    test_langgraph_adapter.py::test_delegate_tool_start_carries_invocation_correlation_ids.
     """
     tool = DelegateTool(
         tool_name="search",

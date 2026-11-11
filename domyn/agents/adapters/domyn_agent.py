@@ -300,9 +300,9 @@ class DomynAgentAdapter:
                 # duplicate TOOL_START and then a TOOL_END for a call it cannot
                 # match. The model's thought, which only the runner's TOOL_START
                 # carries, reaches _make_tool_call through DelegateTool.execute
-                # (the `tool_action` the runner passes) and rides on the adapter's
-                # own TOOL_START instead. TOOL_ERROR is deliberately still forwarded: that one
-                # reports a local failure (e.g. the relay round trip itself
+                # (the `tool_action` the runner passes) and is forwarded on the
+                # adapter's own TOOL_START instead. TOOL_ERROR is deliberately
+                # still forwarded: that one reports a local failure (e.g. the relay round trip itself
                 # failing), which is information the platform does not already have.
                 if (
                     ev.event_type in (ExecutionEventType.TOOL_START, ExecutionEventType.TOOL_END)

@@ -323,7 +323,7 @@ async def test_call_platform_tool_round_trip() -> None:
 
 @pytest.mark.asyncio
 async def test_call_platform_tool_puts_the_thought_on_tool_start() -> None:
-    """The adapter's TOOL_START is the one the platform renders a thought from."""
+    """The TOOL_START the adapter forwards for a delegate tool call carries the thought."""
     relay = PlatformRelay()
     adapter: LangGraphAdapter
 
