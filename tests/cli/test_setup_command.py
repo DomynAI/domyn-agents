@@ -15,7 +15,6 @@ from domyn.agents.interfaces.cli import select as select_mod
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(cfg, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
-    monkeypatch.setattr(cfg, "PROJECT_DIR", tmp_path / "project" / ".domyn")
     for name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "LLM_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     return tmp_path

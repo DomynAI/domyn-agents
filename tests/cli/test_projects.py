@@ -29,7 +29,6 @@ _REAL_APPROVALS_PATHS = cfg.approvals_paths
 @pytest.fixture(autouse=True)
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(cfg, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
-    monkeypatch.setattr(cfg, "PROJECT_DIR", tmp_path / "nowhere" / ".domyn")
     # The real autodiscovery entries, which the CLI conftest points nowhere: these
     # tests need to tell them apart from a project's own `skills/` folder.
     monkeypatch.setattr(cfg, "LOCAL_SKILLS_DIRS", (Path(".domyn/skills"), Path(".agents/skills")))
@@ -103,9 +102,6 @@ class TestSelecting:
 
     def test_the_folder_stands_in_for_the_home_one(self, home: Path) -> None:
         folder = _write_project("p", _config())
-        # Even with a `./.domyn` config present, which otherwise wins.
-        cfg.PROJECT_DIR.mkdir(parents=True)
-        (cfg.PROJECT_DIR / cfg.CONFIG_FILENAME).write_text("{}", encoding="utf-8")
 
         cfg.use_project("p")
 

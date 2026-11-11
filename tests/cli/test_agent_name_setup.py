@@ -26,7 +26,6 @@ _REAL_ASK = setup._ask
 @pytest.fixture(autouse=True)
 def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cfg, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
-    monkeypatch.setattr(cfg, "PROJECT_DIR", tmp_path / "nowhere" / ".domyn")
     monkeypatch.setattr(select_mod, "_interactive", lambda theme: False)
     monkeypatch.setattr(setup, "_ask", _REAL_ASK)
     monkeypatch.setattr(

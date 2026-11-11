@@ -27,7 +27,6 @@ _REAL_TOOLS_STEP = setup._choose_tools
 @pytest.fixture(autouse=True)
 def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cfg, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
-    monkeypatch.setattr(cfg, "PROJECT_DIR", tmp_path / "nowhere" / ".domyn")
     monkeypatch.setattr(select_mod, "_interactive", lambda theme: False)
     monkeypatch.setattr(setup, "_choose_tools", _REAL_TOOLS_STEP)
     for name in ("OPENAI_API_KEY", "LLM_API_KEY"):

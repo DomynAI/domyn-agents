@@ -26,24 +26,29 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     real ~/.domyn.
     """
     monkeypatch.setattr(cfg, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
-    monkeypatch.setattr(cfg, "PROJECT_DIR", tmp_path / "project" / ".domyn")
     for name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "LLM_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     return tmp_path
 
 
 class TestConfigLocation:
-    def test_project_config_wins_over_global(self) -> None:
-        """Project-local wins so a repo can pin its own model without touching
-        the user's global setup."""
+    def test_a_config_in_the_folder_it_runs_in_is_not_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without ``--project`` the config is always ``~/.domyn``'s: a cloned
+        repository's ``./.domyn/config.yaml`` must not choose the session's model,
+        tools or skills."""
         (cfg.GLOBAL_DIR).mkdir(parents=True)
         (cfg.GLOBAL_DIR / cfg.CONFIG_FILENAME).write_text("entrypoint: Global\n")
-        (cfg.PROJECT_DIR).mkdir(parents=True)
-        (cfg.PROJECT_DIR / cfg.CONFIG_FILENAME).write_text("entrypoint: Project\n")
+        cwd = tmp_path / "repo"
+        (cwd / ".domyn").mkdir(parents=True)
+        (cwd / ".domyn" / cfg.CONFIG_FILENAME).write_text("entrypoint: Project\n")
+        monkeypatch.chdir(cwd)
 
+        assert cfg.config_path() == cfg.GLOBAL_DIR / cfg.CONFIG_FILENAME
         raw = cfg.read_raw_config()
         assert raw is not None
-        assert raw["entrypoint"] == "Project"
+        assert raw["entrypoint"] == "Global"
 
     def test_missing_config_returns_none(self) -> None:
         assert cfg.read_raw_config() is None

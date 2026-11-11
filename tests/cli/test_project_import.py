@@ -34,7 +34,6 @@ BUILTIN = list_builtin_skills()[0]
 @pytest.fixture(autouse=True)
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(cfg, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
-    monkeypatch.setattr(cfg, "PROJECT_DIR", tmp_path / "nowhere" / ".domyn")
     # Where setup really installs: the selected project's own `builtin-skills/`, which
     # the CLI conftest points elsewhere for every test.
     monkeypatch.setattr(cli_setup, "skills_install_dir", lambda: cfg.home_dir() / BUILTINS)

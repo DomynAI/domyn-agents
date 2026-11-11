@@ -34,7 +34,6 @@ _REAL_LOCAL_STEP = setup._choose_local_instructions
 @pytest.fixture(autouse=True)
 def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cfg, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
-    monkeypatch.setattr(cfg, "PROJECT_DIR", tmp_path / "nowhere" / ".domyn")
     monkeypatch.setattr(select_mod, "_interactive", lambda theme: False)
     monkeypatch.setattr(setup, "_choose_instructions", _REAL_PATH_STEP)
     monkeypatch.setattr(setup, "_choose_local_instructions", _REAL_LOCAL_STEP)
