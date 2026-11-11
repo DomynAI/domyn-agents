@@ -168,6 +168,12 @@ class TestPromptDisambiguation:
 
         assert _looks_like_agent_file(target) is True
 
+    @pytest.mark.parametrize("value", ["a" * 300, "explain this " * 40 + "in main.py"])
+    def test_a_prompt_too_long_for_a_file_name_is_a_prompt(self, value: str) -> None:
+        from domyn.agents.cli.commands.run.command import _looks_like_agent_file
+
+        assert _looks_like_agent_file(Path(value)) is False
+
 
 class TestIsConfigurationV1UsableWithoutAnExplicitEntrypoint:
     """Without `entrypoint:`, the raw dict is unordered — dependency reordering
