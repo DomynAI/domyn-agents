@@ -11,7 +11,7 @@ import yaml
 
 from domyn.agents.interfaces.cli import config as cli_config
 from domyn.agents.interfaces.cli import state as cli_state
-from domyn.agents.interfaces.cli.export import is_private
+from domyn.agents.interfaces.cli.export import PrivatePlaces, is_private
 from domyn.agents.interfaces.cli.state import CliState
 from tests.cli.test_repl_session import _repl
 
@@ -101,4 +101,4 @@ class TestWhereItLives:
 
 class TestExport:
     def test_the_state_is_never_exported(self, tmp_path: Path) -> None:
-        assert is_private(tmp_path / "state.yaml")
+        assert is_private(tmp_path / "state.yaml", PrivatePlaces.now())
