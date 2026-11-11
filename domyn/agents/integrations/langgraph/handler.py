@@ -409,6 +409,18 @@ class PlatformCallbackHandler(AsyncCallbackHandler):
         # rather than a single mutable slot — avoids cross-attribution across
         # parallel branches and stale carry-over between turns.
         self._pending_thoughts: dict[str, str] = {}
+        # The same preamble for a platform tool, moved here from _pending_thoughts
+        # by on_tool_start and keyed by the tool's run_id: the adapter sends that
+        # tool's TOOL_START, and PlatformTool._arun takes the thought from here
+        # (take_platform_thought) to put on it.
+        self._platform_thoughts: dict[UUID, str] = {}
+
+    def take_platform_thought(self, run_id: UUID) -> str | None:
+        """The model's thought for the platform tool run ``run_id``, once.
+
+        Called by ``PlatformTool._arun``, after ``on_tool_start`` for the same run.
+        """
+        return self._platform_thoughts.pop(run_id, None)
 
     async def aclose(self) -> None:
         return None
@@ -741,6 +753,14 @@ class PlatformCallbackHandler(AsyncCallbackHandler):
         node_name = (metadata or {}).get("langgraph_node")
         if PLATFORM_TOOL_TAG in tags:
             self._platform_tool_runs.add(run_id)
+            # Popped here or never: this TOOL_START is not ours to emit, and a
+            # thought left behind would sit in _pending_thoughts for good.
+            platform_tc_id = kwargs.get("tool_call_id")
+            platform_thought = (
+                self._pending_thoughts.pop(platform_tc_id, None) if platform_tc_id else None
+            )
+            if platform_thought:
+                self._platform_thoughts[run_id] = platform_thought
             if node_name and node_name in self._node_run_by_name:
                 self._node_agent_children.add(self._node_run_by_name[node_name])
             return
@@ -790,6 +810,7 @@ class PlatformCallbackHandler(AsyncCallbackHandler):
     ) -> None:
         if run_id in self._platform_tool_runs:
             self._platform_tool_runs.discard(run_id)
+            self._platform_thoughts.pop(run_id, None)
             return
         state, _ = self._registry.end(run_id=run_id, output=output, end_time=time.time())
         tool_name = self._tool_names.pop(run_id, "tool")
@@ -858,6 +879,7 @@ class PlatformCallbackHandler(AsyncCallbackHandler):
     ) -> None:
         if run_id in self._platform_tool_runs:
             self._platform_tool_runs.discard(run_id)
+            self._platform_thoughts.pop(run_id, None)
             return
         state, _ = self._registry.error(run_id=run_id, error=error, end_time=time.time())
         tool_name = self._tool_names.pop(run_id, "tool")

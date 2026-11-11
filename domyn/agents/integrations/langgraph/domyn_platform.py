@@ -8,6 +8,7 @@ TOOL_ERROR arrives back, keyed by ``ToolAction.call_id``.
 
 from typing import Any
 
+from langchain_core.callbacks import AsyncCallbackManagerForToolRun
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, PrivateAttr, create_model
 
@@ -61,8 +62,9 @@ class PlatformRelay:
     The adapter (e.g. ``LangGraphAdapter``) later binds itself to that relay
     on startup via ``bind()``/``unbind()``; calls before binding raise.
 
-    Any object exposing an async ``call_platform_tool(name, kwargs)`` method
-    can be bound here (duck-typed on purpose, so this relay works with both
+    Any object exposing an async ``call_platform_tool(name, kwargs, thought=...)``
+    method can be bound here (``thought`` is the model's thought for the call,
+    ``None`` when it gave none, and is always passed) (duck-typed on purpose, so this relay works with both
     ``LangGraphAdapter`` and any future adapter with the same contract).
     """
 
@@ -76,10 +78,12 @@ class PlatformRelay:
         if self._runtime is runtime:
             self._runtime = None
 
-    async def call_platform_tool(self, name: str, kwargs: dict[str, Any]) -> Any:
+    async def call_platform_tool(
+        self, name: str, kwargs: dict[str, Any], thought: str | None = None
+    ) -> Any:
         if self._runtime is None:
             raise RuntimeError(f"PlatformRelay is not bound to a Runtime; cannot invoke {name!r}")
-        return await self._runtime.call_platform_tool(name, kwargs)
+        return await self._runtime.call_platform_tool(name, kwargs, thought=thought)
 
 
 _default_relay = PlatformRelay()
@@ -105,7 +109,9 @@ class PlatformTool(BaseTool):
     def _run(self, **kwargs: Any) -> Any:
         raise NotImplementedError("Platform tools must be invoked asynchronously")
 
-    async def _arun(self, **kwargs: Any) -> Any:
+    async def _arun(
+        self, run_manager: AsyncCallbackManagerForToolRun | None = None, **kwargs: Any
+    ) -> Any:
         # Optional params the LLM leaves unset are still present here (Pydantic
         # fills unfilled optional fields with their None default per
         # _build_args_schema), so without this filter every omitted optional
@@ -114,7 +120,29 @@ class PlatformTool(BaseTool):
         # "may be null", and reject the latter (e.g. a strict MCP server
         # rejecting `"cloudId": null` with "expected: string, received: null").
         kwargs = {k: v for k, v in kwargs.items() if v is not None}
-        return await self._relay.call_platform_tool(self.name, kwargs)
+        return await self._relay.call_platform_tool(
+            self.name, kwargs, thought=_platform_thought(run_manager)
+        )
+
+
+def _platform_thought(run_manager: AsyncCallbackManagerForToolRun | None) -> str | None:
+    """The model's thought for this tool call, from the callback handler that kept it.
+
+    ``PlatformCallbackHandler.on_tool_start`` (awaited before ``_arun``) keeps the
+    thought of the model response that made this call under the tool's run id. The
+    handler does not emit a platform tool's TOOL_START, the adapter does, so the
+    thought has to reach the call this way. Duck-typed: the handler module imports
+    this one.
+    """
+    if run_manager is None:
+        return None
+    for handler in [*run_manager.handlers, *run_manager.inheritable_handlers]:
+        take = getattr(handler, "take_platform_thought", None)
+        if take is not None:
+            thought = take(run_manager.run_id)
+            if thought:
+                return str(thought)
+    return None
 
 
 class PlatformToolRegistry:

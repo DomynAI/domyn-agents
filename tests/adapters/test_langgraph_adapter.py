@@ -321,6 +321,32 @@ async def test_call_platform_tool_round_trip() -> None:
     await adapter.close()
 
 
+@pytest.mark.asyncio
+async def test_call_platform_tool_puts_the_thought_on_tool_start() -> None:
+    """The adapter's TOOL_START is the one the platform renders a thought from."""
+    relay = PlatformRelay()
+    adapter: LangGraphAdapter
+
+    async def _call_tool_mid_invoke() -> None:
+        await relay.call_platform_tool("search", {"query": "hi"}, thought="Searching first.")
+
+    runnable = _StubRunnable(result={"result": "done"}, on_ainvoke=_call_tool_mid_invoke)
+    adapter = LangGraphAdapter(runnable, platform_relay=relay)
+    _emitted, priority, emit, emit_priority = _make_emitters()
+    await adapter.invoke(_agent_start("conv-thought"), emit, emit_priority)
+
+    tool_starts: list[BaseEvent] = []
+    for _ in range(20):
+        tool_starts = [e for e in priority if e.event_type == ExecutionEventType.TOOL_START]
+        if tool_starts:
+            break
+        await asyncio.sleep(0.05)
+    assert tool_starts, "Expected a TOOL_START event"
+    assert isinstance(tool_starts[0].action, ToolAction)
+    assert tool_starts[0].action.thought == "Searching first."
+    await adapter.close()
+
+
 # ---------------------------------------------------------------------------
 # Long multi-turn conversation against a REAL LangGraph graph + checkpointer
 # ---------------------------------------------------------------------------
