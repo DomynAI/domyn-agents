@@ -772,7 +772,12 @@ class TestNoCallBlocksForever:
     async def test_a_quick_command_barely_touches_the_budget(self, tmp_path: Path) -> None:
         tools = {t.name: t for t in bundle("shell", root=tmp_path)}
         started = await tools["run_command"].execute(
-            command="sleep 2", timeout=1, state={}, conversation_id="c1"
+            # Longer on Windows, where starting it in Git Bash can take longer
+            # than the yield, and it would end before going to the background.
+            command=f"sleep {6 if os.name == 'nt' else 2}",
+            timeout=1,
+            state={},
+            conversation_id="c1",
         )
         state = started.state or {}
         handle = next(iter(processes.registry(state)))
@@ -875,7 +880,12 @@ class TestWhatIsShownWhileWaiting:
 
         tools = {t.name: t for t in bundle("shell", root=tmp_path)}
         started = await tools["run_command"].execute(
-            command="sleep 2", timeout=1, state={}, conversation_id="c1"
+            # Longer on Windows, where starting it in Git Bash can take longer
+            # than the yield, and it would end before going to the background.
+            command=f"sleep {6 if os.name == 'nt' else 2}",
+            timeout=1,
+            state={},
+            conversation_id="c1",
         )
         state = started.state or {}
         handle = next(iter(processes.registry(state)))
