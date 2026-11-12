@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from domyn.agents.core import METADATA_PARAMETERS_BEFORE_USER_EDIT, ExecutionEventType
+from domyn.agents.core import METADATA_INITIAL_PARAMETERS, ExecutionEventType
 from domyn.agents.logger import get_logger
 
 if TYPE_CHECKING:
@@ -56,22 +56,22 @@ def append_user_edit_note(tool_result: Any, tool_result_event: BaseEvent) -> Any
     Added where the result is rendered for a model, never to the stored result: the
     note is an instruction to the model, and the stored result is what users see.
     """
-    proposed_parameters = tool_result_event.metadata.get(METADATA_PARAMETERS_BEFORE_USER_EDIT)
-    executed_action: Any = tool_result_event.action  # mypy reads `BaseEvent.action` as `None`
-    if proposed_parameters is None or executed_action is None:
+    initial_parameters = tool_result_event.metadata.get(METADATA_INITIAL_PARAMETERS)
+    final_action: Any = tool_result_event.action  # mypy reads `BaseEvent.action` as `None`
+    if initial_parameters is None or final_action is None:
         return tool_result
 
     def format_call(parameters: dict[str, Any]) -> str:
         arguments = json.dumps(visible_parameters(parameters), ensure_ascii=False, default=str)
-        return f"{executed_action.name}({arguments})"
+        return f"{final_action.name}({arguments})"
 
-    executed_call = format_call(executed_action.parameters or {})
+    final_call = format_call(final_action.parameters or {})
     failed = tool_result_event.event_type == ExecutionEventType.TOOL_ERROR
     # Says whose arguments were rejected, and that they outrank the task: told only "the user's
     # values", models retried with the rejected ones, or went back to what their task named.
     user_edit_note = (
         f"Note: before approving, the user rejected the arguments you proposed, "
-        f"{format_call(proposed_parameters)}, and replaced them: this call ran as {executed_call}, "
+        f"{format_call(initial_parameters)}, and replaced them: this call ran as {final_call}, "
         f"and the {'error' if failed else 'result'} above is for the user's arguments."
     )
     if not failed:
@@ -81,7 +81,7 @@ def append_user_edit_note(tool_result: Any, tool_result_event: BaseEvent) -> Any
         "related calls too, and never the rejected values."
     )
     if failed:
-        user_edit_note += f" To retry, call exactly {executed_call}."
+        user_edit_note += f" To retry, call exactly {final_call}."
     if isinstance(tool_result, dict | list):
         tool_result = json.dumps(tool_result, ensure_ascii=False, default=str)
     # Only a missing result gives way to the note: a 0 or False is the result.

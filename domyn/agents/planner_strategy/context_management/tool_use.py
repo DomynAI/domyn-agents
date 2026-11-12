@@ -15,6 +15,7 @@ from domyn.agents.core import (
     METADATA_EXTERNAL_PART_AGENT_VISIBLE,
     METADATA_TOOL_BATCH,
     METADATA_PARAMETERS_BEFORE_USER_EDIT,
+    METADATA_INITIAL_PARAMETERS,
     BaseAgent,
     BaseEvent,
     ExecutionEventType,
@@ -148,22 +149,22 @@ class ToolUseContextManager(ContextManager):
             getattr(getattr(agent, "llm_provider", None), "reasoning_key_in_use", None)
         )
 
-        # The arguments each call the user edited ran with, by its TOOL_START: the call is
-        # shown as it ran. Each result goes to the nearest call before it, as ids can repeat.
-        executed_parameters_by_tool_start_id: dict[str | None, dict[str, Any]] = {}
-        executed_parameters_by_call_id: dict[str, dict[str, Any]] = {}
+        # The final arguments of each call the user edited, by its TOOL_START: the call
+        # is shown as it ran. Each result goes to the nearest call before it, as ids can repeat.
+        final_parameters_by_tool_start_id: dict[str | None, dict[str, Any]] = {}
+        final_parameters_by_call_id: dict[str, dict[str, Any]] = {}
         for event in reversed(event_to_parse):
             action: Any = event.action
             if action is None:
                 continue
-            if event.metadata.get(METADATA_PARAMETERS_BEFORE_USER_EDIT) is not None:
-                executed_parameters_by_call_id[action.call_id] = action.parameters or {}
+            if event.metadata.get(METADATA_INITIAL_PARAMETERS) is not None:
+                final_parameters_by_call_id[action.call_id] = action.parameters or {}
             elif (
                 event.event_type == ExecutionEventType.TOOL_START
-                and action.call_id in executed_parameters_by_call_id
+                and action.call_id in final_parameters_by_call_id
             ):
-                executed_parameters_by_tool_start_id[event.event_id] = (
-                    executed_parameters_by_call_id.pop(action.call_id)
+                final_parameters_by_tool_start_id[event.event_id] = final_parameters_by_call_id.pop(
+                    action.call_id
                 )
 
         for event in event_to_parse:
@@ -184,10 +185,10 @@ class ToolUseContextManager(ContextManager):
                         continue
                     if event.action:
                         shown_arguments = event.action.parameters or {}
-                        if event.event_id in executed_parameters_by_tool_start_id:
+                        if event.event_id in final_parameters_by_tool_start_id:
                             # The planner's own arguments (`reasoning`) stay as made.
                             shown_arguments = {
-                                **executed_parameters_by_tool_start_id[event.event_id],
+                                **final_parameters_by_tool_start_id[event.event_id],
                                 **{
                                     k: v for k, v in shown_arguments.items() if k in INJECTED_PARAMS
                                 },
