@@ -313,10 +313,10 @@ METADATA_BRANCH = "branch"
 # FORWARD_VERBATIM). It is stored with a result giving the reason, so the model
 # is told rather than left believing it ran.
 METADATA_NOT_RUN = "not_run"
-# Set on the TOOL_END or TOOL_ERROR of a call whose arguments the user changed before
-# approving it (``PARAMS_UPDATE``): its initial arguments, the model's. The action holds
-# the final ones, which the tool ran with.
-METADATA_INITIAL_PARAMETERS = "initial_parameters"
+# Set by the runner on the result of a call the user edited (``PARAMS_UPDATE``): its initial
+# arguments, the model's; the action holds the final ones. Prefixed, so no tool's metadata
+# uses it by chance, and dropped from a tool's own anyway.
+METADATA_INITIAL_PARAMETERS = "domyn_initial_parameters"
 # Set on an EXTERNAL_PART event to say whether its content should be rendered
 # into the messages sent to the model. Defaults to False when absent: an
 # externally-injected part is for display/history only unless explicitly
