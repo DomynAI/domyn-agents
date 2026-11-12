@@ -41,7 +41,7 @@ from domyn.agents.planner_strategy.react import ReactPlannerStrategy
 from domyn.agents.runner import Runner
 from domyn.agents.tools.function_tool import FunctionTool
 
-USER_EDIT_NOTE = "the user changed the arguments of this call"
+USER_EDIT_NOTE = "before approving, the user rejected the arguments you proposed"
 REFUSAL = "User refused to execute the tool multiply"
 
 
@@ -151,6 +151,8 @@ async def test_tool_use_shows_the_edited_call_as_it_ran(planner: str) -> None:
     assert "20" in str(request[-1].content)
     assert USER_EDIT_NOTE in str(request[-1].content)
     assert '"a": 3' in str(request[-1].content), "the note names what was proposed"
+    # Without it, a sub-agent went back to the value its task named.
+    assert "override your task" in str(request[-1].content)
 
 
 @pytest.mark.parametrize("planner", ["tool_use", "tool_use_thought"])
@@ -190,6 +192,8 @@ async def test_tool_use_shows_an_edited_call_that_failed_as_it_ran(planner: str)
     assert "a=4 is not allowed" in str(request[-1].content)
     assert _joined_contents(request).count(USER_EDIT_NOTE) == 1
     assert "the error above" in str(request[-1].content)
+    # Told only to start from "the user's values", models retried with the rejected ones.
+    assert 'To retry, call exactly multiply({"a": 4, "b": 5})' in str(request[-1].content)
     assert "The call is done" not in _joined_contents(request)
 
 
