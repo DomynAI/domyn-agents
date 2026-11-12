@@ -221,11 +221,15 @@ class LangGraphAdapter:
     # PlatformRelay contract (called by PlatformTool._arun via the relay)
     # ------------------------------------------------------------------
 
-    async def call_platform_tool(self, name: str, kwargs: dict[str, Any]) -> Any:
+    async def call_platform_tool(
+        self, name: str, kwargs: dict[str, Any], thought: str | None = None
+    ) -> Any:
         """Send TOOL_START and suspend until TOOL_END / TOOL_ERROR.
 
         This method is called by ``PlatformTool._arun`` through the bound
-        ``PlatformRelay``.  ``emit_priority`` is retrieved from a ``ContextVar``
+        ``PlatformRelay``, with the model's ``thought`` for the call when the
+        callback handler kept one: this TOOL_START is the one forwarded for a
+        delegate tool call. ``emit_priority`` is retrieved from a ``ContextVar``
         so concurrent invocations each use their own closure.
         """
         ctx = invocation_ctx.get()
@@ -244,7 +248,7 @@ class LangGraphAdapter:
             conversation_id=ctx.conversation_id,
             turn_id=ctx.turn_id,
             interaction_id=ctx.interaction_id,
-            action=ToolAction(name=name, parameters=kwargs, call_id=call_id),
+            action=ToolAction(name=name, parameters=kwargs, call_id=call_id, thought=thought),
         )
 
         loop = asyncio.get_running_loop()

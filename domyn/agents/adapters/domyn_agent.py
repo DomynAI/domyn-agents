@@ -298,8 +298,11 @@ class DomynAgentAdapter:
                 # runner's pair carries the *LLM's* tool_call id instead — an id
                 # the platform never issued — so forwarding them shows the relay a
                 # duplicate TOOL_START and then a TOOL_END for a call it cannot
-                # match. TOOL_ERROR is deliberately still forwarded: that one
-                # reports a local failure (e.g. the relay round trip itself
+                # match. The model's thought, which only the runner's TOOL_START
+                # carries, reaches _make_tool_call through DelegateTool.execute
+                # (the `tool_action` the runner passes) and is forwarded on the
+                # adapter's own TOOL_START instead. TOOL_ERROR is deliberately
+                # still forwarded: that one reports a local failure (e.g. the relay round trip itself
                 # failing), which is information the platform does not already have.
                 if (
                     ev.event_type in (ExecutionEventType.TOOL_START, ExecutionEventType.TOOL_END)
@@ -358,7 +361,9 @@ class DomynAgentAdapter:
     # Internal — DelegateTool round-trip
     # ------------------------------------------------------------------
 
-    async def _make_tool_call(self, name: str, kwargs: dict[str, Any]) -> Any:
+    async def _make_tool_call(
+        self, name: str, kwargs: dict[str, Any], thought: str | None = None
+    ) -> Any:
         """Send TOOL_START to the relay and suspend until TOOL_END / TOOL_ERROR.
 
         Called by ``DelegateTool.execute()`` via ``tool.relay``.  Correlation IDs
@@ -388,7 +393,7 @@ class DomynAgentAdapter:
             conversation_id=ctx.conversation_id,
             interaction_id=ctx.interaction_id,
             turn_id=ctx.turn_id,
-            action=ToolAction(name=name, parameters=kwargs, call_id=call_id),
+            action=ToolAction(name=name, parameters=kwargs, call_id=call_id, thought=thought),
         )
 
         loop = asyncio.get_running_loop()

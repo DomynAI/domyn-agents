@@ -32,7 +32,9 @@ class DelegateTool(BaseTool):
        model dumps.  Concurrent requests are safe because each invocation
        registers its own per-invocation correlation state (a
        ``contextvars.ContextVar`` in ``DomynAgentAdapter``) so ``relay`` can
-       pick up the correct correlation IDs.
+       pick up the correct correlation IDs. A relay is called as
+       ``relay(name, kwargs, thought=...)`` and must accept ``thought``: the
+       model's thought for the call, ``None`` when it gave none.
 
     3. Neither set: raises ``RuntimeError`` (no implementation available).
     """
@@ -53,6 +55,7 @@ class DelegateTool(BaseTool):
     wrapped: Callable[..., Any] | None = Field(default=None, exclude=True)
 
     # Optional relay; set by DomynAgentAdapter at startup to forward calls to the platform.
+    # Called as relay(name, kwargs, thought=...): every relay must accept `thought`.
     # Excluded from serialisation so the tool model stays JSON-serialisable.
     relay: Callable[..., Any] | None = Field(default=None, exclude=True)
 
@@ -118,7 +121,11 @@ class DelegateTool(BaseTool):
                 try:
                     # Strip runner-injected keys; only forward the declared tool parameters.
                     relay_kwargs = {k: v for k, v in kwargs.items() if k in self.tool_parameters}
-                    result = await self.relay(self.tool_name, relay_kwargs)
+                    # The model's thought travels with the call: the relay sends
+                    # its own TOOL_START, and the runner's (which carries it) is
+                    # not forwarded. Always passed, None when there is none.
+                    thought = getattr(kwargs.get("tool_action"), "thought", None)
+                    result = await self.relay(self.tool_name, relay_kwargs, thought=thought)
                     if not isinstance(result, ToolResult):
                         result = ToolResult(success=True, data=result)
                 except Exception as e:

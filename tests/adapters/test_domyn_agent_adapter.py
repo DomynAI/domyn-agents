@@ -29,7 +29,10 @@ from domyn.agents.core import (
     ToolAction,
 )
 from domyn.agents.llm import BaseLLMProvider, LLMMessage, LLMResponse
-from domyn.agents.planner_strategy import ToolUsePlannerStrategy
+from domyn.agents.planner_strategy import (
+    ToolUsePlannerStrategy,
+    ToolUseWithThoughtPlannerStrategy,
+)
 from domyn.agents.runner import RunnerTransport
 from domyn.agents.tools import DelegateTool, FunctionTool
 
@@ -75,10 +78,11 @@ class _ToolCallLLM(BaseLLMProvider):
     model_name: str = "mock"
     supported_structured_outputs: None = None
 
-    def __init__(self, tool_name: str, final_text: str) -> None:
+    def __init__(self, tool_name: str, final_text: str, reasoning: str | None = None) -> None:
         super().__init__(model_name="mock")
         object.__setattr__(self, "_tool_name", tool_name)
         object.__setattr__(self, "_final_text", final_text)
+        object.__setattr__(self, "_reasoning", reasoning)
         object.__setattr__(self, "_call", 0)
 
     async def generate(self, messages: Any, **kwargs: Any) -> LLMResponse:
@@ -87,6 +91,7 @@ class _ToolCallLLM(BaseLLMProvider):
         if call == 0:
             return LLMResponse(
                 content="",
+                reasoning_content=object.__getattribute__(self, "_reasoning"),
                 generated_tokens=4,
                 execution_time=0.0,
                 tool_calls=[
@@ -375,8 +380,65 @@ async def test_delegate_tool_relay_round_trip_via_real_runner() -> None:
     await adapter.close()
 
 
+async def _delegate_tool_start(planner: Any, reasoning: str | None) -> BaseEvent:
+    """Run one turn calling a relay-backed DelegateTool; the TOOL_START forwarded for it."""
+    tool = DelegateTool(
+        tool_name="search",
+        tool_description="search",
+        tool_parameters={"query": {"type": "string"}},
+        required_params=["query"],
+    )
+    agent = Agent(
+        name="TestAgent",
+        description="test",
+        instruction="You are a test agent.",
+        llm_provider=_ToolCallLLM(tool_name="search", final_text="done", reasoning=reasoning),
+        planner=planner,
+        tools=[tool],
+    )
+    adapter = DomynAgentAdapter(root=agent)
+    priority: list[BaseEvent] = []
+
+    async def emit(_: BaseEvent) -> None:
+        pass
+
+    async def emit_priority(e: BaseEvent) -> None:
+        priority.append(e)
+
+    await adapter.invoke(_agent_start(), emit, emit_priority)
+    tool_starts: list[BaseEvent] = []
+    for _ in range(40):
+        tool_starts = [e for e in priority if e.event_type == ExecutionEventType.TOOL_START]
+        if tool_starts:
+            break
+        await asyncio.sleep(0.05)
+    await adapter.close()
+    assert tool_starts, "Expected a TOOL_START from _make_tool_call"
+    return tool_starts[0]
+
+
 @pytest.mark.asyncio
-async def test_platform_tool_start_carries_invocation_correlation_ids() -> None:
+async def test_delegate_tool_start_carries_the_models_thought() -> None:
+    """The runner's TOOL_START (the one with the thought) is not forwarded for a
+    delegate tool, so the adapter's own TOOL_START has to carry it. It used to be
+    forwarded with thought=None."""
+    tool_start = await _delegate_tool_start(
+        ToolUseWithThoughtPlannerStrategy(), reasoning="I should search the knowledge base."
+    )
+    assert isinstance(tool_start.action, ToolAction)
+    assert tool_start.action.thought == "I should search the knowledge base."
+    assert tool_start.action.parameters == {"query": "hi"}
+
+
+@pytest.mark.asyncio
+async def test_delegate_tool_start_without_a_thought() -> None:
+    tool_start = await _delegate_tool_start(ToolUsePlannerStrategy(), reasoning=None)
+    assert isinstance(tool_start.action, ToolAction)
+    assert tool_start.action.thought is None
+
+
+@pytest.mark.asyncio
+async def test_delegate_tool_start_carries_invocation_correlation_ids() -> None:
     """The relay TOOL_START must carry the INBOUND AGENT_START's correlation ids.
 
     The relay routes frames to the platform by conversation_id, turn_id feeds
@@ -389,7 +451,7 @@ async def test_platform_tool_start_carries_invocation_correlation_ids() -> None:
     has rewritten the event in place with the runner's own freshly minted
     interaction_id, so the TOOL_START went out under an interaction the platform
     had never issued. Mirrors the sibling
-    test_langgraph_adapter.py::test_platform_tool_start_carries_invocation_correlation_ids.
+    test_langgraph_adapter.py::test_delegate_tool_start_carries_invocation_correlation_ids.
     """
     tool = DelegateTool(
         tool_name="search",
