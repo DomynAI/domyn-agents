@@ -301,8 +301,9 @@ METADATA_VISIBILITY_ONLY = "visibility_only"
 # without it is run as soon as it arrives, as every call used to be.
 METADATA_TOOL_BATCH = "tool_batch"
 # Set on the TOOL_END or TOOL_ERROR of a call whose arguments the user changed before
-# approving it (``PARAMS_UPDATE``): the arguments the model proposed.
-METADATA_PARAMETERS_BEFORE_USER_EDIT = "parameters_before_user_edit"
+# approving it (``PARAMS_UPDATE``): its initial arguments, the model's. The action holds
+# the final ones, which the tool ran with.
+METADATA_INITIAL_PARAMETERS = "initial_parameters"
 # Set on an EXTERNAL_PART event to say whether its content should be rendered
 # into the messages sent to the model. Defaults to False when absent: an
 # externally-injected part is for display/history only unless explicitly

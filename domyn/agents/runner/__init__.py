@@ -39,7 +39,7 @@ from domyn.agents.core import (
     METADATA_FORWARD_VERBATIM,
     METADATA_FORWARD_VERBATIM_SOURCE_ID,
     METADATA_FORWARD_VERBATIM_SOURCE_KEY,
-    METADATA_PARAMETERS_BEFORE_USER_EDIT,
+    METADATA_INITIAL_PARAMETERS,
     METADATA_STEERING,
     METADATA_TOOL_BATCH,
     METADATA_VISIBILITY_ONLY,
@@ -2015,12 +2015,12 @@ class Runner:
                         None,
                     )
 
-                auth_proposed_parameters = None
+                auth_initial_parameters = None
                 if _latest_tool_feedback is not None:
                     tool_feedback_input.action = tool_feedback_input.action.model_copy(
                         update={"parameters": _latest_tool_feedback.action.parameters}
                     )
-                    auth_proposed_parameters = self._proposed_parameters_if_user_edited(
+                    auth_initial_parameters = self._initial_parameters_if_user_edited(
                         tool_feedback_input.action.parameters, previous_event.action.parameters
                     )
                 captured: list[BaseEvent] = []
@@ -2029,8 +2029,8 @@ class Runner:
                 ):
                     yield ev
                 auth_fallback_action: Any = previous_event.action
-                if auth_proposed_parameters is not None:
-                    # A fallback error is for the call as it ran, not as proposed.
+                if auth_initial_parameters is not None:
+                    # A fallback error is for the final arguments, not the initial ones.
                     auth_fallback_action = auth_fallback_action.model_copy(
                         update={"parameters": tool_feedback_input.action.parameters}
                     )
@@ -2040,7 +2040,7 @@ class Runner:
                     "authentication",
                     state,
                     context,
-                    auth_proposed_parameters,
+                    auth_initial_parameters,
                 )
 
         elif (
@@ -2078,7 +2078,7 @@ class Runner:
 
             # Need to save the tool_feedback_input event before executing the tool in case the execution is stopped
             # for an auth event. The auth event handling will need the information on the tool parameters to re-execute the tool after the auth is completed.
-            proposed_parameters = self._proposed_parameters_if_user_edited(
+            initial_parameters = self._initial_parameters_if_user_edited(
                 new_approve_action.parameters, previous_event.action.parameters
             )
 
@@ -2137,7 +2137,7 @@ class Runner:
                 "approval",
                 state,
                 context,
-                proposed_parameters,
+                initial_parameters,
             )
 
         else:
@@ -2169,7 +2169,7 @@ class Runner:
             and state.current_agent.transport is not None
         ):
             delegate_result_event: Any = last_tool_event
-            if delegate_result_event.metadata.get(METADATA_PARAMETERS_BEFORE_USER_EDIT) is not None:
+            if delegate_result_event.metadata.get(METADATA_INITIAL_PARAMETERS) is not None:
                 # The remote agent reads only what it is sent: the note goes in its copy alone.
                 delegate_result_event = delegate_result_event.model_copy(deep=True)
                 delegate_result_action: Any = delegate_result_event.action
@@ -3505,17 +3505,17 @@ class Runner:
             ),
         )
 
-    def _proposed_parameters_if_user_edited(
-        self, executed_parameters: Any, proposed_parameters: Any
+    def _initial_parameters_if_user_edited(
+        self, final_parameters: Any, initial_parameters: Any
     ) -> dict[str, Any] | None:
-        """The arguments the model proposed, when the user changed them before approving."""
+        """The initial arguments, when the user changed them before approving."""
         if (
-            executed_parameters is None
-            or proposed_parameters is None
-            or not self.parameters_changed(executed_parameters, proposed_parameters)
+            final_parameters is None
+            or initial_parameters is None
+            or not self.parameters_changed(final_parameters, initial_parameters)
         ):
             return None
-        return visible_parameters(proposed_parameters)
+        return visible_parameters(initial_parameters)
 
     def _build_tool_error_event(
         self,
@@ -3558,9 +3558,9 @@ class Runner:
         error_suffix: str,
         state: RunnerState,
         context: InteractionContext,
-        proposed_parameters: dict[str, Any] | None,
+        initial_parameters: dict[str, Any] | None,
     ) -> BaseEvent:
-        """The tool's result as it is stored; ``proposed_parameters``: the arguments the user replaced."""
+        """The tool's result as it is stored; ``initial_parameters``: the ones the user replaced."""
         if last_tool_event is None:
             error_action = fallback_action.model_copy(
                 update={
@@ -3570,9 +3570,9 @@ class Runner:
             last_tool_event = self._build_tool_error_event(state, context, error_action)
         last_tool_event.interaction_id = context.interaction_id
         last_tool_event.turn_id = state.turn_id
-        if proposed_parameters is not None:
+        if initial_parameters is not None:
             # Success or error alike: context managers render the call as it ran, with a note.
-            last_tool_event.metadata[METADATA_PARAMETERS_BEFORE_USER_EDIT] = proposed_parameters
+            last_tool_event.metadata[METADATA_INITIAL_PARAMETERS] = initial_parameters
         return last_tool_event
 
     def _build_tool_needs_feedback_auth(
