@@ -1,6 +1,6 @@
 """A call the user edited before approving is shown to the model as it ran, once.
 
-The model used to see its proposed call next to the result of the edited one, with
+The model used to see its initial call next to the result of the edited one, with
 the explanation after it as a user message (tool_use) or not at all (react), and
 made the call again, often with the arguments the user had replaced.
 """
@@ -15,7 +15,7 @@ from pydantic import PrivateAttr
 from domyn.agents.agents import Agent
 from domyn.agents.approvals import append_user_edit_note
 from domyn.agents.core import (
-    METADATA_PARAMETERS_BEFORE_USER_EDIT,
+    METADATA_INITIAL_PARAMETERS,
     ApprovalType,
     BaseEvent,
     ExecutionEventType,
@@ -150,7 +150,7 @@ async def test_tool_use_shows_the_edited_call_as_it_ran(planner: str) -> None:
     assert request[-1].role == "tool"
     assert "20" in str(request[-1].content)
     assert USER_EDIT_NOTE in str(request[-1].content)
-    assert '"a": 3' in str(request[-1].content), "the note names what was proposed"
+    assert '"a": 3' in str(request[-1].content), "the note names the initial arguments"
     # Without it, a sub-agent went back to the value its task named.
     assert "override your task" in str(request[-1].content)
 
@@ -230,12 +230,12 @@ async def test_the_stored_result_is_the_tools_own() -> None:
 
     assert tool_end.action.observation == 20
     assert tool_end.action.parameters == {"a": 4, "b": 5}
-    assert tool_end.metadata[METADATA_PARAMETERS_BEFORE_USER_EDIT] == {"a": 3, "b": 2}
+    assert tool_end.metadata[METADATA_INITIAL_PARAMETERS] == {"a": 3, "b": 2}
     assert tool_end.action.thought == "the user asked for 3x2"
 
 
 @pytest.mark.asyncio
-async def test_a_stored_error_names_the_proposed_arguments() -> None:
+async def test_a_stored_error_names_the_initial_arguments() -> None:
     runner, _ = await _run_and_answer_approval(
         "tool_use_thought", approve=True, edit=True, func=_multiply_failing_above_3()
     )
@@ -244,7 +244,7 @@ async def test_a_stored_error_names_the_proposed_arguments() -> None:
     ]
 
     assert USER_EDIT_NOTE not in str(tool_error.action.observation)
-    assert tool_error.metadata[METADATA_PARAMETERS_BEFORE_USER_EDIT] == {"a": 3, "b": 2}
+    assert tool_error.metadata[METADATA_INITIAL_PARAMETERS] == {"a": 3, "b": 2}
 
 
 async def _react_messages(
@@ -362,7 +362,7 @@ def _user_edited_tool_end(observation: Any) -> BaseEvent:
         event_type=ExecutionEventType.TOOL_END,
         author="Calc",
         action=ToolAction(name="multiply", parameters={"a": 0, "b": 5}, observation=observation),
-        metadata={METADATA_PARAMETERS_BEFORE_USER_EDIT: {"a": 3, "b": 2}},
+        metadata={METADATA_INITIAL_PARAMETERS: {"a": 3, "b": 2}},
     )
 
 

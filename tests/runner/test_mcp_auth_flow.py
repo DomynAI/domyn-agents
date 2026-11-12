@@ -8,7 +8,7 @@ import pytest
 from domyn.agents import Runner
 from domyn.agents.agents import Agent
 from domyn.agents.core import (
-    METADATA_PARAMETERS_BEFORE_USER_EDIT,
+    METADATA_INITIAL_PARAMETERS,
     AgentAction,
     ApprovalType,
     AuthenticationAction,
@@ -777,8 +777,8 @@ async def test_param_feedback_then_auth_failure_preserves_modified_params(
     # The result says the call was edited only when it was, and stays the tool's own.
     tool_end = next(e for e in turn3 if e.event_type == ExecutionEventType.TOOL_END)
     assert tool_end.action.observation == "ok"
-    proposed_parameters = tool_end.metadata.get(METADATA_PARAMETERS_BEFORE_USER_EDIT)
-    assert proposed_parameters == (
+    initial_parameters = tool_end.metadata.get(METADATA_INITIAL_PARAMETERS)
+    assert initial_parameters == (
         {"query": "original_value"} if value == "modified_value" else None
     )
 
@@ -787,7 +787,7 @@ async def test_param_feedback_then_auth_failure_preserves_modified_params(
 async def test_an_edited_call_that_yields_nothing_after_auth_is_stored_as_it_ran(
     runner: Runner, llm_provider: BaseLLMProvider
 ):
-    """The fallback error of an edited call carries the arguments that ran, not the proposed."""
+    """The fallback error of an edited call carries the final arguments, not the initial ones."""
     agent = Agent(
         name="RootAgent",
         description="desc",
@@ -841,7 +841,7 @@ async def test_an_edited_call_that_yields_nothing_after_auth_is_stored_as_it_ran
 
     tool_error = next(e for e in turn3 if e.event_type == ExecutionEventType.TOOL_ERROR)
     assert tool_error.action.parameters == {"query": "modified_value"}
-    assert tool_error.metadata[METADATA_PARAMETERS_BEFORE_USER_EDIT] == {"query": "original_value"}
+    assert tool_error.metadata[METADATA_INITIAL_PARAMETERS] == {"query": "original_value"}
 
 
 @pytest.mark.asyncio
