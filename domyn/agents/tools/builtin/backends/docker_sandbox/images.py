@@ -3,7 +3,7 @@
 import time
 from collections.abc import Callable
 
-from domyn.agents.tools.builtin.docker_sandbox.cli import (
+from domyn.agents.tools.builtin.backends.docker_sandbox.cli import (
     BUILD_SECONDS,
     INSPECT_SECONDS,
     PULL_SECONDS,

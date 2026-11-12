@@ -6,9 +6,12 @@
 ``installs`` keeps what the agent installed, and ``scope`` names and labels it all.
 """
 
-from domyn.agents.tools.builtin.docker_sandbox.backend import DockerBackend
-from domyn.agents.tools.builtin.docker_sandbox.images import BASE_IMAGE, DERIVED_IMAGE
-from domyn.agents.tools.builtin.docker_sandbox.options import REGISTRY_HOSTS, DockerBackendOptions
+from domyn.agents.tools.builtin.backends.docker_sandbox.backend import DockerBackend
+from domyn.agents.tools.builtin.backends.docker_sandbox.images import BASE_IMAGE, DERIVED_IMAGE
+from domyn.agents.tools.builtin.backends.docker_sandbox.options import (
+    REGISTRY_HOSTS,
+    DockerBackendOptions,
+)
 
 __all__ = [
     "BASE_IMAGE",

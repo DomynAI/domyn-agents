@@ -49,9 +49,9 @@ from domyn.agents.skills import (
 from domyn.agents.skills.external_files import missing_external_files
 from domyn.agents.skills.integration import attach_skills
 from domyn.agents.skills.layout import listed_path_is_linked
-from domyn.agents.tools.builtin.auto_backend import AutoBackend
 from domyn.agents.tools.builtin.backends import BackendUnavailableError, CommandBackend
-from domyn.agents.tools.builtin.sandbox import SandboxBackend
+from domyn.agents.tools.builtin.backends.auto import AutoBackend
+from domyn.agents.tools.builtin.backends.sandbox import SandboxBackend
 
 # markup=False for the whole session: nothing here writes rich's square-bracket
 # tags, and everything here prints text from somewhere else — tool arguments, a

@@ -10,7 +10,7 @@ that wants to do these things asks for a ``SandboxBackend``.
 from abc import abstractmethod
 from collections.abc import Callable
 
-from domyn.agents.tools.builtin.backends import CommandBackend
+from domyn.agents.tools.builtin.backends.base import CommandBackend
 
 
 class SandboxBackend(CommandBackend):

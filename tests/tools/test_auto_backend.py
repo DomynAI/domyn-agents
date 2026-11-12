@@ -11,11 +11,11 @@ from domyn.agents.tools.builtin import (
     DockerBackendOptions,
     LocalBackend,
     Workspace,
+    build_backend,
 )
-from domyn.agents.tools.builtin.auto_backend import AutoBackend
-from domyn.agents.tools.builtin.backend_factory import build_backend
 from domyn.agents.tools.builtin.backends import BackendUnavailableError, CommandResult
-from domyn.agents.tools.builtin.sandbox import SandboxBackend
+from domyn.agents.tools.builtin.backends.auto import AutoBackend
+from domyn.agents.tools.builtin.backends.sandbox import SandboxBackend
 
 
 class _Fake(SandboxBackend):
@@ -174,7 +174,9 @@ class TestTheStateFolder:
         async def refuse(self: Any) -> None:
             raise BackendUnavailableError("no docker")
 
-        monkeypatch.setattr("domyn.agents.tools.builtin.docker_sandbox.DockerBackend.check", refuse)
+        monkeypatch.setattr(
+            "domyn.agents.tools.builtin.backends.docker_sandbox.DockerBackend.check", refuse
+        )
         chosen = await auto.decide()
         assert isinstance(chosen, LocalBackend) and chosen.state_dir == str(state)
 

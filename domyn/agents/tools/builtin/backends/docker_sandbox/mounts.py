@@ -11,8 +11,8 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from domyn.agents.logger import get_logger
-from domyn.agents.tools.builtin.backends import BackendUnavailableError
-from domyn.agents.tools.builtin.docker_sandbox.state import StateFolder
+from domyn.agents.tools.builtin.backends.base import BackendUnavailableError
+from domyn.agents.tools.builtin.backends.docker_sandbox.state import StateFolder
 from domyn.agents.tools.builtin.session import HOME_DIRNAME
 from domyn.agents.tools.builtin.workspace import Workspace
 

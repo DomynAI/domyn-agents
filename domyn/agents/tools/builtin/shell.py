@@ -48,7 +48,7 @@ from domyn.agents.core import ApprovalType
 from domyn.agents.tools.base import UpdateToolResult
 from domyn.agents.tools.builtin import processes
 from domyn.agents.tools.builtin.backends import CommandBackend, CommandResult, LocalBackend
-from domyn.agents.tools.builtin.sandbox import SandboxBackend
+from domyn.agents.tools.builtin.backends.sandbox import SandboxBackend
 from domyn.agents.tools.builtin.workspace import Workspace
 
 # Long enough for an install or a test suite, short enough that a hung command

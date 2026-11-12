@@ -11,9 +11,9 @@ import asyncio
 from collections.abc import Callable
 from pathlib import Path
 
-from domyn.agents.tools.builtin.backends import BackendUnavailableError
-from domyn.agents.tools.builtin.docker_sandbox import egress_proxy
-from domyn.agents.tools.builtin.docker_sandbox.cli import (
+from domyn.agents.tools.builtin.backends.base import BackendUnavailableError
+from domyn.agents.tools.builtin.backends.docker_sandbox import egress_proxy
+from domyn.agents.tools.builtin.backends.docker_sandbox.cli import (
     ACTION_SECONDS,
     INSPECT_SECONDS,
     PULL_SECONDS,
@@ -22,8 +22,8 @@ from domyn.agents.tools.builtin.docker_sandbox.cli import (
     TransientDockerError,
     retry_once,
 )
-from domyn.agents.tools.builtin.docker_sandbox.images import BASE_IMAGE
-from domyn.agents.tools.builtin.docker_sandbox.scope import SandboxScope
+from domyn.agents.tools.builtin.backends.docker_sandbox.images import BASE_IMAGE
+from domyn.agents.tools.builtin.backends.docker_sandbox.scope import SandboxScope
 
 PROXY_PORT = 3128
 

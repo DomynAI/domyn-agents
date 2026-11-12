@@ -5,8 +5,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from domyn.agents.tools.builtin.backends import BackendUnavailableError
-from domyn.agents.tools.builtin.docker_sandbox.cli import (
+from domyn.agents.tools.builtin.backends.base import BackendUnavailableError
+from domyn.agents.tools.builtin.backends.docker_sandbox.cli import (
     ACTION_SECONDS,
     CONTAINER_START_SECONDS,
     DockerCli,
@@ -14,9 +14,9 @@ from domyn.agents.tools.builtin.docker_sandbox.cli import (
     container_is_gone,
     retry_once,
 )
-from domyn.agents.tools.builtin.docker_sandbox.network import EgressNetwork
-from domyn.agents.tools.builtin.docker_sandbox.options import DockerBackendOptions
-from domyn.agents.tools.builtin.docker_sandbox.scope import FINGERPRINT_LABEL, SandboxScope
+from domyn.agents.tools.builtin.backends.docker_sandbox.network import EgressNetwork
+from domyn.agents.tools.builtin.backends.docker_sandbox.options import DockerBackendOptions
+from domyn.agents.tools.builtin.backends.docker_sandbox.scope import FINGERPRINT_LABEL, SandboxScope
 
 SANDBOX_HOME = "/tmp/domyn-home"
 """``HOME`` inside the container. Not a mount: ``pip install --user`` and

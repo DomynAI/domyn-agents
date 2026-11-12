@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Self
 
 from domyn.agents.logger import get_logger
-from domyn.agents.tools.builtin.docker_sandbox.cli import (
+from domyn.agents.tools.builtin.backends.docker_sandbox.cli import (
     ACTION_SECONDS,
     INSPECT_SECONDS,
     SLOW_ACTION_SECONDS,

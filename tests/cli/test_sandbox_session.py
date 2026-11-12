@@ -268,7 +268,7 @@ class TestStartingWithAutoSandbox:
     ) -> None:
         from domyn.agents.cli.commands.run import command as run_command
         from domyn.agents.tools.builtin import DockerBackendOptions, Workspace
-        from domyn.agents.tools.builtin.auto_backend import AutoBackend
+        from domyn.agents.tools.builtin.backends.auto import AutoBackend
 
         started: list[bool] = []
 

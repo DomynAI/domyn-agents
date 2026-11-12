@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Self
 
-from domyn.agents.tools.builtin.backends import BackendUnavailableError
+from domyn.agents.tools.builtin.backends.base import BackendUnavailableError
 from domyn.agents.tools.builtin.session import (
     HOME_DIRNAME,
     SessionEnvironment,

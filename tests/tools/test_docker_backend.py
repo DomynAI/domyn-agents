@@ -36,14 +36,21 @@ from domyn.agents.tools.builtin import (
     build_backend,
     shell,
 )
-from domyn.agents.tools.builtin.docker_sandbox import REGISTRY_HOSTS, DockerBackend, egress_proxy
-from domyn.agents.tools.builtin.docker_sandbox.cli import DockerCli, DockerOutput
-from domyn.agents.tools.builtin.docker_sandbox.images import SANDBOX_DOCKERFILE
-from domyn.agents.tools.builtin.docker_sandbox.installs import NPM_GLOBAL_COMMAND, PIP_COMMAND
-from domyn.agents.tools.builtin.docker_sandbox.mounts import build_mounts
-from domyn.agents.tools.builtin.docker_sandbox.network import EgressNetwork
-from domyn.agents.tools.builtin.docker_sandbox.scope import SandboxScope, remove_orphans
-from domyn.agents.tools.builtin.docker_sandbox.state import StateFolder
+from domyn.agents.tools.builtin.backends.docker_sandbox import (
+    REGISTRY_HOSTS,
+    DockerBackend,
+    egress_proxy,
+)
+from domyn.agents.tools.builtin.backends.docker_sandbox.cli import DockerCli, DockerOutput
+from domyn.agents.tools.builtin.backends.docker_sandbox.images import SANDBOX_DOCKERFILE
+from domyn.agents.tools.builtin.backends.docker_sandbox.installs import (
+    NPM_GLOBAL_COMMAND,
+    PIP_COMMAND,
+)
+from domyn.agents.tools.builtin.backends.docker_sandbox.mounts import build_mounts
+from domyn.agents.tools.builtin.backends.docker_sandbox.network import EgressNetwork
+from domyn.agents.tools.builtin.backends.docker_sandbox.scope import SandboxScope, remove_orphans
+from domyn.agents.tools.builtin.backends.docker_sandbox.state import StateFolder
 
 
 def _docker_works() -> bool:

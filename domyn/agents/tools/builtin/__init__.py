@@ -20,7 +20,7 @@ an argument the model can pass.
 
 Where commands run is a separate axis, the
 :class:`~domyn.agents.tools.builtin.backends.CommandBackend`. Two ship: the local
-machine, and a Docker container (``sandbox: docker``, ``docker_sandbox/``).
+machine, and a Docker container (``sandbox: docker``, ``backends/docker_sandbox/``).
 :func:`bundle` accepts one and returns it via :class:`BuiltinTools` so the caller
 can shut it down, because a container has to be removed and finding the end of a
 session later, under pressure, is how teardown gets forgotten.
@@ -40,18 +40,18 @@ from pydantic import BaseModel
 from pydantic import Field as PydanticField
 
 from domyn.agents.logger import get_logger
-from domyn.agents.tools.builtin.backend_factory import build_backend
 from domyn.agents.tools.builtin.backends import (
     BackendUnavailableError,
     CommandBackend,
     CommandResult,
+    DockerBackendOptions,
     LocalBackend,
+    SandboxBackend,
+    build_backend,
 )
 from domyn.agents.tools.builtin.browser import browser_tools
 from domyn.agents.tools.builtin.browser_sessions import BrowserOptions, BrowserSessions
-from domyn.agents.tools.builtin.docker_sandbox import DockerBackendOptions
 from domyn.agents.tools.builtin.files import file_tools
-from domyn.agents.tools.builtin.sandbox import SandboxBackend
 from domyn.agents.tools.builtin.shell import run_command_tool, shell_tools
 from domyn.agents.tools.builtin.workspace import Workspace, WorkspaceError, is_ignored
 

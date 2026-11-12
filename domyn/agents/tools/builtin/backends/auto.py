@@ -11,14 +11,14 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from domyn.agents.logger import get_logger
-from domyn.agents.tools.builtin.backends import (
+from domyn.agents.tools.builtin.backends.base import (
     BackendUnavailableError,
     CommandBackend,
     CommandResult,
-    LocalBackend,
 )
-from domyn.agents.tools.builtin.docker_sandbox import DockerBackend, DockerBackendOptions
-from domyn.agents.tools.builtin.sandbox import SandboxBackend
+from domyn.agents.tools.builtin.backends.docker_sandbox import DockerBackend, DockerBackendOptions
+from domyn.agents.tools.builtin.backends.local import LocalBackend
+from domyn.agents.tools.builtin.backends.sandbox import SandboxBackend
 from domyn.agents.tools.builtin.session import HOME_DIRNAME, state_dir_from_environment
 from domyn.agents.tools.builtin.workspace import Workspace
 

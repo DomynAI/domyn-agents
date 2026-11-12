@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import NamedTuple, TypeVar
 
 from domyn.agents.logger import get_logger
-from domyn.agents.tools.builtin.backends import BackendUnavailableError, CommandResult
+from domyn.agents.tools.builtin.backends.base import BackendUnavailableError, CommandResult
 
 # How long each kind of docker call may take before it is given up on. A call that
 # times out is reported as a failure like any other, and tried again where that is safe.

@@ -1,18 +1,19 @@
-"""Resolving a backend by the name a configuration gives it."""
+"""Resolving a backend by the name a configuration gives it.
+
+The outermost module of the package: it knows every backend, and none of them knows
+it, which is what lets ``base`` be imported by all the rest without a cycle.
+"""
 
 import os
 from collections.abc import Iterable
 
-from domyn.agents.tools.builtin.auto_backend import AutoBackend
-from domyn.agents.tools.builtin.backends import (
-    BackendUnavailableError,
-    CommandBackend,
-    LocalBackend,
-)
-from domyn.agents.tools.builtin.docker_sandbox import DockerBackend, DockerBackendOptions
+from domyn.agents.tools.builtin.backends.auto import AutoBackend
+from domyn.agents.tools.builtin.backends.base import BackendUnavailableError, CommandBackend
+from domyn.agents.tools.builtin.backends.docker_sandbox import DockerBackend, DockerBackendOptions
+from domyn.agents.tools.builtin.backends.local import LocalBackend
 from domyn.agents.tools.builtin.workspace import Workspace
 
-BACKEND_NAMES = ("auto", "local", "docker")
+BACKEND_NAMES: tuple[str, ...] = ("auto", "local", "docker")
 
 
 def build_backend(

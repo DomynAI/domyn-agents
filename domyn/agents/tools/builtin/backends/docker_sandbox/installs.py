@@ -17,9 +17,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 from domyn.agents.logger import get_logger
-from domyn.agents.tools.builtin.docker_sandbox.cli import SLOW_ACTION_SECONDS, DockerCli
-from domyn.agents.tools.builtin.docker_sandbox.containers import DockerContainer
-from domyn.agents.tools.builtin.docker_sandbox.state import StateFolder
+from domyn.agents.tools.builtin.backends.docker_sandbox.cli import SLOW_ACTION_SECONDS, DockerCli
+from domyn.agents.tools.builtin.backends.docker_sandbox.containers import DockerContainer
+from domyn.agents.tools.builtin.backends.docker_sandbox.state import StateFolder
 
 REQUIREMENTS_FILE = "requirements.txt"
 NPM_GLOBALS_FILE = "npm-global.txt"

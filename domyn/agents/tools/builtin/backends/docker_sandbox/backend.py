@@ -37,8 +37,8 @@ from pathlib import Path
 from typing import NamedTuple
 
 from domyn.agents.logger import get_logger
-from domyn.agents.tools.builtin.backends import BackendUnavailableError, CommandResult
-from domyn.agents.tools.builtin.docker_sandbox.cli import (
+from domyn.agents.tools.builtin.backends.base import BackendUnavailableError, CommandResult
+from domyn.agents.tools.builtin.backends.docker_sandbox.cli import (
     ACTION_SECONDS,
     INSPECT_SECONDS,
     SLOW_ACTION_SECONDS,
@@ -46,24 +46,27 @@ from domyn.agents.tools.builtin.docker_sandbox.cli import (
     container_is_gone,
     retry_once,
 )
-from domyn.agents.tools.builtin.docker_sandbox.containers import ContainerLauncher, DockerContainer
-from domyn.agents.tools.builtin.docker_sandbox.images import ensure_image
-from domyn.agents.tools.builtin.docker_sandbox.installs import InstallLog
-from domyn.agents.tools.builtin.docker_sandbox.mounts import (
+from domyn.agents.tools.builtin.backends.docker_sandbox.containers import (
+    ContainerLauncher,
+    DockerContainer,
+)
+from domyn.agents.tools.builtin.backends.docker_sandbox.images import ensure_image
+from domyn.agents.tools.builtin.backends.docker_sandbox.installs import InstallLog
+from domyn.agents.tools.builtin.backends.docker_sandbox.mounts import (
     build_mounts,
     refuse_unsafe_workspace,
     skill_roots,
 )
-from domyn.agents.tools.builtin.docker_sandbox.network import EgressNetwork
-from domyn.agents.tools.builtin.docker_sandbox.options import DockerBackendOptions
-from domyn.agents.tools.builtin.docker_sandbox.scope import (
+from domyn.agents.tools.builtin.backends.docker_sandbox.network import EgressNetwork
+from domyn.agents.tools.builtin.backends.docker_sandbox.options import DockerBackendOptions
+from domyn.agents.tools.builtin.backends.docker_sandbox.scope import (
     FINGERPRINT_LABEL,
     SandboxScope,
     digest,
     remove_orphans,
 )
-from domyn.agents.tools.builtin.docker_sandbox.state import StateFolder
-from domyn.agents.tools.builtin.sandbox import SandboxBackend
+from domyn.agents.tools.builtin.backends.docker_sandbox.state import StateFolder
+from domyn.agents.tools.builtin.backends.sandbox import SandboxBackend
 from domyn.agents.tools.builtin.session import safe_id
 from domyn.agents.tools.builtin.workspace import Workspace
 
