@@ -102,7 +102,7 @@ feedback = BaseEvent(
 )
 ```
 
-The tool runs with the new values, and `tool_end` shows them. The edited call is checked again by the [deny rules](#deny-rules) and [approval hooks](#deciding-in-code): an edit cannot turn a call into one that is denied. For a `USER_CONFIRM` tool, the parameters sent back are ignored, and the call runs as the model made it.
+The tool runs with the new values, and `tool_end` (or `tool_error`, if it fails) shows them; its `metadata` has the proposed arguments under `parameters_before_user_edit`, and its result is the tool's own. The model is shown the call as it ran, with a note after its result saying what it had proposed. The edited call is checked again by the [deny rules](#deny-rules) and [approval hooks](#deciding-in-code): an edit cannot turn a call into one that is denied. For a `USER_CONFIRM` tool, the parameters sent back are ignored, and the call runs as the model made it.
 
 ### Several calls in one answer
 

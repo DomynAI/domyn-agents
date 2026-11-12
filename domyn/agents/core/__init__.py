@@ -313,6 +313,9 @@ METADATA_BRANCH = "branch"
 # FORWARD_VERBATIM). It is stored with a result giving the reason, so the model
 # is told rather than left believing it ran.
 METADATA_NOT_RUN = "not_run"
+# Set on the TOOL_END or TOOL_ERROR of a call whose arguments the user changed before
+# approving it (``PARAMS_UPDATE``): the arguments the model proposed.
+METADATA_PARAMETERS_BEFORE_USER_EDIT = "parameters_before_user_edit"
 # Set on an EXTERNAL_PART event to say whether its content should be rendered
 # into the messages sent to the model. Defaults to False when absent: an
 # externally-injected part is for display/history only unless explicitly
