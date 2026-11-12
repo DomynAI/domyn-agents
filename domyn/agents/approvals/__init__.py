@@ -32,6 +32,7 @@ from domyn.agents.approvals.store import (
 )
 from domyn.agents.approvals.subject import (
     INJECTED_PARAMS,
+    append_user_edit_note,
     build_request,
     compute_parts,
     compute_subject,
@@ -52,6 +53,7 @@ __all__ = [
     "ConversationApprovalStore",
     "FileApprovalStore",
     "InMemoryApprovalStore",
+    "append_user_edit_note",
     "build_request",
     "compute_parts",
     "compute_subject",

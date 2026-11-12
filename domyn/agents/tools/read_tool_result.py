@@ -9,7 +9,8 @@ hides from an agent stays hidden here too.
 
 Offsets count characters of a result *as the model is shown it*, which is not
 always its observation alone: what a streamable tool showed the user while it ran
-comes after it. ``ShownTexts`` builds that text, and the context manager and this
+comes after it, and so does the note on a call the user edited before approving
+it. ``ShownTexts`` builds that text, and the context manager and this
 tool both use it on the same events, in the same order, so the offset a note
 gives is the offset this tool reads at.
 
@@ -25,6 +26,7 @@ import json
 from collections.abc import Callable, Iterable
 from typing import Any, Self
 
+from domyn.agents.approvals import append_user_edit_note
 from domyn.agents.core import (
     METADATA_CONVERTED_TO_AGENT_END,
     BaseEvent,
@@ -74,14 +76,17 @@ class ShownTexts:
         return True
 
     def text_of(self, event: BaseEvent) -> str:
-        """The text of the tool result *event*, with what its call streamed."""
-        observation = str(getattr(event.action, "observation", None) or "")
+        """The text of the tool result *event*, with what its call streamed, and the note
+        on a call the user edited before approving it."""
+        tool_result = getattr(event.action, "observation", None)
+        # Only a missing result is empty: a 0 or False is the result.
+        observation = "" if tool_result is None else str(tool_result)
         streamed = self._streamed.pop(getattr(event.action, "call_id", ""), None)
-        if not streamed:
-            return observation
-        return (
-            f"{observation}{_GAP}Shown to the user while the tool ran:\n" + "".join(streamed)
-        ).lstrip()
+        if streamed:
+            observation = (
+                f"{observation}{_GAP}Shown to the user while the tool ran:\n" + "".join(streamed)
+            ).lstrip()
+        return str(append_user_edit_note(observation, event))
 
 
 class ToolResults:

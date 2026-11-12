@@ -54,7 +54,7 @@ class FullMessageContext(MessageContextManager):
                         event = self.add_default_agent_start_content(event=event, context=context)
                     messages.extend(self.prompting.get_agent_start_messages(event))
 
-                case ExecutionEventType.TOOL_END | ExecutionEventType.TOOL_FEEDBACK:
+                case ExecutionEventType.TOOL_END:
                     if (not self.narrow_non_visible_agents) or (
                         event.author in visible_agent_names
                     ):

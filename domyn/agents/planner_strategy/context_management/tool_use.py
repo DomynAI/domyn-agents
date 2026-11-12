@@ -9,9 +9,11 @@ import json
 import uuid
 from typing import Any
 
+from domyn.agents.approvals import INJECTED_PARAMS
 from domyn.agents.core import (
     METADATA_CONVERTED_TO_AGENT_END,
     METADATA_EXTERNAL_PART_AGENT_VISIBLE,
+    METADATA_PARAMETERS_BEFORE_USER_EDIT,
     BaseAgent,
     BaseEvent,
     ExecutionEventType,
@@ -137,6 +139,24 @@ class ToolUseContextManager(ContextManager):
         # an assistant message, which some models answer with nothing.
         texts = ShownTexts()
 
+        # The arguments each call the user edited ran with, by its TOOL_START: the call is
+        # shown as it ran. Each result goes to the nearest call before it, as ids can repeat.
+        executed_parameters_by_tool_start_id: dict[str | None, dict[str, Any]] = {}
+        executed_parameters_by_call_id: dict[str, dict[str, Any]] = {}
+        for event in reversed(event_to_parse):
+            action: Any = event.action
+            if action is None:
+                continue
+            if event.metadata.get(METADATA_PARAMETERS_BEFORE_USER_EDIT) is not None:
+                executed_parameters_by_call_id[action.call_id] = action.parameters or {}
+            elif (
+                event.event_type == ExecutionEventType.TOOL_START
+                and action.call_id in executed_parameters_by_call_id
+            ):
+                executed_parameters_by_tool_start_id[event.event_id] = (
+                    executed_parameters_by_call_id.pop(action.call_id)
+                )
+
         for event in event_to_parse:
             boundaries.append((event.event_id, len(messages)))
 
@@ -155,14 +175,21 @@ class ToolUseContextManager(ContextManager):
                         continue
                     if event.action:
                         thought = event.action.thought or ""
+                        shown_arguments = event.action.parameters or {}
+                        if event.event_id in executed_parameters_by_tool_start_id:
+                            # The planner's own arguments (`reasoning`) stay as made.
+                            shown_arguments = {
+                                **executed_parameters_by_tool_start_id[event.event_id],
+                                **{
+                                    k: v for k, v in shown_arguments.items() if k in INJECTED_PARAMS
+                                },
+                            }
                         tool_call = LLMToolCall(
                             id=event.action.call_id,
                             type="function",
                             function=ToolCallFunction(
                                 name=event.action.name,
-                                arguments=json.dumps(
-                                    event.action.parameters or {}, ensure_ascii=False
-                                ),
+                                arguments=json.dumps(shown_arguments, ensure_ascii=False),
                             ),
                         )
                         # Group consecutive TOOL_START events into one assistant message
@@ -257,11 +284,6 @@ class ToolUseContextManager(ContextManager):
                                     read_back=read_back(event) if reads_back else None,
                                 )
                             )
-
-                case ExecutionEventType.TOOL_FEEDBACK:
-                    if event.action:
-                        observation = str(event.action.observation or "")
-                        messages.append(LLMMessage(role=self.user_role, content=observation))
 
                 case ExecutionEventType.EXTERNAL_PART:
                     # Externally-injected content (e.g. from a channel) only

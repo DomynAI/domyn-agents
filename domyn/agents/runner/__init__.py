@@ -22,6 +22,7 @@ from domyn.agents.approvals import (
     ApprovalScope,
     ApprovalVerdict,
     ConversationApprovalStore,
+    append_user_edit_note,
     build_request,
     is_already_approved,
     visible_parameters,
@@ -38,6 +39,7 @@ from domyn.agents.core import (
     METADATA_FORWARD_VERBATIM,
     METADATA_FORWARD_VERBATIM_SOURCE_ID,
     METADATA_FORWARD_VERBATIM_SOURCE_KEY,
+    METADATA_PARAMETERS_BEFORE_USER_EDIT,
     METADATA_STEERING,
     METADATA_TOOL_BATCH,
     METADATA_VISIBILITY_ONLY,
@@ -2013,26 +2015,32 @@ class Runner:
                         None,
                     )
 
-                auth_params_changed_msg = None
+                auth_proposed_parameters = None
                 if _latest_tool_feedback is not None:
                     tool_feedback_input.action = tool_feedback_input.action.model_copy(
                         update={"parameters": _latest_tool_feedback.action.parameters}
                     )
-                    auth_params_changed_msg = self._params_changed_message(
-                        tool_feedback_input.action.name, tool_feedback_input.action.parameters
+                    auth_proposed_parameters = self._proposed_parameters_if_user_edited(
+                        tool_feedback_input.action.parameters, previous_event.action.parameters
                     )
                 captured: list[BaseEvent] = []
                 async for ev in self._stream_tool_events(
                     tool, state, context, tool_feedback_input, captured
                 ):
                     yield ev
+                auth_fallback_action: Any = previous_event.action
+                if auth_proposed_parameters is not None:
+                    # A fallback error is for the call as it ran, not as proposed.
+                    auth_fallback_action = auth_fallback_action.model_copy(
+                        update={"parameters": tool_feedback_input.action.parameters}
+                    )
                 last_tool_event = self._finalize_tool_event(
                     captured[0] if captured else None,
-                    previous_event.action,
+                    auth_fallback_action,
                     "authentication",
                     state,
                     context,
-                    auth_params_changed_msg,
+                    auth_proposed_parameters,
                 )
 
         elif (
@@ -2054,6 +2062,8 @@ class Runner:
             # runner can match the TOOL_END to its pending tool-call future.
             # The client's TOOL_FEEDBACK carries a fresh UUID by default.
             new_approve_action.call_id = previous_event.action.call_id
+            # The reasoning that made the call, which the feedback does not carry.
+            new_approve_action.thought = waiting_action.thought
             requested_parameters = previous_event.action.parameters
             # USER_CONFIRM cards are read-only: the user can only approve or refuse,
             # never edit. The values that come back are therefore a round-trip of what
@@ -2068,15 +2078,9 @@ class Runner:
 
             # Need to save the tool_feedback_input event before executing the tool in case the execution is stopped
             # for an auth event. The auth event handling will need the information on the tool parameters to re-execute the tool after the auth is completed.
-            params_changed_msg = None
-            if self.parameters_changed(
+            proposed_parameters = self._proposed_parameters_if_user_edited(
                 new_approve_action.parameters, previous_event.action.parameters
-            ):
-                params_changed_msg = self._params_changed_message(
-                    new_approve_action.name, new_approve_action.parameters
-                )
-                new_approve_action.observation = params_changed_msg
-                tool_feedback_input.action.observation = params_changed_msg
+            )
 
             # A standing grant is recorded here, not by the front-end: the
             # interaction context the grant lives on only exists on this side.
@@ -2133,7 +2137,7 @@ class Runner:
                 "approval",
                 state,
                 context,
-                params_changed_msg,
+                proposed_parameters,
             )
 
         else:
@@ -2141,6 +2145,7 @@ class Runner:
             new_refuse_action = tool_feedback_input.action.to_tool_action()
             # Restore the original call_id so the remote runner can resolve its future.
             new_refuse_action.call_id = previous_event.action.call_id
+            new_refuse_action.thought = waiting_action.thought
             new_refuse_action.observation = refusal_message
             last_tool_event = BaseEvent(
                 event_type=ExecutionEventType.TOOL_END,
@@ -2163,8 +2168,23 @@ class Runner:
             isinstance(state.current_agent, DelegateAgent)
             and state.current_agent.transport is not None
         ):
+            delegate_result_event: Any = last_tool_event
+            if delegate_result_event.metadata.get(METADATA_PARAMETERS_BEFORE_USER_EDIT) is not None:
+                # The remote agent reads only what it is sent: the note goes in its copy alone.
+                delegate_result_event = delegate_result_event.model_copy(deep=True)
+                delegate_result_action: Any = delegate_result_event.action
+                tool_result = delegate_result_action.observation
+                delegate_result_action.observation = append_user_edit_note(
+                    tool_result, delegate_result_event
+                )
+                if delegate_result_event.event_type == ExecutionEventType.TOOL_ERROR:
+                    # Adapters hand a remote only the error message of a failed call; a
+                    # tool that yielded nothing has none, only the observation.
+                    delegate_result_event.error_message = append_user_edit_note(
+                        delegate_result_event.error_message or tool_result, delegate_result_event
+                    )
             await state.current_agent.transport.send_result(
-                last_tool_event,  # type: ignore[possibly-undefined]
+                delegate_result_event,
                 conversation_id=state.conversation_id,
             )
 
@@ -3485,14 +3505,17 @@ class Runner:
             ),
         )
 
-    @staticmethod
-    def _params_changed_message(tool_name: str, params: Any) -> str:
-        return (
-            f"IMPORTANT: The user updated the tool parameters for tool: {tool_name} with parameters: "
-            f"{params}. Continue the execution with these new parameters. The user changed the "
-            f"parameters because they changed their mind about the tool execution; from now on use "
-            f"the updated parameters instead of the old ones, also for related tool calls."
-        )
+    def _proposed_parameters_if_user_edited(
+        self, executed_parameters: Any, proposed_parameters: Any
+    ) -> dict[str, Any] | None:
+        """The arguments the model proposed, when the user changed them before approving."""
+        if (
+            executed_parameters is None
+            or proposed_parameters is None
+            or not self.parameters_changed(executed_parameters, proposed_parameters)
+        ):
+            return None
+        return visible_parameters(proposed_parameters)
 
     def _build_tool_error_event(
         self,
@@ -3535,25 +3558,21 @@ class Runner:
         error_suffix: str,
         state: RunnerState,
         context: InteractionContext,
-        params_changed_msg: str | None,
+        proposed_parameters: dict[str, Any] | None,
     ) -> BaseEvent:
+        """The tool's result as it is stored; ``proposed_parameters``: the arguments the user replaced."""
         if last_tool_event is None:
             error_action = fallback_action.model_copy(
                 update={
                     "observation": f"Tool {fallback_action.name} execution did not yield any events after {error_suffix}."
                 }
             )
-            return self._build_tool_error_event(state, context, error_action)
+            last_tool_event = self._build_tool_error_event(state, context, error_action)
         last_tool_event.interaction_id = context.interaction_id
         last_tool_event.turn_id = state.turn_id
-        if (
-            params_changed_msg is not None
-            and last_tool_event.event_type == ExecutionEventType.TOOL_END
-            and isinstance(state.current_agent, DelegateAgent)
-        ):
-            last_tool_event.action.observation = (
-                f"{last_tool_event.action.observation}\n{params_changed_msg}"
-            )
+        if proposed_parameters is not None:
+            # Success or error alike: context managers render the call as it ran, with a note.
+            last_tool_event.metadata[METADATA_PARAMETERS_BEFORE_USER_EDIT] = proposed_parameters
         return last_tool_event
 
     def _build_tool_needs_feedback_auth(

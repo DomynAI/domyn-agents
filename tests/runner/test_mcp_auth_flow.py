@@ -8,6 +8,7 @@ import pytest
 from domyn.agents import Runner
 from domyn.agents.agents import Agent
 from domyn.agents.core import (
+    METADATA_PARAMETERS_BEFORE_USER_EDIT,
     AgentAction,
     ApprovalType,
     AuthenticationAction,
@@ -659,9 +660,10 @@ def _make_capturing_execute():
     return _execute, captured
 
 
+@pytest.mark.parametrize("value", ["modified_value", "original_value"])
 @pytest.mark.asyncio
 async def test_param_feedback_then_auth_failure_preserves_modified_params(
-    runner: Runner, llm_provider: BaseLLMProvider
+    runner: Runner, llm_provider: BaseLLMProvider, value: str
 ):
     """Modified parameters from a parameter-approval TOOL_FEEDBACK must be used for tool
     execution even when an auth failure interrupts between the two feedback rounds."""
@@ -714,7 +716,7 @@ async def test_param_feedback_then_auth_failure_preserves_modified_params(
         content=[],
         action=FeedbackAction(
             name=_MCP_TOOL_NAME,
-            parameters=[FeedbackParameters(name="query", value="modified_value")],
+            parameters=[FeedbackParameters(name="query", value=value)],
             approval_type=ApprovalType.PARAMS_UPDATE,
             approve=True,
         ),
@@ -768,10 +770,78 @@ async def test_param_feedback_then_auth_failure_preserves_modified_params(
     assert any(
         e.event_type == ExecutionEventType.RESPONSE and e.author == "RootAgent" for e in turn3
     )
-    assert captured_kwargs.get("query") == "modified_value", (
-        f"Tool was called with {captured_kwargs!r}, expected query='modified_value'"
+    assert captured_kwargs.get("query") == value, (
+        f"Tool was called with {captured_kwargs!r}, expected query={value!r}"
     )
     assert ExecutionEventType.TOOL_START not in [e.event_type for e in turn3]
+    # The result says the call was edited only when it was, and stays the tool's own.
+    tool_end = next(e for e in turn3 if e.event_type == ExecutionEventType.TOOL_END)
+    assert tool_end.action.observation == "ok"
+    proposed_parameters = tool_end.metadata.get(METADATA_PARAMETERS_BEFORE_USER_EDIT)
+    assert proposed_parameters == (
+        {"query": "original_value"} if value == "modified_value" else None
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_edited_call_that_yields_nothing_after_auth_is_stored_as_it_ran(
+    runner: Runner, llm_provider: BaseLLMProvider
+):
+    """The fallback error of an edited call carries the arguments that ran, not the proposed."""
+    agent = Agent(
+        name="RootAgent",
+        description="desc",
+        instruction="instr",
+        llm_provider=llm_provider,
+        tools=[_make_mcp_tool_with_approval()],
+    )
+    kwargs = {
+        "application_name": "app",
+        "user_id": "user",
+        "root": agent,
+        "conversation_id": "conv_param_auth_silent",
+    }
+    agent._execute = async_gen_from_list(
+        [
+            BaseEvent(
+                event_type=ExecutionEventType.TOOL_START,
+                author="RootAgent",
+                action=ToolAction(name=_MCP_TOOL_NAME, parameters={"query": "original_value"}),
+            )
+        ]
+    )
+    _ = [e async for e in runner.run(user_input=_user_input(), **kwargs)]
+    param_feedback = BaseEvent(
+        event_type=ExecutionEventType.TOOL_FEEDBACK,
+        author="user",
+        action=FeedbackAction(
+            name=_MCP_TOOL_NAME,
+            parameters=[FeedbackParameters(name="query", value="modified_value")],
+            approval_type=ApprovalType.PARAMS_UPDATE,
+            approve=True,
+        ),
+    )
+    with patch.object(MCPTool, "check_auth_credentials", _fail_auth):
+        turn2 = [e async for e in runner.run(user_input=param_feedback, **kwargs)]
+    tnf_auth = turn2[-1]
+
+    agent._execute = async_gen_from_list([_response_event("RootAgent")])
+    auth_feedback = BaseEvent(
+        event_type=ExecutionEventType.TOOL_FEEDBACK,
+        author="user",
+        action=AuthenticationAction(
+            call_id=tnf_auth.action.call_id,
+            name=tnf_auth.action.name,
+            parameters=None,
+            success=AuthenticationResult.SUCCESS,
+        ),
+    )
+    with patch.object(Runner, "_execute_tool", async_gen_from_list([])):
+        turn3 = [e async for e in runner.run(user_input=auth_feedback, **kwargs)]
+
+    tool_error = next(e for e in turn3 if e.event_type == ExecutionEventType.TOOL_ERROR)
+    assert tool_error.action.parameters == {"query": "modified_value"}
+    assert tool_error.metadata[METADATA_PARAMETERS_BEFORE_USER_EDIT] == {"query": "original_value"}
 
 
 @pytest.mark.asyncio
