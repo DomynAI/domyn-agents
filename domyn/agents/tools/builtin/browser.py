@@ -35,6 +35,14 @@ Lightpanda 1.0.0-nightly, macOS arm64, every command through
 * **The snapshot text prints a non-breaking space as a plain one**; the JSON
   ``refs`` keep it (apple.com: 13 of 158 refs). The model copies the text, so
   names are compared with every whitespace character read as a plain space.
+* **An element that is only clickable has two names.** A ``<div>`` with an
+  ``onclick`` or ``cursor:pointer`` gets a ref, but no accessible name: the
+  JSON ``refs`` say ``""``, while the ``-i`` text prints its ``textContent``
+  (trimmed, the first 100 characters) as the label, since the text below it is
+  filtered out (a site's search box built from a ``<div>`` is one, and on a
+  busy page about a fifth of the refs; the same in 0.42.0). The model copies
+  the label, so a name the JSON leaves empty is read from the element's own
+  line of the text.
 * **Clicks do not report where they went.** ``open`` returns the final URL
   after redirects; ``click``/``fill``/``press`` return ``{clicked}`` and the
   like, without waiting for a navigation they start (0.02 s for a link to a
