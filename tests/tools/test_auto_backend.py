@@ -132,3 +132,48 @@ class TestWhatIsExplicit:
         assert built.browser is not None
         assert isinstance(built.browser.backend, LocalBackend)
         assert built.browser.backend is not built.backend
+
+
+class TestTheStateFolder:
+    """Whichever backend is chosen keeps a conversation's state in the same place."""
+
+    def test_it_is_handed_to_both(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        ws = Workspace.at(tmp_path / "ws")
+        (tmp_path / "ws").mkdir(exist_ok=True)
+        state = tmp_path / "state"
+        auto = build_backend("auto", ws, state_dir=state)
+        assert isinstance(auto, AutoBackend)
+        assert (
+            auto.state_dir == str(state) == build_backend("docker", ws, state_dir=state).state_dir
+        )
+
+    def test_the_environment_is_read_once_when_none_is_given(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "ws").mkdir()
+        monkeypatch.setenv("DOMYN_PROJECT_DIR", str(tmp_path / "proj"))
+        auto = AutoBackend(Workspace.at(tmp_path / "ws"))
+        monkeypatch.setenv("DOMYN_PROJECT_DIR", str(tmp_path / "other"))
+        assert auto.state_dir == str(tmp_path / "proj")
+
+    @pytest.mark.asyncio
+    async def test_the_local_fallback_uses_it_too(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "ws").mkdir()
+        state = tmp_path / "state"
+        auto = AutoBackend(Workspace.at(tmp_path / "ws"), state_dir=state)
+
+        async def refuse(self: Any) -> None:
+            raise BackendUnavailableError("no docker")
+
+        monkeypatch.setattr("domyn.agents.tools.builtin.docker_backend.DockerBackend.check", refuse)
+        chosen = await auto.decide()
+        assert isinstance(chosen, LocalBackend) and chosen.state_dir == str(state)
+
+    def test_without_any_it_is_dot_domyn(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "ws").mkdir()
+        monkeypatch.delenv("DOMYN_PROJECT_DIR", raising=False)
+        assert AutoBackend(Workspace.at(tmp_path / "ws")).state_dir == ".domyn"

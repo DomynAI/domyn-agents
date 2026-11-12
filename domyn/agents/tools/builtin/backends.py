@@ -374,8 +374,14 @@ class AutoBackend(CommandBackend):
         isolate_environment: bool = True,
         allowed_env: Iterable[str] = (),
         docker: object | None = None,
+        state_dir: str | os.PathLike[str] | None = None,
     ) -> None:
         self._workspace = workspace
+        # Resolved once, here, and handed to whichever backend is chosen: the two
+        # must keep a conversation's state in the same place.
+        if state_dir is None:
+            state_dir = state_dir_from_environment()
+        self._state_dir = Path(state_dir).expanduser().absolute() if state_dir is not None else None
         self._isolate_environment = isolate_environment
         self._allowed_env = list(allowed_env)
         self._docker_options = docker
@@ -383,6 +389,10 @@ class AutoBackend(CommandBackend):
         self._deciding = asyncio.Lock()
         self.fallback: BackendUnavailableError | None = None
         """Why Docker was not used, when it was not."""
+
+    @property
+    def state_dir(self) -> str:
+        return str(self._state_dir) if self._state_dir is not None else HOME_DIRNAME
 
     async def decide(self) -> CommandBackend:
         if self._chosen is not None:
@@ -395,6 +405,7 @@ class AutoBackend(CommandBackend):
                 self._workspace,
                 allowed_env=self._allowed_env,
                 docker=self._docker_options,
+                state_dir=self._state_dir,
             )
             try:
                 await candidate.check()
@@ -405,6 +416,7 @@ class AutoBackend(CommandBackend):
                     self._workspace,
                     isolate_environment=self._isolate_environment,
                     allowed_env=self._allowed_env,
+                    state_dir=self._state_dir,
                 )
                 get_logger().info(f"sandbox unavailable, commands run locally: {exc.problem}")
                 self._notice(f"{exc.problem} Commands run on this machine, with no sandbox.")
@@ -486,13 +498,16 @@ def build_backend(
             isolate_environment=isolate_environment,
             allowed_env=allowed_env,
             docker=docker,
+            state_dir=state_dir,
         )
     if name == "docker":
         # Imported here: it needs pydantic models and a module that imports this one.
         from domyn.agents.tools.builtin.docker_backend import DockerBackend, DockerOptions
 
         options = docker if isinstance(docker, DockerOptions) else DockerOptions()
-        return DockerBackend(workspace, options=options, allowed_env=allowed_env)
+        return DockerBackend(
+            workspace, options=options, allowed_env=allowed_env, state_dir=state_dir
+        )
     raise BackendUnavailableError(
         f"unknown command backend '{name}' (available: auto, local, docker). "
         "Refusing to fall back to running on this machine."

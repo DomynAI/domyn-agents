@@ -16,16 +16,19 @@ is only where the command runs afterwards.
 
 * The workspace, read-write, at the *same absolute path* it has on the host, as
   the working directory. Paths in output match the host, and the background
-  command directory (``.domyn/processes``) works without a change.
+  command directory (``<state folder>/processes``) works without a change.
 * Skill directories, read-only, at their own paths: builtin skills run their
   scripts through ``run_command``.
 * Read-only masks over the places a writable workspace would let a command reach
   the host through: ``.git/hooks`` and ``.git/config`` (a planted hook runs on the
   host at the next ``git commit``), and ``.domyn`` and ``.agents`` — their
   ``config.yaml``, skills and instruction files are read into the *next turn's
-  prompt*, so a write there would persist instructions. ``.domyn/processes`` and
-  the conversation's own folder stay writable. A mask exists only for what exists
-  when the container is created.
+  prompt*, so a write there would persist instructions. The state folder's
+  ``processes`` and the conversation's own folder stay writable: they are
+  ``.domyn/…`` in the workspace, or, in the CLI, under the folder
+  ``DOMYN_PROJECT_DIR`` names (``~/.domyn`` or a project), mounted at their host
+  paths whichever it is — only those two, never the folder around them. A mask
+  exists only for what exists when the container is created.
 * Nothing else: no Docker socket, no home folder, no credentials. Environment
   variables reach a command only when ``allowed_env`` names them.
 
@@ -74,7 +77,14 @@ from domyn.agents.tools.builtin.backends import (
     CommandBackend,
     CommandResult,
 )
-from domyn.agents.tools.builtin.session import HOME_DIRNAME, SessionEnvironment, safe_id
+from domyn.agents.tools.builtin.session import (
+    HOME_DIRNAME,
+    SessionEnvironment,
+    StateFolders,
+    linked_below,
+    safe_id,
+    state_dir_from_environment,
+)
 from domyn.agents.tools.builtin.session import _ignore_from_version_control as _ignore_in_git
 
 if TYPE_CHECKING:
@@ -267,8 +277,16 @@ class DockerBackend(CommandBackend):
         *,
         options: DockerOptions | None = None,
         allowed_env: Iterable[str] = (),
+        state_dir: str | os.PathLike[str] | None = None,
     ) -> None:
+        """``state_dir`` is where the background commands' logs and each conversation's
+        folder live, as for ``LocalBackend``: the folder ``DOMYN_PROJECT_DIR`` names
+        when none is given, else ``.domyn`` in the workspace. Read when the backend
+        is built."""
         self._workspace = workspace
+        if state_dir is None:
+            state_dir = state_dir_from_environment()
+        self._state_dir = Path(state_dir).expanduser().absolute() if state_dir is not None else None
         self._options = options or DockerOptions()
         self._allowed_env = [n for n in allowed_env if n]
         self._docker = _Docker(self._options.docker_binary)
@@ -292,6 +310,17 @@ class DockerBackend(CommandBackend):
         self._deferred_for: dict[str, str] = {}
         self._loud = False
         self._warned_image = False
+
+    @property
+    def state_dir(self) -> str:
+        # Relative when none was named: commands run in the workspace, so it is
+        # `<workspace>/.domyn`, as with the local backend.
+        return str(self._state_dir) if self._state_dir is not None else HOME_DIRNAME
+
+    def _state_root(self) -> Path:
+        return (
+            self._state_dir if self._state_dir is not None else self._workspace.root / HOME_DIRNAME
+        )
 
     # --- the interface ---------------------------------------------------
 
@@ -604,7 +633,11 @@ class DockerBackend(CommandBackend):
         return f"domyn-{self._scope}-{_digest(conversation, 12)}"
 
     def _conversation_home(self, conversation: str) -> Path:
-        return SessionEnvironment(self._workspace.root).paths(conversation).home
+        return (
+            SessionEnvironment(self._workspace.root, state_dir=self._state_dir)
+            .paths(conversation)
+            .home
+        )
 
     def _skill_roots(self) -> list[Path]:
         return [p for p in self._workspace.extra_roots if p.is_dir() and "," not in str(p)]
@@ -622,6 +655,7 @@ class DockerBackend(CommandBackend):
             "v": 1,
             "image": self._image,
             "workspace": str(ws),
+            "state": str(self._state_root()),
             "roots": sorted(roots),
             "network": self._options.allowed_hosts() or "none",
             "memory": self._options.memory,
@@ -773,8 +807,12 @@ class DockerBackend(CommandBackend):
         # Masks, outermost first. A mount nested under another is applied after it.
         dot = ws / HOME_DIRNAME
         self._make_dirs(conversation)
-        add(dot, readonly=True)
-        add(dot / "processes", readonly=False)
+        # The project's own `.domyn` (config, skills, instructions): read-only. It
+        # exists in the workspace only when something made it, unlike the state
+        # folder, which `_make_dirs` has just created.
+        if dot.is_dir() and not dot.is_symlink():
+            add(dot, readonly=True)
+        add(self._state_root() / StateFolders.PROCESSES, readonly=False)
         add(self._conversation_home(conversation), readonly=False)
         git = ws / ".git"
         if git.is_dir() and not git.is_symlink():
@@ -797,26 +835,27 @@ class DockerBackend(CommandBackend):
         return mounts
 
     def _make_dirs(self, conversation: str) -> None:
-        """The writable places under ``.domyn``, made without following a link.
+        """The writable places in the state folder, made without following a link.
 
-        A cloned repository can commit ``.domyn`` or any folder in it as a link,
-        and a bind mount follows one.
+        A cloned repository can commit ``.domyn`` or any folder in it as a link, and
+        a project folder given by path may be someone else's export; a bind mount
+        follows a link. The state folder itself may be one (``~/.domyn`` kept with
+        the dotfiles), what is below it may not.
         """
-        ws = self._workspace.root
+        start = self._state_dir if self._state_dir is not None else self._workspace.root
         wanted = [
-            ws / HOME_DIRNAME / "processes",
+            self._state_root() / StateFolders.PROCESSES,
             self._conversation_home(conversation),
         ]
         for target in wanted:
-            here = ws
-            for part in target.relative_to(ws).parts:
-                here = here / part
-                if here.is_symlink():
-                    raise BackendUnavailableError(
-                        f"{here} is a link: the sandbox will not mount through it"
-                    )
+            if (link := linked_below(start, target)) is not None:
+                raise BackendUnavailableError(
+                    f"{link} is a link: the sandbox will not mount through it"
+                )
             target.mkdir(parents=True, exist_ok=True)
-        _ignore_in_git(self._conversation_home(conversation).parent)
+        if self._state_dir is None:
+            # In the workspace, where `git status` would otherwise list it.
+            _ignore_in_git(self._conversation_home(conversation).parent)
 
     # --- running a command -------------------------------------------------
 
@@ -878,7 +917,7 @@ class DockerBackend(CommandBackend):
 
     async def _busy(self, name: str, conversation: str) -> bool:
         """A background command of this conversation is still running."""
-        directory = shlex.quote(f".domyn/processes/{safe_id(conversation)}")
+        directory = shlex.quote(f"{self.processes_dir}/{safe_id(conversation)}")
         script = (
             f'for d in {directory}/*/; do [ -f "$d/run.pid" ] && [ ! -f "$d/run.exit" ] '
             '&& kill -0 "$(cat "$d/run.pid")" 2>/dev/null && exit 3; done; exit 0'

@@ -559,6 +559,88 @@ class TestABusyDaemon:
         assert any("sandbox was lost" in n for n in notices)
 
 
+class TestAStateFolderOutsideTheWorkspace:
+    """In the CLI the session's working state is under ``DOMYN_PROJECT_DIR`` (``~/.domyn``
+    or a project), not in the workspace. The container gets exactly the two places it
+    writes in, at their host paths."""
+
+    def _backend(self, tmp_path: Path) -> tuple[DockerBackend, Path]:
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        state = tmp_path / "state"
+        state.mkdir()
+        return DockerBackend(Workspace.at(ws), state_dir=state), state
+
+    def _specs(self, backend: DockerBackend) -> list[str]:
+        return [m for m in backend._mounts("c1") if m != "--mount"]
+
+    def test_only_the_processes_and_the_conversations_folders_are_mounted(
+        self, tmp_path: Path
+    ) -> None:
+        backend, state = self._backend(tmp_path)
+        specs = self._specs(backend)
+        assert f"type=bind,source={state}/processes,target={state}/processes" in specs
+        assert f"type=bind,source={state}/conversations/c1,target={state}/conversations/c1" in specs
+        assert not any(f"source={state}," in spec for spec in specs), "the whole folder"
+        assert not any(f"source={state}/credentials" in spec for spec in specs)
+
+    def test_nothing_is_made_in_the_workspace_and_no_empty_mask_is_asked_for(
+        self, tmp_path: Path
+    ) -> None:
+        backend, _ = self._backend(tmp_path)
+        ws = backend._workspace.root
+        specs = self._specs(backend)
+        assert not (ws / ".domyn").exists()
+        assert not any(f"source={ws}/.domyn" in spec for spec in specs)
+
+    def test_a_projects_own_dot_domyn_is_still_read_only(self, tmp_path: Path) -> None:
+        backend, _ = self._backend(tmp_path)
+        ws = backend._workspace.root
+        (ws / ".domyn").mkdir()
+        assert f"type=bind,source={ws}/.domyn,target={ws}/.domyn,readonly" in self._specs(backend)
+
+    def test_the_shell_tools_are_told_where_it_is(self, tmp_path: Path) -> None:
+        backend, state = self._backend(tmp_path)
+        assert backend.state_dir == str(state)
+        assert backend.processes_dir == f"{state}/processes"
+
+    def test_without_one_it_is_dot_domyn_in_the_workspace(self, tmp_path: Path) -> None:
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        backend = DockerBackend(Workspace.at(ws))
+        assert backend.state_dir == ".domyn"
+        assert backend._conversation_home("c1") == ws.resolve() / ".domyn/conversations/c1"
+
+    def test_the_environment_names_it_when_none_is_given(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        monkeypatch.setenv("DOMYN_PROJECT_DIR", str(tmp_path / "proj"))
+        assert DockerBackend(Workspace.at(ws)).state_dir == str(tmp_path / "proj")
+
+    def test_another_state_folder_is_another_container(self, tmp_path: Path) -> None:
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        a = DockerBackend(Workspace.at(ws), state_dir=tmp_path / "a")
+        b = DockerBackend(Workspace.at(ws), state_dir=tmp_path / "b")
+        assert a._fingerprint() != b._fingerprint()
+
+    def test_a_link_below_it_is_refused_but_the_folder_may_be_one(self, tmp_path: Path) -> None:
+        backend, state = self._backend(tmp_path)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (state / "processes").symlink_to(elsewhere)
+        with pytest.raises(BackendUnavailableError, match="is a link"):
+            backend._mounts("c1")
+
+        linked = tmp_path / "dotfiles-link"
+        linked.symlink_to(tmp_path / "state2", target_is_directory=True)
+        (tmp_path / "state2").mkdir()
+        ok = DockerBackend(backend._workspace, state_dir=linked)
+        assert ok._mounts("c1")
+
+
 class TestDefaults:
     def test_the_registries_are_always_listed(self) -> None:
         assert {"pypi.org", "registry.npmjs.org"} <= set(REGISTRY_HOSTS)
@@ -576,9 +658,13 @@ async def sandbox(tmp_path: Path) -> AsyncIterator[Callable[..., DockerBackend]]
     workspace = tmp_path / "project"
     workspace.mkdir()
 
-    def make(roots: tuple[Path, ...] = (), **options: Any) -> DockerBackend:
+    def make(
+        roots: tuple[Path, ...] = (), state_dir: Path | None = None, **options: Any
+    ) -> DockerBackend:
         backend = DockerBackend(
-            Workspace.at(workspace, also=roots), options=DockerOptions(**options)
+            Workspace.at(workspace, also=roots),
+            options=DockerOptions(**options),
+            state_dir=state_dir,
         )
         made.append(backend)
         return backend
@@ -960,6 +1046,70 @@ class TestSkillsReachTheContainer:
         result = await _sh(second, "ps -eo args | grep -c '[s]leep 120'")
         assert result.stdout.strip() == "1", "the background command was killed"
         assert any("background command is running" in n for n in notices)
+
+
+@needs_docker
+class TestAStateFolderOutsideTheWorkspaceInAContainer:
+    @pytest.mark.asyncio
+    async def test_the_two_folders_are_writable_and_nothing_around_them_is(
+        self, sandbox: Any, tmp_path: Path
+    ) -> None:
+        state = tmp_path / "state"
+        state.mkdir()
+        backend = sandbox(state_dir=state)
+        ok = await _sh(
+            backend, f"echo a > {state}/processes/x && echo b > {state}/conversations/c1/y"
+        )
+        assert ok.exit_code == 0, ok.stderr
+        assert (state / "processes" / "x").read_text().strip() == "a"
+        assert (state / "conversations" / "c1" / "y").read_text().strip() == "b"
+        beside = await _sh(backend, f"echo no > {state}/elsewhere")
+        assert beside.exit_code != 0
+        assert not (state / "elsewhere").exists()
+        assert not (sandbox.workspace / ".domyn").exists()
+
+    @pytest.mark.asyncio
+    async def test_installs_are_recorded_there_and_restored(
+        self, sandbox: Any, tmp_path: Path
+    ) -> None:
+        state = tmp_path / "state"
+        state.mkdir()
+        backend = sandbox(state_dir=state)
+        run = shell.build_run_command(backend)
+        await run(command="pip install cowsay", conversation_id="c1", state={})
+        assert "cowsay" in (state / "conversations/c1/requirements.txt").read_text()
+        await backend.end_conversation("c1")
+        again = await run(
+            command="python -c 'import cowsay; print(\"py-ok\")'", conversation_id="c1", state={}
+        )
+        assert "py-ok" in str(again.data), str(again.data)
+
+    @pytest.mark.asyncio
+    async def test_background_commands_run_check_and_stop(
+        self, sandbox: Any, tmp_path: Path
+    ) -> None:
+        state = tmp_path / "state"
+        state.mkdir()
+        backend = sandbox(state_dir=state)
+        run = shell.build_run_command(backend)
+        check = shell.build_check_command(backend)
+        stop = shell.build_stop_command(backend)
+        bag: dict[str, Any] = {}
+        started = await run(
+            command="for i in 1 2 3 4 5 6; do echo tick $i; sleep 1; done",
+            background=True,
+            conversation_id="c1",
+            state=bag,
+        )
+        assert "still running" in str(started.data), str(started.data)
+        handle = next(iter(bag["background_processes"]))
+        assert any((state / "processes").rglob("*")), "its folder is in the state folder"
+        await asyncio.sleep(2)
+        last = None
+        async for event in check(handle=handle, conversation_id="c1", state=bag):
+            last = event
+        assert "tick" in str(last.data)
+        assert "Stopped" in str((await stop(handle=handle, conversation_id="c1", state=bag)).data)
 
 
 @needs_docker
