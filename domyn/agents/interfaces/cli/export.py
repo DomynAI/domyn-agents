@@ -474,8 +474,7 @@ class _Exporter:
 
         A root inside another root's folder (``.domyn`` beside ``.``) is copied as part of
         it, so its files keep their place relative to the other's. Names follow the
-        folder (a folder called ``skills`` takes its parent's name, a leading dot is
-        dropped), with ``-2``… when taken.
+        folder, as it is (`_folder_name`), with ``-2``… when taken.
         """
         outer: list[Path] = []
         # Outermost first, then in the config's order: which of two same-named folders
@@ -555,7 +554,7 @@ class _Exporter:
         """Keep ``autodiscovery`` reading the folder the project runs in, and add what it
         found here, copied, to the user's own resources, as `main`'s export did.
 
-        - skills: each copied folder's skills folder (``resources/domyn/skills``…), first
+        - skills: each copied folder's skills folder (``resources/.domyn/skills``…), first
           in the resource the skills source reads whole right after ``autodiscovery``:
           the folder a session starts in still wins a name, then this snapshot, then the
           user's skills;
@@ -1097,14 +1096,15 @@ def _listed_skills(listed: Path) -> list[tuple[Path, Path]]:
 
 
 def _folder_name(anchor: Path) -> str:
-    """What a root folder is called inside ``resources/``.
+    """What a root folder is called inside ``resources/``: its own name, as it is
+    (``.domyn`` stays ``.domyn``, a listed ``~/work/skills`` is ``skills``), with ``-2``…
+    added by `_Exporter._unique` when taken. A folder with no name (``/``) is
+    ``root``.
 
-    A folder called ``skills`` is named after the folder holding it (``.domyn/skills``
-    is ``domyn``): a name saying where the skills came from tells two of them apart. A
-    leading dot is dropped, so a copy never lands in a folder the search tools skip.
-    """
-    name = anchor.parent.name if anchor.name == "skills" else anchor.name
-    return name.lstrip(".") or "skills"
+    The anchors are the only hidden folders an export makes: an import copies a hidden
+    entry directly under ``resources/`` (`project_import._is_anchor`), and leaves out
+    every other one."""
+    return anchor.name or "root"
 
 
 def _hidden_below(path: Path, folder: Path) -> bool:

@@ -201,14 +201,17 @@ class TestTheExportLoadsTheSameSkills:
             "two",
         }
 
-    def test_a_folder_called_skills_is_named_after_its_parent(
-        self, machine: dict[str, Path], tmp_path: Path
-    ) -> None:
+    def test_a_folder_keeps_its_own_name(self, machine: dict[str, Path], tmp_path: Path) -> None:
         _skill(tmp_path / "project" / "skills" / "one", "one")
+        _skill(tmp_path / "other" / "skills" / "two", "two")
 
-        report = _export(_config(str(tmp_path / "project" / "skills")), machine, tmp_path / "out")
+        report = _export(
+            _config(str(tmp_path / "project" / "skills"), str(tmp_path / "other" / "skills")),
+            machine,
+            tmp_path / "out",
+        )
 
-        assert _paths(_exported(report.dest)) == [P + "resources/project"]
+        assert _paths(_exported(report.dest)) == [P + "resources/skills", P + "resources/skills-2"]
 
 
 class TestSetupsSkills:
@@ -292,9 +295,12 @@ class TestAutodiscovery:
         assert resources == {
             "autodiscovery": [".domyn", ".agents"],
             # The copied skills folders, read whole like any skills folder of the user's.
-            "skills": [P + "resources/domyn/skills", P + "resources/agents/skills"],
+            "skills": [P + "resources/.domyn/skills", P + "resources/.agents/skills"],
             # The instruction files the walk found, listed one by one: a copy is frozen.
-            "instructions": [P + "resources/domyn/SOUL.md", P + "resources/domyn/deeper/AGENTS.md"],
+            "instructions": [
+                P + "resources/.domyn/SOUL.md",
+                P + "resources/.domyn/deeper/AGENTS.md",
+            ],
         }
         # Skills: the folder a session runs in first, so it wins a name.
         assert _entries(exported, "skills") == [{"id": "autodiscovery", "path": "skills"}, "skills"]
@@ -309,10 +315,10 @@ class TestAutodiscovery:
             if p.is_file()
         )
         assert copied == [
-            "resources/agents/skills/review/SKILL.md",
-            "resources/domyn/SOUL.md",
-            "resources/domyn/deeper/AGENTS.md",
-            "resources/domyn/skills/writing/essay/SKILL.md",
+            "resources/.agents/skills/review/SKILL.md",
+            "resources/.domyn/SOUL.md",
+            "resources/.domyn/deeper/AGENTS.md",
+            "resources/.domyn/skills/writing/essay/SKILL.md",
         ]
 
     def test_run_elsewhere_it_reads_the_copies_and_that_folder(
@@ -353,8 +359,8 @@ class TestAutodiscovery:
 
         source = LocalDirSkillSource(
             paths=[
-                report.dest / "resources/domyn/skills",
-                report.dest / "resources/agents/skills",
+                report.dest / "resources/.domyn/skills",
+                report.dest / "resources/.agents/skills",
             ]
         )
         body = asyncio.run(source.load(SkillQuery(task="x"))).body("report")
@@ -381,7 +387,7 @@ class TestAutodiscovery:
 
         report = _export(_setup_config([".domyn/skills"]), machine, tmp_path / "out")
 
-        assert (report.dest / "resources/domyn/skills/writing/style.md").read_text() == "style\n"
+        assert (report.dest / "resources/.domyn/skills/writing/style.md").read_text() == "style\n"
         assert report.warnings == []
 
     def test_a_file_shared_from_above_the_folder_refuses_the_export(
@@ -740,7 +746,7 @@ class TestInstructions:
 
         report = _export(raw, machine, tmp_path / "out")
 
-        assert self._declared(report.dest) == [P + "resources/domyn"]
+        assert self._declared(report.dest) == [P + "resources/.domyn"]
         # Still walked in the copy: the entry says so, not the folder's name.
         assert _exported(report.dest)["agents"][0]["standing_instructions"]["source"] == {
             "type": "resource",
@@ -749,9 +755,9 @@ class TestInstructions:
         assert sorted(
             p.relative_to(report.dest).as_posix() for p in (report.dest / "resources").rglob("*.md")
         ) == [
-            "resources/domyn/SOUL.md",
-            "resources/domyn/deeper/AGENTS.md",
-            "resources/domyn/skills/AGENTS.md",
+            "resources/.domyn/SOUL.md",
+            "resources/.domyn/deeper/AGENTS.md",
+            "resources/.domyn/skills/AGENTS.md",
         ]
 
     def test_a_local_folder_with_neither_file_is_left_out_quietly(
@@ -1065,7 +1071,7 @@ class TestWhereTheCopiesGo:
 
         resources = {r["id"]: r["paths"] for r in _exported(report.dest)["resources"]}
         assert resources["skills"] == [P + "resources/notes"]
-        assert resources["skills-2"] == [P + "resources/domyn/skills"]
+        assert resources["skills-2"] == [P + "resources/.domyn/skills"]
         assert _entries(_exported(report.dest), "skills") == [
             {"id": "autodiscovery", "path": "skills"},
             "skills-2",
