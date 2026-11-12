@@ -45,7 +45,9 @@ this machine's own. A ``memory.md`` in the export is not copied
 Everything else at the export's top — ``instructions/``, and any file a skill shares
 from there — is copied as it is, so the config's paths into it stay true. Hidden entries,
 links and the files a domyn home keeps for its owner alone (`is_private`) are not,
-nor the session's working state at the top (`StateFolders`).
+nor the session's working state at the top (`StateFolders`). The one hidden name kept
+is a folder directly under ``resources/``: a resource folder the export copied under
+its own name (``.domyn``, ``.agents``; `_is_anchor`).
 """
 
 import functools
@@ -65,6 +67,7 @@ from domyn.agents.interfaces.cli.export import (
     CODE_DIR,
     INFO_FILENAME,
     INFO_VERSION_KEY,
+    RESOURCES_DIR,
     PrivatePlaces,
     external_files_outside,
     installed_version,
@@ -161,7 +164,9 @@ def import_project(source: Path, project: Path) -> ProjectImport:
         for origin in plan:
             target = staging / origin.name
             if origin.is_dir():
-                shutil.copytree(origin, target, ignore=functools.partial(_ignore, places=places))
+                shutil.copytree(
+                    origin, target, ignore=functools.partial(_ignore, places=places, source=source)
+                )
             else:
                 shutil.copy2(origin, target)
         if project.exists():
@@ -249,17 +254,32 @@ def skill_files_in(
         for path in sorted(source.rglob("*.md"))
         if path.is_file()
         and not any(
-            _left_behind(source.joinpath(*path.relative_to(source).parts[: i + 1]), places)
+            _left_behind(
+                source.joinpath(*path.relative_to(source).parts[: i + 1]),
+                places,
+                anchor=_is_anchor(
+                    source, source.joinpath(*path.relative_to(source).parts[: i + 1])
+                ),
+            )
             for i in range(len(path.relative_to(source).parts))
         )
     ]
 
 
-def _left_behind(path: Path, places: PrivatePlaces) -> bool:
-    return path.name.startswith(".") or path.is_symlink() or is_private(path, places)
+def _is_anchor(source: Path, path: Path) -> bool:
+    """Whether ``path`` is a folder an export copied a resource folder to: directly
+    under ``resources/``, where ``.domyn`` and ``.agents`` keep their names
+    (`export._folder_name`)."""
+    return path.parent == source / RESOURCES_DIR and path.is_dir() and not path.is_symlink()
 
 
-def _ignore(directory: str, names: list[str], *, places: PrivatePlaces) -> set[str]:
+def _left_behind(path: Path, places: PrivatePlaces, *, anchor: bool = False) -> bool:
+    """A hidden entry (unless it is an anchor), a link, or a private file."""
+    hidden = path.name.startswith(".") and not anchor
+    return hidden or path.is_symlink() or is_private(path, places)
+
+
+def _ignore(directory: str, names: list[str], *, places: PrivatePlaces, source: Path) -> set[str]:
     """What `shutil.copytree` leaves out below a copied folder: what `_left_behind`
     does at the top, and bytecode."""
     return {
@@ -267,5 +287,7 @@ def _ignore(directory: str, names: list[str], *, places: PrivatePlaces) -> set[s
         for name in names
         if name == "__pycache__"
         or name.endswith(".pyc")
-        or _left_behind(Path(directory) / name, places)
+        or _left_behind(
+            Path(directory) / name, places, anchor=_is_anchor(source, Path(directory) / name)
+        )
     }

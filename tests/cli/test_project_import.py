@@ -178,6 +178,25 @@ class TestImportingAnExport:
         assert not (project / cfg.PrivateFiles.CREDENTIALS).exists()
         assert not (project / ".env").exists()
 
+    def test_a_resource_folder_keeps_its_hidden_name_and_nothing_else_hidden_comes(
+        self, exported: Path, tmp_path: Path
+    ) -> None:
+        # `.domyn` and `.agents` are copied under their own names (`export._folder_name`).
+        _skill(exported / "resources" / ".domyn" / "skills" / "review", "review")
+        (exported / "resources" / ".domyn" / "skills" / "review" / ".env").write_text("K=1\n")
+        (exported / "resources" / ".domyn" / ".git").mkdir()
+        (exported / "resources" / ".domyn" / ".git" / "config").write_text("x\n")
+        (exported / "resources" / ".hidden.md").write_text("x\n")
+        project = tmp_path / "new"
+
+        import_project(exported, project)
+
+        copied = project / "resources" / ".domyn"
+        assert (copied / "skills" / "review" / "SKILL.md").is_file()
+        assert not (copied / "skills" / "review" / ".env").exists()
+        assert not (copied / ".git").exists()
+        assert not (project / "resources" / ".hidden.md").exists()
+
     @pytest.mark.parametrize("folder", list(StateFolders))
     def test_a_sessions_working_state_is_left_behind_at_the_top_only(
         self, exported: Path, tmp_path: Path, folder: str
