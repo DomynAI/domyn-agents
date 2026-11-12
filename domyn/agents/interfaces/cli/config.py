@@ -53,6 +53,7 @@ from domyn.agents.skills.layout import listed_path_is_linked
 from domyn.agents.tools.builtin import (
     BUNDLE_TOOL_NAMES,
     DEFAULT_BUNDLES,
+    VISION_TOOL_NAMES,
     BrowserOptions,
     DockerBackendOptions,
 )
@@ -203,6 +204,8 @@ class ProviderConfig(BaseModel):
     configuration_id: str | None = None
     """Configuration to take the model from; the space's last released one when empty. ``domyn`` only."""
     api_key_env: str | None = None
+    vision: bool = False
+    """Whether the vision tools are enabled, found during the setup, not declared by the user."""
 
     context_window: int | None = Field(
         default=None,
@@ -1204,6 +1207,8 @@ def configuration_v1_dict_from(
         provider_dict["context_window"] = provider.context_window
     if not provider.send_reasoning:
         provider_dict["send_reasoning"] = False
+    if provider.vision:
+        provider_dict["vision"] = True
     # Only set when a key actually resolves right now (env, or the credentials
     # file — injected into the environment at CLI startup by
     # `_load_credentials` in `cli/main.py`). Omitting it otherwise matters:
@@ -1265,6 +1270,8 @@ def configuration_v1_dict_from(
         docker = agent.docker.model_dump(exclude_defaults=True)
         if docker:
             config["tool_bundles"][0]["docker"] = docker
+        if provider.vision and "files" in agent.tools:
+            provider_dict["vision"] = True
         agent_dict["tool_bundles"] = [CLI_DEFAULT_TOOL_BUNDLE_NAME]
 
     kept = _keep_unowned(config, existing)
@@ -1481,6 +1488,7 @@ def current_settings_from(
         max_tokens=max_tokens,
         context_window=provider_dict.get("context_window"),
         send_reasoning=provider_dict.get("send_reasoning", True),
+        vision=provider_dict.get("vision", False),
     )
 
     bundles = {b.get("name"): b for b in raw.get("tool_bundles", []) if isinstance(b, dict)}
@@ -1700,6 +1708,9 @@ def _agent_tool_names(
         entry = bundle_entries.get(entry_name) or {}
         for builtin in entry.get("bundles") or []:
             names.extend(f"{tool}({builtin})" for tool in BUNDLE_TOOL_NAMES.get(builtin, ()))
+            if builtin == "vision" and entry.get("vision"):
+                names.extend(f"{tool}({builtin})" for tool in VISION_TOOL_NAMES)
+
     return list(dict.fromkeys(names))
 
 

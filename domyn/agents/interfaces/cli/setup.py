@@ -18,7 +18,9 @@ On a terminal, Ctrl-B goes back to the previous question (`run_setup`, `_Recall`
 
 from __future__ import annotations
 
+import base64
 import copy
+import io
 import os
 import shutil
 from collections.abc import Callable, Collection, Iterable
@@ -27,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, cast
 
+from PIL import Image
 import yaml
 
 from domyn.agents.agents.agent import MAX_AGENT_NAME_LENGTH
@@ -84,6 +87,8 @@ from domyn.agents.interfaces.cli.config import (
 )
 from domyn.agents.interfaces.cli.prompt import GoBack, back_key, interactive_terminal, read_line
 from domyn.agents.interfaces.cli.select import multiselect, select
+from domyn.agents.llm import LLMProviderFactory
+from domyn.agents.llm.base import LLMMessage
 from domyn.agents.skills.catalog import (
     BuiltinSkill,
     SkillInstallError,
@@ -351,6 +356,46 @@ def _decision_endpoint_answers(base_url: str, model: str, api_key: str | None = 
         detail = response.text.strip().replace("\n", " ")[:120]
         return f"{base_url} answered {response.status_code}: {detail}"
     return None
+
+def _image_rejection(provider: ProviderConfig) -> str | None:
+    image = Image.new("RGB", (1, 1))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    data_url = f"data:image/png;base64,{encoded}"
+
+    config_dict =  {
+            "type": provider.type,
+            "model_name": provider.model_name,
+            "url": provider.url,
+            "api_key": resolve_api_key(provider),
+            "generation_params": {
+                "max_tokens": 16
+            },
+            "body": {
+                "max_tokens": 16
+            }
+        }
+    if provider.type == "domyn":
+        config_dict["space_id"] = provider.space_id
+        config_dict["configuration_id"] = provider.configuration_id
+    test_provider = LLMProviderFactory.from_config(
+        config = config_dict
+    )
+    messages = [
+        LLMMessage(
+            role="user",
+            content=[
+                {"type": "text", "text": "Reply only with the image color, one word"}
+                {"type": "image", "image": data_url},
+            ]
+        )
+    ]
+
+    run_sync(asyncio.wait_for(test_provider.generate(messages)))
+
+
+
 
 
 def _ask_decision_key(
