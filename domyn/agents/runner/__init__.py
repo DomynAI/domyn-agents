@@ -3793,7 +3793,12 @@ class Runner:
                     # so the event content stays empty — nothing leaks to the user.
                     # Otherwise the agent keeps its emitted_content here.
                     content=[] if suppress_partials else [*(tool_result.emitted_content or [])],
-                    metadata=tool_result.metadata if tool_result.metadata else {},
+                    # Only the runner records a user's edit: a tool's own value would fake one.
+                    metadata={
+                        key: value
+                        for key, value in (tool_result.metadata or {}).items()
+                        if key != METADATA_INITIAL_PARAMETERS
+                    },
                     error_code=tool_result.error_code,
                     error_message=tool_result.error,
                 )
