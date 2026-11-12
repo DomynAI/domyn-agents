@@ -186,7 +186,7 @@ class TestImportingAnExport:
         # session's environments and logs. Below the top it is anyone's folder.
         (exported / folder / "c1").mkdir(parents=True)
         (exported / folder / "c1" / "out.log").write_text("secret\n")
-        nested = next((exported / "skills").rglob("SKILL.md")).parent / folder
+        nested = next((exported / "resources").rglob("SKILL.md")).parent / folder
         nested.mkdir()
         (nested / "notes.md").write_text("mine\n")
         project = tmp_path / "new"

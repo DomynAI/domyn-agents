@@ -1172,7 +1172,7 @@ def _setup_sources(skills: Any, instructions: Any) -> tuple[Any, Any, list[dict[
         # Setup's own in a fixed order, whatever order the paths came in: the project's
         # skills, then the user's, then the built-ins, so each wins a name over the next;
         # the user's instructions, then the project's, whose brief is read last.
-        entries.sort(key=lambda entry: _ENTRY_ORDER[key].index(_entry_id(entry)))
+        entries.sort(key=lambda entry: _ENTRY_ORDER[key].index(str(_entry_id(entry))))
         # Entries setup does not own (an export's snapshot, a hand-written resource),
         # put back where they were.
         for at, kept in (mapping or {}).get("source", {}).get("keep") or []:

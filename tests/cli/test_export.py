@@ -575,10 +575,12 @@ class TestTheSessionsWorkingStateStaysBehind:
         monkeypatch.setattr(cli_config, "GLOBAL_DIR", home)
         (home / folder / "c1").mkdir(parents=True)
         (home / folder / "c1" / "out.log").write_text("secret\n", encoding="utf-8")
-        # A skill in the home whose `external_files` walks up into the state folder.
+        # A skill in the home whose `external_files` walks up into the state folder,
+        # read through the home itself, so the file is inside the folder it is read
+        # through and only `is_private` keeps it out.
         _skill(home / "mine" / "s", "s", external=[f"../../{folder}/c1/out.log"])
 
-        report = _export(_config(str(home / "mine" / "s")), machine, tmp_path / "out")
+        report = _export(_config(str(home)), machine, tmp_path / "out")
 
         assert not list(report.dest.rglob("out.log"))
         assert any("out.log" in d and "never exported" in d for d in report.dropped)
@@ -593,9 +595,10 @@ class TestTheSessionsWorkingStateStaysBehind:
         (project / "processes" / "c1" / "out.log").write_text("secret\n", encoding="utf-8")
         _skill(project / "skills" / "s", "s", external=["../../processes/c1/out.log"])
 
-        report = _export(_config(str(project / "skills" / "s")), machine, tmp_path / "out")
+        report = _export(_config(str(project)), machine, tmp_path / "out")
 
         assert not list(report.dest.rglob("out.log"))
+        assert any("out.log" in d and "never exported" in d for d in report.dropped)
 
     @pytest.mark.parametrize("folder", list(StateFolders))
     def test_a_skills_own_folder_of_that_name_travels(
@@ -607,7 +610,7 @@ class TestTheSessionsWorkingStateStaysBehind:
 
         report = _export(_config(str(skill)), machine, tmp_path / "out")
 
-        assert (report.dest / "skills/s" / folder / "notes.md").read_text() == "mine\n"
+        assert (report.dest / "resources/s" / folder / "notes.md").read_text() == "mine\n"
 
 
 class TestSecrets:

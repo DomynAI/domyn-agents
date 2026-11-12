@@ -16,8 +16,10 @@ from domyn.agents.loader import load_application_from_file
 CONFIG = (
     "version: '1.0'\nentrypoint: A\n"
     "llm_providers: [{name: p, type: vllm, model_name: m, url: 'http://x'}]\n"
-    "tool_bundles: [{name: t, bundles: [shell], workspace: WORKSPACE}]\n"
-    "agents: [{name: A, description: d, instruction: i, llm_provider: p, tool_bundles: [t]}]\n"
+    "resources: [{id: work, type: local_dir, paths: [WORKSPACE]}]\n"
+    "tool_bundles: [{name: t, bundles: [shell]}]\n"
+    "agents: [{name: A, description: d, instruction: i, llm_provider: p,"
+    " tool_bundles: [{use: t, workspace: work}]}]\n"
 )
 
 

@@ -219,7 +219,7 @@ class TestEntries:
             files={
                 "SOUL.md": "soul",
                 "sub/AGENTS.md": "deep",
-                "skills/x/AGENTS.md": "a skill folder, never read",
+                "skills/x/AGENTS.md": "in a skill folder",
                 ".hidden/AGENTS.md": "hidden",
             },
         )
@@ -229,4 +229,5 @@ class TestEntries:
 
         loaded = await source.load()
 
-        assert [p.text for p in loaded.parts] == ["soul", "deep"]
+        # Nothing is skipped by name, a skill folder included: breadth first.
+        assert [p.text for p in loaded.parts] == ["soul", "deep", "in a skill folder"]
