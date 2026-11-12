@@ -16,12 +16,15 @@ willing to be approved *for*, and having to say it out loud is a feature.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
+from domyn.agents.core import METADATA_PARAMETERS_BEFORE_USER_EDIT, ExecutionEventType
 from domyn.agents.logger import get_logger
 
 if TYPE_CHECKING:
     from domyn.agents.approvals.models import ApprovalRequest
+    from domyn.agents.core import BaseEvent
 
 # Parameters the planner adds to a tool's schema for its own purposes, which are
 # no part of what the user is approving. They must never reach a subject, for two
@@ -44,6 +47,45 @@ INJECTED_PARAMS: frozenset[str] = frozenset({"reasoning"})
 def visible_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
     """The parameters a subject may be built from: the call minus planner noise."""
     return {key: value for key, value in parameters.items() if key not in INJECTED_PARAMS}
+
+
+def append_user_edit_note(tool_result: Any, tool_result_event: BaseEvent) -> Any:
+    """*tool_result*, followed by a note for the model when *tool_result_event* is the result of a
+    call the user edited before approving it; unchanged for any other event.
+
+    Added where the result is rendered for a model, never to the stored result: the
+    note is an instruction to the model, and the stored result is what users see.
+    """
+    proposed_parameters = tool_result_event.metadata.get(METADATA_PARAMETERS_BEFORE_USER_EDIT)
+    executed_action: Any = tool_result_event.action  # mypy reads `BaseEvent.action` as `None`
+    if proposed_parameters is None or executed_action is None:
+        return tool_result
+
+    def format_call(parameters: dict[str, Any]) -> str:
+        arguments = json.dumps(visible_parameters(parameters), ensure_ascii=False, default=str)
+        return f"{executed_action.name}({arguments})"
+
+    edit_summary = (
+        f"Note: the user changed the arguments of this call before approving it. It ran as "
+        f"{format_call(executed_action.parameters or {})}, not as proposed "
+        f"({format_call(proposed_parameters)})"
+    )
+    if tool_result_event.event_type == ExecutionEventType.TOOL_ERROR:
+        user_edit_note = (
+            f"{edit_summary}, and the error above is for the user's arguments. If you try again, start "
+            f"from the user's values, not the proposed ones."
+        )
+    else:
+        user_edit_note = (
+            f"{edit_summary}, and the result above is for the user's arguments. The call is done: do "
+            f"not make it again. Use the user's values from now on, in related calls too."
+        )
+    if isinstance(tool_result, dict | list):
+        tool_result = json.dumps(tool_result, ensure_ascii=False, default=str)
+    # Only a missing result gives way to the note: a 0 or False is the result.
+    if tool_result is None or tool_result == "":
+        return user_edit_note
+    return f"{tool_result}\n\n{user_edit_note}"
 
 
 def compute_subject(tool: Any, parameters: dict[str, Any]) -> str:
