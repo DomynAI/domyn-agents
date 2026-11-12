@@ -42,6 +42,7 @@ from rich.text import Text
 
 from domyn.agents.approvals import ApprovalGrant, ApprovalRequest, is_already_approved
 from domyn.agents.core import (
+    METADATA_BRANCH,
     ApprovalType,
     BaseEvent,
     ExecutionEventType,
@@ -291,7 +292,11 @@ def begin_approval(console: Console, theme: Theme, event: BaseEvent) -> Approval
         parts=[str(p) for p in parts] if isinstance(parts, list) else None,
     )
 
-    lead = f"{theme.symbols.bullet} approval required: "
+    # A sub-agent of several running at once says who it is: the calls of the
+    # others went past in the same trace.
+    branch = event.metadata.get(METADATA_BRANCH)
+    who = f" ({branch})" if branch else ""
+    lead = f"{theme.symbols.bullet} approval required{who}: "
     editing = action.approval_type == ApprovalType.PARAMS_UPDATE
     body: list[Field | Diff] = []
     if editing:

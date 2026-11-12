@@ -12,7 +12,14 @@ import re
 import pytest
 from rich.console import Console
 
-from domyn.agents.core import BaseEvent, ExecutionEventType, Part, ToolAction
+from domyn.agents.core import (
+    METADATA_TOOL_BATCH,
+    AgentAction,
+    BaseEvent,
+    ExecutionEventType,
+    Part,
+    ToolAction,
+)
 from domyn.agents.interfaces.cli import Capabilities, Theme
 from domyn.agents.interfaces.cli.renderer import EventRenderer
 
@@ -261,3 +268,38 @@ def test_the_marker_has_an_ascii_fallback(unicode_ok: bool) -> None:
     renderer.begin_turn()
     renderer.render(_response("answer"))
     assert buffer.getvalue().startswith("⏺" if unicode_ok else "*")
+
+
+class TestSubAgentsWorkingAtOnceAreToldApart:
+    """Under ``parallel_handoffs`` the calls of several sub-agents are interleaved
+    in one trace: each of theirs names who made it, and nothing else changes."""
+
+    @staticmethod
+    def _call(name: str) -> BaseEvent:
+        return BaseEvent(
+            event_type=ExecutionEventType.AGENT_CALL,
+            author="Main",
+            action=AgentAction(name=name, parameters={"task": "x"}),
+            metadata={METADATA_TOOL_BATCH: {"id": "b", "index": 0, "size": 2}},
+        )
+
+    @staticmethod
+    def _tool_by(author: str) -> BaseEvent:
+        return BaseEvent(
+            event_type=ExecutionEventType.TOOL_START,
+            author=author,
+            action=ToolAction(name="search", parameters={"query": "q"}),
+        )
+
+    def test_a_call_of_a_sub_agent_started_with_others_names_it(self) -> None:
+        renderer, buffer = _renderer()
+        renderer.render(self._call("Alpha"))
+        renderer.render(self._call("Beta"))
+        renderer.render(self._tool_by("Beta"))
+        assert any(line.strip().startswith("Beta ") and "search" in line for line in _lines(buffer))
+
+    def test_a_call_of_the_agent_itself_does_not(self) -> None:
+        renderer, buffer = _renderer()
+        renderer.render(self._tool_by("agent"))
+        line = next(line for line in _lines(buffer) if "search" in line)
+        assert "agent" not in line

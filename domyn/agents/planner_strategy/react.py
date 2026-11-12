@@ -123,6 +123,18 @@ class ReactPlannerStrategy(BasePlannerStrategy):
     name: str = "react"
     _disable_structured_outputs: bool = False
 
+    @field_validator("parallel_handoffs")
+    @classmethod
+    def refuse_parallel_handoffs(cls, value: bool) -> bool:
+        # One action per step is the protocol this planner parses: it never sees
+        # several sub-agents in one response, so there is nothing to run together.
+        if value:
+            raise ValueError(
+                "parallel_handoffs is not supported by the react planner: use "
+                "tool_use or tool_use_thought"
+            )
+        return value
+
     @field_validator("context_manager", mode="wrap")
     @classmethod
     def validate_context_manager(cls, v: Any, handler: Any, info: Any) -> ContextManager:

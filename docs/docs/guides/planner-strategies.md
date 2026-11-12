@@ -76,6 +76,7 @@ Several agents can reference the same strategy. In a [team](orchestration.md), e
 | `context_manager` | `ToolUseContextManager` / `ToolUseWithThoughtContextManager` | a new instance, with the defaults below | Builds the messages and tool definitions sent to the model. |
 | `compactor` | `Compactor` | `two_phase`, reserving 16,384 tokens | Shortens the conversation before a request that would not fit the model's context window. See [Context compaction](context-compaction.md). |
 | `parallel_tool_calls` | `bool` | `True` | Runs the calls of one model response that need no approval at the same time; `False` runs every call after the one before it. See [Several calls at once](tools.md#several-calls-at-once). |
+| `parallel_handoffs` | `bool` | `False` | Runs the sub-agents called in one model response at the same time, with the tools around them, and resumes this agent once all of them have finished; `False` runs the first only. Needs `parallel_tool_calls`. See [Several sub-agents at once](orchestration.md#several-sub-agents-at-once). |
 
 Context manager options:
 
@@ -116,6 +117,8 @@ planner_strategies:
 |---|---|---|---|
 | `context_manager` | `ContextManager` | `full_messages` with `structural_tags` prompting | Builds the prompt and the history, and defines the text format the model must follow. |
 | `verbose` | `bool` | `False` | When the model returns no action, also emits a `RESPONSE` event carrying a `thought` that says the agent is finishing. |
+
+`react` refuses `parallel_handoffs: true`: its model writes one action per step, so it never calls several sub-agents at once.
 
 `react` does not support `compactor`: a `react` strategy declared with one is rejected when it is loaded.
 

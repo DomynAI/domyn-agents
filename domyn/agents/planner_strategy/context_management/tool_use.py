@@ -12,6 +12,7 @@ from typing import Any
 from domyn.agents.core import (
     METADATA_CONVERTED_TO_AGENT_END,
     METADATA_EXTERNAL_PART_AGENT_VISIBLE,
+    METADATA_TOOL_BATCH,
     BaseAgent,
     BaseEvent,
     ExecutionEventType,
@@ -113,7 +114,7 @@ class ToolUseContextManager(ContextManager):
         messages.append(LLMMessage(role="system", content=system_content))
 
         # Convert conversation + interaction history to messages
-        event_to_parse = _rendered_events(context)
+        event_to_parse = _batch_results_in_call_order(_rendered_events(context))
 
         # A root's AGENT_START is built from its USER_INPUT (same interaction, same text):
         # only that start duplicates the request, any other start carries a real task.
@@ -396,7 +397,19 @@ class ToolUseContextManager(ContextManager):
                             arguments=json.dumps(event.action.parameters or {}, ensure_ascii=False),
                         ),
                     )
-                    messages.append(LLMMessage(role=self.assistant_role, tool_calls=[tool_call]))
+                    if (
+                        METADATA_TOOL_BATCH in event.metadata
+                        and messages
+                        and messages[-1].role == self.assistant_role
+                        and messages[-1].tool_calls
+                    ):
+                        # One of several calls of one response (`parallel_handoffs`):
+                        # the same assistant turn as the calls before it.
+                        messages[-1].tool_calls.append(tool_call)
+                    else:
+                        messages.append(
+                            LLMMessage(role=self.assistant_role, tool_calls=[tool_call])
+                        )
 
                 case ExecutionEventType.AGENT_START:
                     # called agent receiving its task assignment
@@ -408,8 +421,33 @@ class ToolUseContextManager(ContextManager):
                             else ""
                         )
                     msg_content = f"Agent: {event.author}\nTask assigned: {task}\n{self._get_user_info(event)}"
-                    if messages and messages[-1].tool_calls:
-                        # Close parent's tool_call pair (OpenAI strict: PAIRING + CONTIGUITY)
+                    # Any: mypy reads `BaseEvent.action`, an unresolved union, as None.
+                    start_call: Any = getattr(event.action, "call_id", None)
+                    if METADATA_TOOL_BATCH in event.metadata and start_call in {
+                        tc.id for m in messages if m.tool_calls for tc in m.tool_calls
+                    }:
+                        # A sub-agent of a batch closes its own call, named by id: the
+                        # calls of the batch share one assistant turn, so the last one
+                        # is not necessarily its. Moved next to that turn below. Only
+                        # where the call is: the sub-agent itself reads its start as
+                        # its task, below.
+                        messages.append(
+                            LLMMessage(
+                                role="tool",
+                                content=msg_content,
+                                tool_call_id=start_call,
+                                name=event.author,
+                            )
+                        )
+                    elif (
+                        messages
+                        and messages[-1].tool_calls
+                        and messages[-1].tool_calls[0].function.name == event.author
+                    ):
+                        # Close parent's tool_call pair (OpenAI strict: PAIRING + CONTIGUITY).
+                        # Only the call to this agent: a sub-agent paused on its own
+                        # call and given a new message starts again right after that
+                        # call, which its result closes, not this start.
                         parent_call = messages[-1].tool_calls[0]
                         messages.append(
                             LLMMessage(
@@ -691,6 +729,41 @@ def _rendered_events(context: InteractionContext) -> list[BaseEvent]:
             seen.add(event.event_id)
             unique.append(event)
     return unique
+
+
+def _batch_results_in_call_order(events: list[BaseEvent]) -> list[BaseEvent]:
+    """The ``AGENT_END`` of the sub-agents of one batch in the order they were
+    called, all where the last of them ended.
+
+    They are stored as each ends, so the same batch would otherwise read
+    differently every time it ran. Recognised by their ``AGENT_START``, which
+    carries the batch and the same interaction id.
+    """
+    started: dict[str | None, tuple[str, int]] = {}
+    for event in events:
+        batch = event.metadata.get(METADATA_TOOL_BATCH)
+        if event.event_type == ExecutionEventType.AGENT_START and batch:
+            started[event.interaction_id] = (str(batch.get("id")), int(batch.get("index", 0)))
+    if not started:
+        return events
+    ends: dict[str, list[tuple[int, int]]] = {}
+    for position, event in enumerate(events):
+        if event.event_type == ExecutionEventType.AGENT_END and event.interaction_id in started:
+            batch_id, index = started[event.interaction_id]
+            ends.setdefault(batch_id, []).append((index, position))
+    moved: dict[int, list[BaseEvent]] = {}
+    skipped: set[int] = set()
+    for members in ends.values():
+        positions = [position for _, position in members]
+        moved[max(positions)] = [events[position] for _, position in sorted(members)]
+        skipped.update(positions)
+    ordered: list[BaseEvent] = []
+    for position, event in enumerate(events):
+        if position in moved:
+            ordered.extend(moved[position])
+        elif position not in skipped:
+            ordered.append(event)
+    return ordered
 
 
 # The header `get_context` writes in front of a result the runner recorded, whose
