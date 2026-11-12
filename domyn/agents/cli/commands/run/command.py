@@ -322,8 +322,8 @@ async def start_session(
     return await repl.run(initial_prompt)
 
 
-def _command_backends(agent: Any) -> list[Any]:
-    """The command backends of the agent and of every sub-agent that has its own."""
+def _builtin_bundles(agent: Any) -> list[Any]:
+    """The built-in tool sets of the agent and of every sub-agent that has its own."""
     found: list[Any] = []
     seen: set[int] = set()
 
@@ -331,14 +331,21 @@ def _command_backends(agent: Any) -> list[Any]:
         if id(one) in seen:
             return
         seen.add(id(one))
-        for built in getattr(one, "builtin_tools", None) or []:
-            backend = getattr(built, "backend", None)
-            if backend is not None and all(backend is not b for b in found):
-                found.append(backend)
+        found.extend(getattr(one, "builtin_tools", None) or [])
         for sub in getattr(one, "sub_agents", None) or []:
             walk(sub)
 
     walk(agent)
+    return found
+
+
+def _command_backends(agent: Any) -> list[Any]:
+    """The command backends of the agent and of every sub-agent that has its own."""
+    found: list[Any] = []
+    for built in _builtin_bundles(agent):
+        backend = getattr(built, "backend", None)
+        if backend is not None and all(backend is not b for b in found):
+            found.append(backend)
     return found
 
 
@@ -372,9 +379,9 @@ async def _sandbox_is_usable(agent: Any, theme: Theme, config_file: Path | None)
                 )
             where = f" in {config_file}" if config_file is not None else ""
             console.print(
-                "\n  To run commands on this machine instead (no sandbox):\n"
-                '    - run `domyn setup` and choose "local" for where commands run '
-                f"(or set `sandbox: local` on the shell bundle{where}).\n",
+                "\n  To run commands on this machine instead (no sandbox), "
+                f"set `sandbox: local` in the cli tools bundle{where} (or `sandbox: auto` for an adaptive choice).\n"
+                f"  Then, run `domyn run` again.",
                 style=style,
                 highlight=False,
                 markup=False,
@@ -385,12 +392,16 @@ async def _sandbox_is_usable(agent: Any, theme: Theme, config_file: Path | None)
 
 
 def _commands_status(agent: Any) -> str | None:
-    """Where the shell commands run, for the line under the banner."""
+    """Where the shell commands run, for the line under the banner. The browser is
+    named when it is not where the commands are: it always runs on this machine."""
     backends = _command_backends(agent)
     if not backends:
         return None
     if any(getattr(b, "is_isolated", False) for b in backends):
-        return "commands: docker sandbox"
+        text = "commands: docker sandbox"
+        if any(getattr(built, "browser", None) is not None for built in _builtin_bundles(agent)):
+            text += "  ·  browser: this machine"
+        return text
     return "commands: this machine (no sandbox)"
 
 
@@ -418,7 +429,7 @@ def _say_fallback(agent: Any, theme: Theme, config_file: Path | None) -> None:
         where = f" in {config_file}" if config_file is not None else ""
         console.print(
             f"  To always run on this machine (and not see this): set `sandbox: local` "
-            f"on the shell bundle{where}.\n",
+            f"in the cli tools bundle{where}.\n",
             style=style,
             highlight=False,
             markup=False,

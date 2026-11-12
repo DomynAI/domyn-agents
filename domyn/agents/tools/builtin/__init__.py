@@ -179,7 +179,10 @@ def bundle(
             resolved = resolved or LocalBackend(space, allowed_env=allowed_env)
             browser_backend = resolved
             if resolved.is_isolated or getattr(resolved, "may_isolate", False):
-                get_logger().warning("the browser bundle runs on this machine, outside the sandbox")
+                if resolved.is_isolated:
+                    get_logger().warning(
+                        "the browser bundle runs on this machine, outside the sandbox"
+                    )
                 browser_backend = LocalBackend(space, allowed_env=allowed_env)
             browser_list, sessions = browser_tools(backend=browser_backend, options=browser)
             tools.extend(browser_list)

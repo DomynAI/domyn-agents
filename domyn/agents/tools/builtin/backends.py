@@ -182,6 +182,13 @@ class CommandBackend(ABC):
         """The conversation is over: release what it holds (a container). Defaults
         to nothing."""
 
+    async def explain_failure(self, since: float) -> str:
+        """Something the backend knows about why a command that started at ``since``
+        (``time.time()``) failed, which the command's own output cannot say: a
+        connection the sandbox refused. Called by the shell tool for a failed command
+        and appended to what the model reads; ``""`` when there is nothing to add."""
+        return ""
+
 
 class LocalBackend(CommandBackend):
     """Runs on this machine, in the workspace directory.
@@ -399,7 +406,7 @@ class AutoBackend(CommandBackend):
                     isolate_environment=self._isolate_environment,
                     allowed_env=self._allowed_env,
                 )
-                get_logger().warning(f"sandbox unavailable, commands run locally: {exc.problem}")
+                get_logger().info(f"sandbox unavailable, commands run locally: {exc.problem}")
                 self._notice(f"{exc.problem} Commands run on this machine, with no sandbox.")
             chosen.on_notice = self._notice
             self.name = chosen.name
@@ -440,6 +447,11 @@ class AutoBackend(CommandBackend):
     async def end_conversation(self, conversation_id: str) -> None:
         if self._chosen is not None:
             await self._chosen.end_conversation(conversation_id)
+
+    async def explain_failure(self, since: float) -> str:
+        if self._chosen is None:
+            return ""
+        return await self._chosen.explain_failure(since)
 
     async def close(self) -> None:
         if self._chosen is not None:

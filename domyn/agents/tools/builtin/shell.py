@@ -253,6 +253,7 @@ def build_run_command(
             )
 
         record = processes.new_record(command, conversation_id, home=home)
+        began = time.time()
         result = await backend.run(
             processes.build_launch(
                 record, yield_s=limit, max_lifetime=max_lifetime_s, stdin=stdin or None
@@ -281,6 +282,10 @@ def build_run_command(
             )
             if _detaches(command):
                 text += DETACHED_NOTE
+            if observed.exit_code not in (0, None):
+                explained = await backend.explain_failure(began)
+                if explained:
+                    text += f"\n{explained}"
             return _result(text, state)
 
         record.cursor = observed.out_bytes

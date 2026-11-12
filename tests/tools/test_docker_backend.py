@@ -14,6 +14,7 @@ import asyncio
 import os
 import shutil
 import subprocess
+import time
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -525,17 +526,6 @@ class TestARealContainer:
         assert direct.exit_code != 0
 
     @pytest.mark.asyncio
-    async def test_a_failure_names_the_blocked_host(self, sandbox: Any) -> None:
-        backend = sandbox()
-        result = await _sh(
-            backend,
-            "python -c \"import urllib.request; urllib.request.urlopen('https://example.org', timeout=10)\"",
-        )
-        assert result.exit_code != 0
-        assert "[sandbox] blocked" in result.stderr and "example.org" in result.stderr
-        assert "docker: allow" in result.stderr
-
-    @pytest.mark.asyncio
     async def test_pip_install_works_through_the_allowlist(self, sandbox: Any) -> None:
         backend = sandbox()
         install = await _sh(backend, "pip install --quiet cowsay")
@@ -577,9 +567,10 @@ class TestARealContainer:
         backend = sandbox()
         ok = await _sh(backend, "curl -sS -o /dev/null -w '%{http_code}' https://pypi.org/simple/")
         assert ok.exit_code == 0 and ok.stdout.strip() == "200", ok.stderr
+        began = time.time()
         blocked = await _sh(backend, "curl -sS https://example.org")
         assert blocked.exit_code != 0
-        assert "example.org" in blocked.stderr
+        assert "example.org" in await backend.explain_failure(began)
 
     @pytest.mark.asyncio
     async def test_no_network_means_none(self, sandbox: Any) -> None:
@@ -771,6 +762,46 @@ class TestSkillsReachTheContainer:
 
 @needs_docker
 class TestShellToolsInTheContainer:
+    """Through ``run_command`` itself: the backend is handed a launcher script with the
+    model's command quoted inside it, not the command, and exit codes are the script's."""
+
+    @pytest.mark.asyncio
+    async def test_a_failure_names_the_blocked_host(self, sandbox: Any) -> None:
+        backend = sandbox()
+        run = shell.build_run_command(backend)
+        result = await run(command="curl -sS https://example.org", conversation_id="c1", state={})
+        text = str(result.data)
+        assert "[sandbox] blocked" in text and "example.org" in text
+        assert "docker: allow" in text
+
+    @pytest.mark.asyncio
+    async def test_a_successful_command_gets_no_note(self, sandbox: Any) -> None:
+        backend = sandbox()
+        run = shell.build_run_command(backend)
+        result = await run(command="echo fine", conversation_id="c1", state={})
+        assert "[sandbox]" not in str(result.data)
+
+    @pytest.mark.asyncio
+    async def test_installs_are_recorded_and_come_back(self, sandbox: Any) -> None:
+        backend = sandbox()
+        run = shell.build_run_command(backend)
+        state: dict[str, Any] = {}
+        pip = await run(command="pip install cowsay", conversation_id="c1", state=state)
+        assert "Successfully installed" in str(pip.data)
+        assert "cowsay" in backend._requirements_path("c1").read_text()
+        npm = await run(
+            command="npm install -g --no-audit --no-fund is-odd", conversation_id="c1", state=state
+        )
+        assert "is-odd@" in backend._npm_globals_path("c1").read_text(), str(npm.data)
+        # The same conversation in a new container: both are back.
+        await backend.end_conversation("c1")
+        again = await run(
+            command="python -c 'import cowsay; print(\"py-ok\")' && npm ls -g --depth=0",
+            conversation_id="c1",
+            state=state,
+        )
+        assert "py-ok" in str(again.data) and "is-odd@" in str(again.data), str(again.data)
+
     @pytest.mark.asyncio
     async def test_background_commands_run_check_and_stop(self, sandbox: Any) -> None:
         backend = sandbox()

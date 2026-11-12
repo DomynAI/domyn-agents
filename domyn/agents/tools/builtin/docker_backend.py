@@ -124,12 +124,14 @@ NPM_PREFIX = f"{SANDBOX_HOME}/.npm-global"
 # that has stopped answering.
 _EXEC_GRACE_S = 15.0
 
-_INSTALLS = re.compile(r"(?:^|[\s;&|(])(?:pip3?|pipx|uv|python3?\s+-m\s+pip)(?:\s|$)")
+_INSTALLS = re.compile(r"(?:^|[\s;&|('\"])(?:pip3?|pipx|uv|python3?\s+-m\s+pip)(?:\s|$)")
 """A command that may have changed what is installed. Checked on the text only to
-decide whether to look; what is recorded is what ``pip freeze`` then says."""
+decide whether to look; what is recorded is what ``pip freeze`` then says. A quote
+may come before the program: ``run_command`` sends the backend a launcher script with
+the model's command quoted inside it, not the command itself."""
 
 _NPM_GLOBAL = re.compile(
-    r"(?:^|[\s;&|(])npm\s[^;&|\n]*?\s(?:-g|--global|--location[= ]global)(?:\s|$)"
+    r"(?:^|[\s;&|('\"])npm\s[^;&|\n]*?\s(?:-g|--global|--location[= ]global)(?:\s|$)"
 )
 """An ``npm`` command that may have changed the global packages. A local install
 lands in the workspace's ``node_modules``, which is the host's and needs no record."""
@@ -830,21 +832,19 @@ class DockerBackend(CommandBackend):
             await self._record_installs(container, conversation)
         if result.exit_code == 0 and _NPM_GLOBAL.search(command):
             await self._record_npm_globals(container, conversation)
-        if result.exit_code != 0 and self._options.network == "allowlist":
-            blocked = await self._blocked_since(started)
-            if blocked:
-                hosts = ", ".join(blocked)
-                note = (
-                    f"\n[sandbox] blocked connection(s) to: {hosts}. The sandbox only reaches "
-                    "an allowlist of hosts (package registries and GitHub). To allow a host, add it under `docker: allow:` in "
-                    "the shell bundle's config."
-                )
-                return CommandResult(
-                    exit_code=result.exit_code,
-                    stdout=result.stdout,
-                    stderr=result.stderr + note,
-                )
         return result
+
+    async def explain_failure(self, since: float) -> str:
+        if self._options.network != "allowlist":
+            return ""
+        blocked = await self._blocked_since(since)
+        if not blocked:
+            return ""
+        return (
+            f"[sandbox] blocked connection(s) to: {', '.join(blocked)}. The sandbox only reaches "
+            "an allowlist of hosts (package registries and GitHub). To allow a host, add it under "
+            "`docker: allow:` in the cli tools bundle of the config."
+        )
 
     async def _blocked_since(self, started: float) -> list[str]:
         code, out, err = await self._docker(

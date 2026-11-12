@@ -182,7 +182,7 @@ class TestStartingWithoutDocker:
         assert backend.checked == 1
         assert "Docker is installed but not running." in text
         assert "open -a Docker" in text and "run `domyn run` again" in text
-        assert "domyn setup" in text and '"local"' in text
+        assert "`sandbox: local`" in text and "cli tools bundle" in text
         # Unwrapped: a long path wraps at the width of the console.
         flat = text.replace("\n", "")
         assert "sandbox: local" in text and str(config) in flat
@@ -306,3 +306,31 @@ class TestStartingWithAutoSandbox:
         assert code == 0
         assert "commands: docker sandbox" in text
         assert "no sandbox" not in text
+
+    @pytest.mark.asyncio
+    async def test_the_browser_is_said_to_be_outside_the_sandbox(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from types import SimpleNamespace
+
+        from domyn.agents.cli.commands.run import command as run_command
+
+        class _Repl:
+            def __init__(self, *a: Any, **k: Any) -> None: ...
+
+            async def run(self, prompt: Any) -> int:
+                return 0
+
+        monkeypatch.setattr(run_command, "Repl", _Repl)
+        buffer = io.StringIO()
+        agent = _agent()
+        agent.builtin_tools.append(BuiltinTools(backend=FakeSandbox(), browser=SimpleNamespace()))
+        with patch.object(run_command, "console", Console(file=buffer, width=140)):
+            await run_command.start_session(
+                agent,
+                Theme.build(allow_animation=False),
+                initial_prompt=None,
+                verbose=False,
+                show_status=True,
+            )
+        assert "commands: docker sandbox  ·  browser: this machine" in buffer.getvalue()

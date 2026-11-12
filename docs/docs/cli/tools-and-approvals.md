@@ -85,7 +85,7 @@ What is in the container: Python with `pip`, Node with `npm`, `git` and `curl`. 
 
 By default a command reaches `pypi.org`, `files.pythonhosted.org`, `registry.npmjs.org` and `github.com` and nothing else, through a small proxy container that refuses every other host, every other port, plain `http://` and any name that points at a private address. `pip`, `npm`, `git clone https://github.com/...` and `curl https://...` all use it. A command that fails on a blocked host says which one.
 
-To allow more, add hosts under `docker: allow:` on the shell bundle in your `config.yaml` (above). An entry is a host (`api.github.com`) or `*.example.com` for its subdomains, and applies to HTTPS on port 443. The next command recreates the container, or waits if a background command is running. Two other settings: `network: none` turns the network off and `network: open` removes the limit. An allowed host is still a way out for data, so the sandbox protects your machine, not what is in the workspace.
+To allow more, add hosts under `docker: allow:` in the cli tools bundle of your `config.yaml` (above). An entry is a host (`api.github.com`) or `*.example.com` for its subdomains, and applies to HTTPS on port 443. The next command recreates the container, or waits if a background command is running. Two other settings: `network: none` turns the network off and `network: open` removes the limit. An allowed host is still a way out for data, so the sandbox protects your machine, not what is in the workspace.
 
 How it behaves:
 
