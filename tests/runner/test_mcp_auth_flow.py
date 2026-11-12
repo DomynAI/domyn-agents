@@ -1,5 +1,6 @@
 """Runner-level tests for MCP tool authentication checks at TOOL_START time."""
 
+import json
 from collections.abc import AsyncGenerator
 from unittest.mock import patch
 
@@ -20,7 +21,9 @@ from domyn.agents.core import (
     Part,
     ToolAction,
 )
+from domyn.agents.core.context import InteractionContext
 from domyn.agents.llm import BaseLLMProvider, LLMMessage
+from domyn.agents.planner_strategy import PlannerStrategyFactory
 from domyn.agents.tools import ToolResult
 from domyn.agents.tools.mcp import MCPCredentialsCheckResult, MCPTool
 
@@ -842,6 +845,90 @@ async def test_an_edited_call_that_yields_nothing_after_auth_is_stored_as_it_ran
     tool_error = next(e for e in turn3 if e.event_type == ExecutionEventType.TOOL_ERROR)
     assert tool_error.action.parameters == {"query": "modified_value"}
     assert tool_error.metadata[METADATA_INITIAL_PARAMETERS] == {"query": "original_value"}
+
+
+@pytest.mark.asyncio
+async def test_an_edited_call_authenticated_after_a_401_is_shown_with_the_final_arguments(
+    runner: Runner, llm_provider: BaseLLMProvider
+):
+    """The authentication request of a 401 does not replace the edited call's final arguments."""
+    planner = PlannerStrategyFactory.from_config(
+        {"type": "tool_use_thought"}, save_in_registry=False
+    )
+    agent = Agent(
+        name="RootAgent",
+        description="desc",
+        instruction="instr",
+        llm_provider=llm_provider,
+        planner=planner,
+        tools=[_make_mcp_tool_with_approval()],
+    )
+    kwargs = {
+        "application_name": "app",
+        "user_id": "user",
+        "root": agent,
+        "conversation_id": "conv_param_401_auth",
+    }
+    agent._execute = async_gen_from_list(
+        [
+            BaseEvent(
+                event_type=ExecutionEventType.TOOL_START,
+                author="RootAgent",
+                action=ToolAction(name=_MCP_TOOL_NAME, parameters={"query": "original_value"}),
+            )
+        ]
+    )
+    _ = [e async for e in runner.run(user_input=_user_input(), **kwargs)]
+    param_feedback = BaseEvent(
+        event_type=ExecutionEventType.TOOL_FEEDBACK,
+        author="user",
+        action=FeedbackAction(
+            name=_MCP_TOOL_NAME,
+            parameters=[FeedbackParameters(name="query", value="modified_value")],
+            approval_type=ApprovalType.PARAMS_UPDATE,
+            approve=True,
+        ),
+    )
+
+    async def _401_execute(self, **kwargs):
+        yield ToolResult(success=False, error="Authentication required.", error_code="401")
+
+    with (
+        patch.object(MCPTool, "check_auth_credentials", _pass_auth),
+        patch.object(MCPTool, "execute", _401_execute),
+    ):
+        turn2 = [e async for e in runner.run(user_input=param_feedback, **kwargs)]
+    tnf_auth = turn2[-1]
+    assert isinstance(tnf_auth.action, AuthenticationAction)
+    assert METADATA_INITIAL_PARAMETERS not in tnf_auth.metadata
+
+    agent._execute = async_gen_from_list([_response_event("RootAgent")])
+    auth_feedback = BaseEvent(
+        event_type=ExecutionEventType.TOOL_FEEDBACK,
+        author="user",
+        action=AuthenticationAction(
+            call_id=tnf_auth.action.call_id,
+            name=tnf_auth.action.name,
+            parameters=None,
+            success=AuthenticationResult.SUCCESS,
+        ),
+    )
+    with patch.object(MCPTool, "execute", _mock_execute):
+        _ = [e async for e in runner.run(user_input=auth_feedback, **kwargs)]
+
+    conversation = await runner.conversation_manager.get_conversation(
+        "app", "user", "conv_param_401_auth"
+    )
+    events = conversation.events_history
+    context = InteractionContext(
+        conversation_id="conv_param_401_auth",
+        user_id="user",
+        agent_input=events[0],
+        conversation_history=events,
+    )
+    messages = await planner.context_manager.get_context(context, agent)
+    (shown_call,) = [m.tool_calls[0] for m in messages if m.tool_calls]
+    assert json.loads(shown_call.function.arguments)["query"] == "modified_value"
 
 
 @pytest.mark.asyncio
