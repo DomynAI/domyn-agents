@@ -686,7 +686,7 @@ Event types:
 - `RESPONSE_TOKEN` - One chunk of a streamed response
 - `TOOL_START` / `TOOL_END` - Tool execution lifecycle
 - `AGENT_START` / `AGENT_END` - Agent handoff lifecycle
-- `LLM_START` / `LLM_END` - LLM invocation lifecycle
+- `LLM_START` / `LLM_END` - LLM invocation lifecycle. `LLM_END.metadata["token_usage"]` (`TOKEN_USAGE_METADATA_KEY`, tool-use planners only, not `react`) is the provider's usage normalized by `TokenUsage.from_provider` (`llm/base.py`): `input_tokens` (cache included, Anthropic's split summed), `output_tokens`, `total_tokens`, plus `cache_read_tokens` / `cache_write_tokens` / `reasoning_tokens` when reported, and `requests` (malformed-argument retries before the LLM_END are summed in). Absent when the provider reported nothing.
 - `DECISION_MADE` - A decision model was asked something (see Decision models)
 - `CONTEXT_COMPACTION_START` / `CONTEXT_COMPACTED` - The conversation is being shortened
 - `COMPACTION_REQUESTED` - An *input* event asking for a compaction now (see Compaction)

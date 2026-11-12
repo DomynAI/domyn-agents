@@ -35,7 +35,15 @@ from domyn.agents.core import (
 )
 from domyn.agents.core.utils import extract_parts
 from domyn.agents.llm import DelegateLLMProvider
-from domyn.agents.llm.base import LLMMessage, LLMResponse, LLMToolCall, is_context_overflow
+from domyn.agents.llm.base import (
+    LLMMessage,
+    LLMResponse,
+    LLMToolCall,
+    TokenUsage,
+    add_token_usage,
+    is_context_overflow,
+    token_usage_metadata,
+)
 from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.context_injection import (
     insert_turn_context,
@@ -194,6 +202,8 @@ class ToolUseWithThoughtPlannerStrategy(ToolUsePlannerStrategy):
             response: LLMResponse | None = None
             parsed_tool_args: dict[str, dict[str, Any]] = {}
             gave_up_on_malformed_json = False
+            # What this LLM_END covers: every call made for it, retries included.
+            token_usage: TokenUsage | None = None
 
             if isinstance(agent.llm_provider, DelegateLLMProvider):
                 # Bidirectional: runner executes LLM, sends back LLMResponse via asend()
@@ -211,6 +221,7 @@ class ToolUseWithThoughtPlannerStrategy(ToolUsePlannerStrategy):
                     logger.error("DelegateLLMProvider received None from runner — aborting")
                     break
                 parsed_tool_args, _ = _parse_tool_call_args(response.tool_calls)
+                token_usage = add_token_usage(None, response)
                 # thought extraction still applies to delegated responses
             else:
                 yield _create_event(
@@ -279,6 +290,7 @@ class ToolUseWithThoughtPlannerStrategy(ToolUsePlannerStrategy):
                             )
                             if not response.content and not response.tool_calls:
                                 logger.error("LLM response has no content and no tool calls")
+                        token_usage = add_token_usage(token_usage, response)
 
                         (
                             parsed_tool_args,
@@ -387,6 +399,7 @@ class ToolUseWithThoughtPlannerStrategy(ToolUsePlannerStrategy):
                 author=agent.name,
                 content=[Part(text="LLM response received", thought=final_thought)],
                 is_partial=False,
+                metadata=token_usage_metadata(token_usage),
             )
 
             if gave_up_on_malformed_json:

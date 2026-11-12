@@ -9,6 +9,7 @@ from domyn.agents.llm.base import (
     LLMToolCall,
     StructuredOutput,
     StructuredOutputType,
+    TokenUsage,
     ToolCallFunction,
 )
 from domyn.agents.llm.cerebras import CerebrasProvider
@@ -111,6 +112,7 @@ __all__ = [
     "OpenRouterProvider",
     "StructuredOutput",
     "StructuredOutputType",
+    "TokenUsage",
     "ToolCallFunction",
     "VLLMProvider",
 ]
