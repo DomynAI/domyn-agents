@@ -65,21 +65,23 @@ def append_user_edit_note(tool_result: Any, tool_result_event: BaseEvent) -> Any
         arguments = json.dumps(visible_parameters(parameters), ensure_ascii=False, default=str)
         return f"{executed_action.name}({arguments})"
 
-    edit_summary = (
-        f"Note: the user changed the arguments of this call before approving it. It ran as "
-        f"{format_call(executed_action.parameters or {})}, not as proposed "
-        f"({format_call(proposed_parameters)})"
+    executed_call = format_call(executed_action.parameters or {})
+    failed = tool_result_event.event_type == ExecutionEventType.TOOL_ERROR
+    # Says whose arguments were rejected, and that they outrank the task: told only "the user's
+    # values", models retried with the rejected ones, or went back to what their task named.
+    user_edit_note = (
+        f"Note: before approving, the user rejected the arguments you proposed, "
+        f"{format_call(proposed_parameters)}, and replaced them: this call ran as {executed_call}, "
+        f"and the {'error' if failed else 'result'} above is for the user's arguments."
     )
-    if tool_result_event.event_type == ExecutionEventType.TOOL_ERROR:
-        user_edit_note = (
-            f"{edit_summary}, and the error above is for the user's arguments. If you try again, start "
-            f"from the user's values, not the proposed ones."
-        )
-    else:
-        user_edit_note = (
-            f"{edit_summary}, and the result above is for the user's arguments. The call is done: do "
-            f"not make it again. Use the user's values from now on, in related calls too."
-        )
+    if not failed:
+        user_edit_note += " The call is done: do not make it again."
+    user_edit_note += (
+        " The user's arguments override your task and the request: use them from now on, in "
+        "related calls too, and never the rejected values."
+    )
+    if failed:
+        user_edit_note += f" To retry, call exactly {executed_call}."
     if isinstance(tool_result, dict | list):
         tool_result = json.dumps(tool_result, ensure_ascii=False, default=str)
     # Only a missing result gives way to the note: a 0 or False is the result.
