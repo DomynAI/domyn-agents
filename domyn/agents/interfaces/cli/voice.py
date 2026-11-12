@@ -61,7 +61,7 @@ answer the permission question macOS asks the first time."""
 
 _INSTALL_HINT = (
     "Voice needs the audio extra: `uv tool install 'domyn[cli,audio]'` "
-    "or `pip install 'domyn[audio]'` (Python 3.11 to 3.14)."
+    "or `pip install 'domyn[audio]'` (Python 3.12 to 3.14)."
 )
 
 
