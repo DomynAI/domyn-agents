@@ -87,6 +87,7 @@ BUNDLE_TOOL_NAMES: dict[str, tuple[str, ...]] = {
         "browser_press",
     ),
 }
+VISION_TOOL_NAMES = ("read_image",)
 
 # What each bundle is for, in one line — what `domyn setup` shows beside its name
 # when asking which to mount. A new bundle needs an entry here, in `BUNDLES` and in
@@ -277,4 +278,5 @@ __all__ = [
     "is_ignored",
     "run_command_tool",
     "shell_tools",
+    "VISION_TOOL_NAMES",
 ]
