@@ -1132,7 +1132,7 @@ async def test_flow_user_confirm_executes_tool_start_params_not_feedback_echo(
     assert events[0].action.parameters == {"query": "SELECT 1"}
     # Parameters match the TOOL_START, so no "user updated tool parameters" nudge.
     assert events[0].action.observation is not None
-    assert "changed the arguments" not in str(events[0].action.observation)
+    assert "rejected the arguments you proposed" not in str(events[0].action.observation)
 
 
 @pytest.mark.asyncio
@@ -5596,7 +5596,7 @@ async def test_flow_delegate_agent_tool_feedback_params_update(runner: Runner) -
     sent = transport.sent_results[0]
     assert sent.event_type == ExecutionEventType.TOOL_END
     assert str(sent.action.observation).startswith("4\n\n")
-    assert "changed the arguments" in str(sent.action.observation), (
+    assert "rejected the arguments you proposed" in str(sent.action.observation), (
         "params-changed notice must appear in the observation sent to the remote agent"
     )
 
@@ -5653,11 +5653,11 @@ async def test_flow_delegate_agent_edited_call_that_fails(
     events = [e async for e in runner.run(user_input=reply, **kwargs)]
 
     tool_error = next(e for e in events if e.event_type == ExecutionEventType.TOOL_ERROR)
-    assert "changed the arguments" not in str(tool_error.error_message)
+    assert "rejected the arguments you proposed" not in str(tool_error.error_message)
     (result_sent_to_remote,) = transport.sent_results
     expected_error = "did not yield any events" if tool_yields_nothing else "b=3 is not allowed"
     assert expected_error in str(result_sent_to_remote.error_message)
-    assert "changed the arguments" in str(result_sent_to_remote.error_message)
+    assert "rejected the arguments you proposed" in str(result_sent_to_remote.error_message)
 
 
 @pytest.mark.asyncio
