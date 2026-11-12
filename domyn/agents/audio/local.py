@@ -46,7 +46,7 @@ _PROVIDERS = ["CPUExecutionProvider"]
 
 _INSTALL_HINT = (
     "Local transcription needs the audio extra: `uv add 'domyn[audio]'` "
-    "or `pip install 'domyn[audio]'` (Python 3.11 to 3.14)."
+    "or `pip install 'domyn[audio]'` (Python 3.12 to 3.14)."
 )
 
 

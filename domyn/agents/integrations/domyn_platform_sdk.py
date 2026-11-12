@@ -17,13 +17,11 @@ import re
 import threading
 from collections.abc import AsyncIterator, Coroutine
 from dataclasses import dataclass
-from typing import Any, Protocol, TypeVar
+from typing import Any, Protocol
 
 # One tool as the platform describes it: ``name``, ``description`` and ``parameters``, each parameter a
 # dict with ``name`` and optionally ``type``, ``description``, ``default`` and ``is_required``.
 ToolDefinition = dict[str, Any]
-
-_T = TypeVar("_T")
 
 # The oldest SDK that has what this module calls (``api.agents``, ``api.relay``). The one place the
 # version is written down: it is not in ``pyproject.toml``, since the lock could not resolve it.
@@ -239,7 +237,7 @@ def relay_connection(settings: PlatformSettings) -> tuple[str, dict[str, str]]:
     return connection["url"], {k: v for k, v in connection["headers"].items() if v}
 
 
-def run_sync(coro: Coroutine[Any, Any, _T]) -> _T:
+def run_sync[T](coro: Coroutine[Any, Any, T]) -> T:
     """Run a coroutine from synchronous code, including code already inside a running event loop."""
     try:
         asyncio.get_running_loop()

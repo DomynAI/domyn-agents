@@ -6,7 +6,7 @@ description: "Install Domyn Agents and set up your API keys"
 
 # Installation
 
-Domyn Agents is published on PyPI as `domyn`; the GitHub repository is `domyn-agents`. The library requires **Python 3.11 or later**. The CLI can also be installed without Python, as a standalone build.
+Domyn Agents is published on PyPI as `domyn`; the GitHub repository is `domyn-agents`. The library requires **Python 3.12 or later**. The CLI can also be installed without Python, as a standalone build.
 
 ## Install the CLI
 
@@ -82,7 +82,7 @@ The base package covers agents, tools, every built-in LLM provider and the CLI. 
 | `langchain` | LangChain and `langchain-openai`, to build such a graph with LangChain models |
 | `slack` | Slack channel |
 | `telegram` | Telegram channel |
-| `audio` | [Transcription](../guides/transcription.md) on your machine, for voice notes and voice input (Python 3.11 to 3.14) |
+| `audio` | [Transcription](../guides/transcription.md) on your machine, for voice notes and voice input (Python 3.12 to 3.14) |
 
 Name several extras in one install, for example `domyn[cli,tracing]`.
 

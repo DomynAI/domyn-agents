@@ -10,7 +10,7 @@ Build AI agents in Python or YAML, run them on any model, and work with them fro
 
 [![CI](https://github.com/domynai/domyn-agents/actions/workflows/ci.yml/badge.svg)](https://github.com/domynai/domyn-agents/actions/workflows/ci.yml)
 [![Coverage](https://github.com/domynai/domyn-agents/raw/coverage-badge/coverage-badge.svg)](https://github.com/domynai/domyn-agents/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14%20%7C%203.15-blue)](https://github.com/domynai/domyn-agents/actions/workflows/ci.yml?query=branch%3Amain)
+[![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14%20%7C%203.15-blue)](https://github.com/domynai/domyn-agents/actions/workflows/ci.yml?query=branch%3Amain)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-domynai.github.io-blue)](https://domynai.github.io/domyn-agents/)
 [![Built by Domyn](https://img.shields.io/badge/built%20by-Domyn-0000FF)](https://domyn.com)
@@ -35,7 +35,7 @@ For the terminal agent, install the `domyn` command. On macOS (Apple Silicon) an
 curl -fsSL https://github.com/domynai/domyn-agents/releases/latest/download/install.sh | sh
 ```
 
-or install it with [uv](https://docs.astral.sh/uv/), on Python 3.11 or later:
+or install it with [uv](https://docs.astral.sh/uv/), on Python 3.12 or later:
 
 ```sh
 uv tool install "domyn[cli]"
@@ -43,7 +43,7 @@ uv tool install "domyn[cli]"
 
 To install the development version from the repository instead, use `uv tool install "domyn[cli] @ git+https://github.com/domynai/domyn-agents"`.
 
-To build agents in a Python project (Python 3.11 or later), add it as a dependency:
+To build agents in a Python project (Python 3.12 or later), add it as a dependency:
 
 ```sh
 uv add domyn

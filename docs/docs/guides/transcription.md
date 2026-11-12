@@ -32,7 +32,7 @@ There are two, chosen by where the speech model runs:
 pip install 'domyn[audio]'     # or: uv add 'domyn[audio]'
 ```
 
-The extra installs [onnx-asr](https://github.com/istupakov/onnx-asr), which runs speech models with ONNX Runtime on the CPU. It is available on Python 3.11 to 3.14: ONNX Runtime has no release for 3.15 yet.
+The extra installs [onnx-asr](https://github.com/istupakov/onnx-asr), which runs speech models with ONNX Runtime on the CPU. It is available on Python 3.12 to 3.14: ONNX Runtime has no release for 3.15 yet.
 
 The default model is NVIDIA's [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3): 25 European languages, Italian and English among them, recognized without being told which, with punctuation. Before it, [Silero](https://github.com/snakers4/silero-vad) finds the pauses in the audio (voice activity detection): that is what lets an hour-long recording through, and what gives each segment its start and end.
 

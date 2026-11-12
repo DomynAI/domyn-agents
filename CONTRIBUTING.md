@@ -38,7 +38,7 @@ Coding agents are welcome, and you are responsible for everything yours produces
 
 ## Setting up
 
-You need Python 3.11 or later and [uv](https://docs.astral.sh/uv/). Clone the repository and install every dependency, extras included:
+You need Python 3.12 or later and [uv](https://docs.astral.sh/uv/). Clone the repository and install every dependency, extras included:
 
 ```sh
 git clone https://github.com/domynai/domyn-agents.git
@@ -81,7 +81,7 @@ This runs the linter, the format check and the tests, the same checks CI runs on
 
 New code in `domyn/agents/` must be fully type-annotated. `make mypy` runs mypy in strict mode; it still reports errors in existing code, so it is not part of `check-all` yet, but it should report no new errors in the files you change.
 
-Pull requests run the same lint, format and test checks in CI. On `main`, the tests also run on every supported Python version, 3.11 to 3.15.
+Pull requests run the same lint, format and test checks in CI. On `main`, the tests also run on every supported Python version, 3.12 to 3.15.
 
 ## Working on the documentation
 
