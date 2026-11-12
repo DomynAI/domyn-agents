@@ -1449,8 +1449,12 @@ def _oauth_provider_items(raw: dict[str, Any]) -> list[ConfigItem]:
 def _docker_fields(options: DockerOptions) -> list[tuple[str, str]]:
     return [
         ("docker image", options.image),
-        ("docker network", options.network),
-        ("docker allow", ", ".join(options.allow) or "(registries only)"),
+        (
+            "docker allowed_network",
+            ", ".join(options.allowed_network) + " (and the package registries)"
+            if isinstance(options.allowed_network, list)
+            else options.allowed_network,
+        ),
         ("docker memory / cpus", f"{options.memory} / {options.cpus:g}"),
     ]
 

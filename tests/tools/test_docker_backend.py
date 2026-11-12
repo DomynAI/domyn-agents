@@ -27,6 +27,7 @@ from domyn.agents.tools.builtin import (
     BackendUnavailableError,
     BuiltinBundleConfig,
     CommandBackend,
+    CommandResult,
     DockerOptions,
     LocalBackend,
     Workspace,
@@ -37,7 +38,7 @@ from domyn.agents.tools.builtin.docker_backend import (
     _DOCKERFILE,
     _INSTALLS,
     _NPM_GLOBAL,
-    DEFAULT_ALLOW,
+    REGISTRY_HOSTS,
     DockerBackend,
 )
 
@@ -66,8 +67,8 @@ class TestOptions:
     def test_defaults(self) -> None:
         options = DockerOptions()
         assert options.image == "auto"
-        assert options.network == "allowlist"
-        assert options.allow == []
+        assert options.allowed_network == "public"
+        assert options.allowed_hosts() == ["*"]
 
     def test_unknown_keys_are_refused(self) -> None:
         with pytest.raises(ValueError):
@@ -75,7 +76,27 @@ class TestOptions:
 
     def test_network_modes_are_closed(self) -> None:
         with pytest.raises(ValueError):
-            DockerOptions(network="everything")  # type: ignore[arg-type]
+            DockerOptions(allowed_network="everything")  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            DockerOptions(allowed_network="open")  # type: ignore[arg-type]
+
+    def test_a_list_replaces_public_and_keeps_the_registries(self) -> None:
+        options = DockerOptions(allowed_network=["GitHub.com", "*.example.com", "github.com"])
+        assert options.allowed_network == ["github.com", "*.example.com"]
+        assert options.allowed_hosts() == [*REGISTRY_HOSTS, "github.com", "*.example.com"]
+        assert "*" not in options.allowed_hosts()
+
+    def test_none_has_no_proxy_hosts(self) -> None:
+        assert DockerOptions(allowed_network="none").allowed_hosts() == []
+
+    @pytest.mark.parametrize("entry", ["", "https://x.com", "x.com:443", "a/b", "*", "x y"])
+    def test_a_list_entry_must_be_a_host(self, entry: str) -> None:
+        with pytest.raises(ValueError):
+            DockerOptions(allowed_network=[entry])
+
+    def test_a_single_host_is_not_a_mode(self) -> None:
+        with pytest.raises(ValueError):
+            DockerOptions(allowed_network="github.com")  # type: ignore[arg-type]
 
 
 class TestWiring:
@@ -94,7 +115,7 @@ class TestWiring:
             bundles=["files", "shell"],
             workspace=str(tmp_path),
             sandbox="docker",
-            docker={"network": "none"},  # type: ignore[arg-type]
+            docker={"allowed_network": "none"},  # type: ignore[arg-type]
         )
         built = entry.build()
         assert isinstance(built.backend, DockerBackend)
@@ -122,10 +143,11 @@ class TestWiring:
     def test_cli_config_round_trips_the_block(self) -> None:
         from domyn.agents.interfaces.cli.config import AgentConfig, _docker_options
 
-        agent = AgentConfig(sandbox="docker", docker=DockerOptions(allow=["example.org"]))
+        agent = AgentConfig(sandbox="docker", docker=DockerOptions(allowed_network=["example.org"]))
         dumped = agent.docker.model_dump(exclude_defaults=True)
-        assert dumped == {"allow": ["example.org"]}
-        assert _docker_options(dumped).allow == ["example.org"]
+        assert dumped == {"allowed_network": ["example.org"]}
+        assert _docker_options(dumped).allowed_network == ["example.org"]
+        assert AgentConfig(sandbox="docker").docker.model_dump(exclude_defaults=True) == {}
         # An unreadable block must not stop the wizard from starting.
         assert _docker_options({"nope": 1}) == DockerOptions()
 
@@ -213,8 +235,8 @@ class TestFingerprint:
 
     def test_changes_with_the_network_policy(self, tmp_path: Path) -> None:
         ws = Workspace.at(tmp_path)
-        a = DockerBackend(ws, options=DockerOptions(network="none"))._fingerprint()
-        b = DockerBackend(ws, options=DockerOptions(network="allowlist"))._fingerprint()
+        a = DockerBackend(ws, options=DockerOptions(allowed_network="none"))._fingerprint()
+        b = DockerBackend(ws, options=DockerOptions(allowed_network=["github.com"]))._fingerprint()
         assert a != b
 
 
@@ -302,6 +324,10 @@ class TestEgressProxyDecisions:
         assert not egress_proxy.host_allowed("evilpypi.org", allow)
         assert not egress_proxy.host_allowed("pypi.org.evil.com", allow)
 
+    def test_star_allows_every_name(self) -> None:
+        assert egress_proxy.host_allowed("anything.example", ["*"])
+        assert not egress_proxy.host_allowed("anything.example", [])
+
     @pytest.mark.parametrize(
         "address", ["127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254", "::1", "172.16.0.1"]
     )
@@ -336,6 +362,17 @@ class TestEgressProxyServer:
         reply = await self._ask(b"CONNECT example.org:443 HTTP/1.1\r\n\r\n", ["pypi.org"])
         assert reply.startswith(b"HTTP/1.1 403")
         assert b"not in the allowlist" in reply
+
+    @pytest.mark.asyncio
+    async def test_public_mode_still_refuses_a_private_address(self) -> None:
+        reply = await self._ask(b"CONNECT localhost:443 HTTP/1.1\r\n\r\n", ["*"])
+        assert reply.startswith(b"HTTP/1.1 403")
+        assert b"non-public" in reply
+
+    @pytest.mark.asyncio
+    async def test_public_mode_still_refuses_another_port(self) -> None:
+        reply = await self._ask(b"CONNECT example.org:22 HTTP/1.1\r\n\r\n", ["*"])
+        assert reply.startswith(b"HTTP/1.1 403")
 
     @pytest.mark.asyncio
     async def test_plain_http_is_refused(self) -> None:
@@ -377,9 +414,154 @@ class TestNpmGlobalDetection:
         assert not _NPM_GLOBAL.search(command)
 
 
+class _ScriptedDocker:
+    """A stand-in for ``docker``: each call is answered by the first matching rule,
+    and every call is recorded. No daemon needed, so these run everywhere."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []
+        self.rules: list[tuple[Callable[[tuple[str, ...]], bool], list[tuple[int, str, str]]]] = []
+
+    def when(
+        self, match: Callable[[tuple[str, ...]], bool], *answers: tuple[int, str, str]
+    ) -> None:
+        """Answer matching calls with ``answers`` in turn; the last one repeats."""
+        self.rules.append((match, list(answers)))
+
+    async def __call__(self, *args: str, **_: Any) -> tuple[int, str, str]:
+        self.calls.append(args)
+        for match, answers in self.rules:
+            if match(args):
+                return answers.pop(0) if len(answers) > 1 else answers[0]
+        return 0, "", ""
+
+    def count(self, match: Callable[[tuple[str, ...]], bool]) -> int:
+        return sum(1 for call in self.calls if match(call))
+
+
+def _starts(args: tuple[str, ...]) -> bool:
+    return args[:1] == ("run",)
+
+
+def _probe(args: tuple[str, ...]) -> bool:
+    return args[:1] == ("exec",) and any("command -v" in a for a in args)
+
+
+@pytest.fixture
+def scripted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[DockerBackend, _ScriptedDocker]:
+    async def no_wait(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_wait)
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    backend = DockerBackend(Workspace.at(workspace), options=DockerOptions(allowed_network="none"))
+    fake = _ScriptedDocker()
+    backend._docker = fake  # type: ignore[assignment]
+    return backend, fake
+
+
+class TestABusyDaemon:
+    """Docker fails a start now and then when it is loaded. That must not reach the
+    person as "could not start the sandbox"."""
+
+    @pytest.mark.asyncio
+    async def test_a_start_that_failed_once_is_tried_again(
+        self, scripted: tuple[DockerBackend, _ScriptedDocker]
+    ) -> None:
+        backend, fake = scripted
+        fake.when(
+            _starts,
+            (125, "", "docker: Error response from daemon: No such container: abc"),
+            (0, "abc\n", ""),
+        )
+        container = await backend._ensure_container("c1")
+        assert container.name == backend._container_name("c1")
+        assert fake.count(_starts) == 2
+
+    @pytest.mark.asyncio
+    async def test_a_start_that_fails_twice_is_reported(
+        self, scripted: tuple[DockerBackend, _ScriptedDocker]
+    ) -> None:
+        backend, fake = scripted
+        fake.when(_starts, (125, "", "docker: Error response from daemon: boom"))
+        with pytest.raises(BackendUnavailableError, match="could not start the sandbox"):
+            await backend._ensure_container("c1")
+        assert fake.count(_starts) == 2
+
+    @pytest.mark.asyncio
+    async def test_a_probe_the_daemon_failed_does_not_blame_the_image(
+        self, scripted: tuple[DockerBackend, _ScriptedDocker]
+    ) -> None:
+        backend, fake = scripted
+        fake.when(
+            _probe,
+            (1, "", "Error response from daemon: container abc is not running"),
+            (0, "", ""),
+        )
+        container = await backend._ensure_container("c1")
+        assert container.name == backend._container_name("c1")
+        assert fake.count(_starts) == 2
+
+    @pytest.mark.asyncio
+    async def test_an_image_without_the_tools_is_still_named_and_not_retried(
+        self, scripted: tuple[DockerBackend, _ScriptedDocker]
+    ) -> None:
+        backend, fake = scripted
+        fake.when(_probe, (1, "", ""))
+        with pytest.raises(BackendUnavailableError, match="lacks bash, timeout or ps"):
+            await backend._ensure_container("c1")
+        assert fake.count(_starts) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_proxy_is_started_again_when_the_first_attempt_fails(
+        self, scripted: tuple[DockerBackend, _ScriptedDocker]
+    ) -> None:
+        backend, fake = scripted
+        backend._options = DockerOptions(allowed_network="public")
+        fake.when(
+            lambda a: a[:1] == ("run",) and "--read-only" in a,
+            (125, "", "Error response from daemon: No such container: p"),
+            (0, "p\n", ""),
+        )
+        fake.when(lambda a: a[:1] == ("logs",), (0, "READY\n", ""))
+        # `inspect` of the network and the proxy: neither exists yet.
+        fake.when(lambda a: a[:1] == ("inspect",), (1, "", "No such object"))
+        fake.when(lambda a: a[:2] == ("network", "inspect"), (1, "", "No such network"))
+        await backend._ensure_network()
+        assert fake.count(lambda a: a[:1] == ("run",) and "--read-only" in a) == 2
+        assert backend._network_ready
+
+    @pytest.mark.asyncio
+    async def test_a_container_lost_between_commands_says_so(
+        self, scripted: tuple[DockerBackend, _ScriptedDocker]
+    ) -> None:
+        backend, _fake = scripted
+        notices: list[str] = []
+        backend.on_notice = notices.append
+        backend._prepared = True
+        backend._image = "img"
+        answers = [
+            CommandResult(
+                exit_code=None, stdout="", stderr="", backend_error="Error: No such container: x"
+            ),
+            CommandResult(exit_code=0, stdout="", stderr=""),
+        ]
+
+        async def exec_(*_: Any, **__: Any) -> CommandResult:
+            return answers.pop(0)
+
+        backend._exec = exec_  # type: ignore[method-assign]
+        result = await backend.run("true", timeout=5, conversation_id="c1")
+        assert result.exit_code == 0
+        assert any("sandbox was lost" in n for n in notices)
+
+
 class TestDefaults:
-    def test_github_is_allowed_by_default(self) -> None:
-        assert "github.com" in DEFAULT_ALLOW
+    def test_the_registries_are_always_listed(self) -> None:
+        assert {"pypi.org", "registry.npmjs.org"} <= set(REGISTRY_HOSTS)
 
     def test_the_image_has_what_a_project_needs(self) -> None:
         for wanted in ("git", "curl", "procps", "node"):
@@ -563,18 +745,35 @@ class TestARealContainer:
         assert (sandbox.workspace / "node_modules" / "cowsay").is_dir()
 
     @pytest.mark.asyncio
-    async def test_curl_reaches_an_allowed_host_and_not_another(self, sandbox: Any) -> None:
+    async def test_public_reaches_any_public_host_but_not_a_private_address(
+        self, sandbox: Any
+    ) -> None:
         backend = sandbox()
-        ok = await _sh(backend, "curl -sS -o /dev/null -w '%{http_code}' https://pypi.org/simple/")
+        ok = await _sh(backend, "curl -sS -o /dev/null -w '%{http_code}' https://example.org")
         assert ok.exit_code == 0 and ok.stdout.strip() == "200", ok.stderr
+        began = time.time()
+        private = await _sh(backend, "curl -sS https://10.0.0.1/")
+        assert private.exit_code != 0
+        assert "10.0.0.1" in await backend.explain_failure(began)
+
+    @pytest.mark.asyncio
+    async def test_a_list_reaches_only_those_and_the_registries(self, sandbox: Any) -> None:
+        backend = sandbox(allowed_network=["github.com"])
+        ok = await _sh(backend, "curl -sS -o /dev/null -w '%{http_code}' https://github.com")
+        assert ok.exit_code == 0 and ok.stdout.strip() in {"200", "301"}, ok.stderr
+        registry = await _sh(
+            backend, "curl -sS -o /dev/null -w '%{http_code}' https://pypi.org/simple/"
+        )
+        assert registry.stdout.strip() == "200", registry.stderr
         began = time.time()
         blocked = await _sh(backend, "curl -sS https://example.org")
         assert blocked.exit_code != 0
-        assert "example.org" in await backend.explain_failure(began)
+        note = await backend.explain_failure(began)
+        assert "example.org" in note and "docker: allowed_network:" in note
 
     @pytest.mark.asyncio
     async def test_no_network_means_none(self, sandbox: Any) -> None:
-        backend = sandbox(network="none")
+        backend = sandbox(allowed_network="none")
         result = await _sh(
             backend,
             "python -c \"import socket; socket.create_connection(('1.1.1.1', 443), timeout=5)\"",
@@ -640,16 +839,19 @@ class TestTheContainersLife:
         gone = subprocess.Popen(["true"])
         gone.wait()
         stale = f"domyn-stale-{gone.pid}"
-        subprocess.run(
+        started = subprocess.run(
             [
                 "docker", "run", "-d", "--name", stale,
                 "--label", "domyn.sandbox=1", "--label", f"domyn.owner-pid={gone.pid}",
                 "domyn-sandbox:py312-2", "sleep", "60",
             ],
             capture_output=True,
-            check=True,
         )  # fmt: skip
-        assert await _exists(stale)
+        # Any other process running the sandbox reaps a dead owner's containers too, so
+        # when the suite runs in parallel it may be gone before this one looks, or even
+        # while `docker run` is still starting it. Either way it ends up removed, which
+        # is all this test is about.
+        assert started.returncode == 0 or "No such container" in started.stderr.decode()
         await sandbox()._reap_orphans()
         assert not await _exists(stale)
 
@@ -767,12 +969,12 @@ class TestShellToolsInTheContainer:
 
     @pytest.mark.asyncio
     async def test_a_failure_names_the_blocked_host(self, sandbox: Any) -> None:
-        backend = sandbox()
+        backend = sandbox(allowed_network=["github.com"])
         run = shell.build_run_command(backend)
         result = await run(command="curl -sS https://example.org", conversation_id="c1", state={})
         text = str(result.data)
         assert "[sandbox] blocked" in text and "example.org" in text
-        assert "docker: allow" in text
+        assert "docker: allowed_network:" in text
 
     @pytest.mark.asyncio
     async def test_a_successful_command_gets_no_note(self, sandbox: Any) -> None:

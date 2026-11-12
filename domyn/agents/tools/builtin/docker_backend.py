@@ -31,7 +31,8 @@ is only where the command runs afterwards.
 
 **The network** is an ``--internal`` Docker network, which has no route out, with
 one proxy container attached to it and to the bridge (``scripts/egress_proxy.py``):
-it tunnels HTTPS to the allowlisted hosts and refuses everything else. The
+it tunnels HTTPS (port 443) to the hosts it may, and refuses everything else — by
+default any public host, never a private, loopback or link-local address. The
 proxy is the enforcement, not the ``HTTP_PROXY`` variables — a tool that ignores
 them simply has no network.
 
@@ -63,10 +64,9 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, ConfigDict
-from pydantic import Field as PydanticField
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from domyn.agents.logger import get_logger
 from domyn.agents.tools.builtin.backends import (
@@ -103,14 +103,10 @@ _DOCKERFILE = (
     " && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx\n"
 )
 
-DEFAULT_ALLOW: tuple[str, ...] = (
-    "pypi.org",
-    "files.pythonhosted.org",
-    "registry.npmjs.org",
-    "github.com",
-)
-"""The package registries, and GitHub for ``git clone`` over HTTPS. Anything else is
-added with ``docker: allow:``."""
+REGISTRY_HOSTS: tuple[str, ...] = ("pypi.org", "files.pythonhosted.org", "registry.npmjs.org")
+"""The package registries. Always reachable, also when the network is limited to a
+list of hosts: a sandbox that cannot ``pip install`` would be a worse agent, not a
+safer one."""
 
 LABEL = "domyn.sandbox"
 PROXY_PORT = 3128
@@ -146,18 +142,51 @@ class DockerOptions(BaseModel):
     """``auto`` builds ``domyn-sandbox`` from ``python:3.12-slim`` on first use. Any
     other value is used as it is and must provide ``bash``, ``timeout`` and ``ps``."""
 
-    network: Literal["allowlist", "none", "open"] = "allowlist"
-    """``allowlist``: package registries only. ``none``: no network at all.
-    ``open``: the container's ordinary network, with no restriction."""
+    allowed_network: Literal["public", "none"] | list[str] = "public"
+    """What a command can reach, in one setting:
 
-    allow: list[str] = PydanticField(default_factory=list)
-    """Hosts added to the allowlist (port 443). ``*.example.com`` matches subdomains."""
+    * ``public`` (default): any public host over HTTPS (port 443). Private,
+      loopback, link-local and metadata addresses are refused, so the container
+      cannot reach your network or your machine.
+    * a list of hosts (``[github.com, "*.example.com"]``): only those, plus the
+      package registries. Setting a list replaces ``public``.
+    * ``none``: no network at all.
+    """
+
+    @field_validator("allowed_network")
+    @classmethod
+    def _clean_hosts(cls, value: Any) -> Any:
+        if not isinstance(value, list):
+            return value
+        hosts: list[str] = []
+        for entry in value:
+            host = str(entry).strip().lower()
+            if not host or any(c in host for c in "/: \t") or host == "*":
+                raise ValueError(
+                    f"'{entry}' is not a host name: write github.com or *.example.com "
+                    "(HTTPS, port 443), or use `allowed_network: public` for any public host"
+                )
+            hosts.append(host)
+        return list(dict.fromkeys(hosts))
+
+    def allowed_hosts(self) -> list[str]:
+        """What the proxy is started with: ``*`` for ``public``, else the registries
+        and the listed hosts. Empty for ``none``, which has no proxy."""
+        if self.allowed_network == "public":
+            return ["*"]
+        if isinstance(self.allowed_network, list):
+            return list(dict.fromkeys([*REGISTRY_HOSTS, *self.allowed_network]))
+        return []
 
     memory: str = "2g"
     cpus: float = 2.0
     pids_limit: int = 512
     docker_binary: str = "docker"
     """The CLI to run: ``docker``, or ``podman``, or a path."""
+
+
+class _StartFailedError(BackendUnavailableError):
+    """Docker failed to start a container: worth one more try before reporting."""
 
 
 @dataclass
@@ -314,6 +343,9 @@ class DockerBackend(CommandBackend):
             if gone and attempt == 1:
                 # Removed from under us (docker restarted, someone ran `docker rm`).
                 self._containers.pop(conversation, None)
+                self._say(
+                    "The sandbox was lost; starting a new one (files outside the workspace are gone)."
+                )
                 continue
             if result.backend_error is None and not result.timed_out:
                 result = await self._after(container, conversation, command, result, started)
@@ -483,11 +515,8 @@ class DockerBackend(CommandBackend):
 
     # --- the network -----------------------------------------------------
 
-    def _allow(self) -> list[str]:
-        return list(dict.fromkeys([*DEFAULT_ALLOW, *(h.lower() for h in self._options.allow)]))
-
     async def _ensure_network(self) -> None:
-        if self._options.network != "allowlist" or self._network_ready:
+        if self._options.allowed_network == "none" or self._network_ready:
             return
         async with self._infra:
             if self._network_ready:
@@ -507,9 +536,27 @@ class DockerBackend(CommandBackend):
                 "inspect", "-f", "{{.State.Running}}", self._proxy_name, timeout=15
             )
             if code != 0 or running.strip() != "true":
-                await self._docker("rm", "-f", self._proxy_name, timeout=30)
-                await self._start_proxy(labels)
+                await self._start_proxy_with_retry(labels)
             self._network_ready = True
+
+    async def _start_proxy_with_retry(self, labels: list[str]) -> None:
+        """Start the proxy, once more if the first attempt failed.
+
+        Docker answers a start with an error now and then when it is busy (a
+        container "No such container" half a second after being created, a proxy
+        slower than the wait to come up); a second attempt on a clean slate is
+        what a person would do, and costs a second.
+        """
+        for attempt in (1, 2):
+            await self._docker("rm", "-f", self._proxy_name, timeout=30)
+            try:
+                await self._start_proxy(labels)
+                return
+            except BackendUnavailableError as exc:
+                if attempt == 2:
+                    raise
+                get_logger().warning(f"sandbox: the network proxy failed to start, retrying: {exc}")
+                await asyncio.sleep(1)
 
     async def _start_proxy(self, labels: list[str]) -> None:
         source = _proxy_source()
@@ -524,7 +571,7 @@ class DockerBackend(CommandBackend):
             "--read-only", "--pids-limit", "128", "--memory", "128m",
             "--user", "65534:65534",
             BASE_IMAGE, "python", "-c", source,
-            "--port", str(PROXY_PORT), "--allow", ",".join(self._allow()),
+            "--port", str(PROXY_PORT), "--allow", ",".join(self._options.allowed_hosts()),
             timeout=60,
         )  # fmt: skip
         if code != 0:
@@ -537,7 +584,9 @@ class DockerBackend(CommandBackend):
         )
         if code != 0:
             raise BackendUnavailableError(f"could not connect the proxy: {err.strip()[-200:]}")
-        for _ in range(40):
+        # Up to 30 s, and it returns the moment the proxy says so: a busy machine can
+        # take a good while to start Python in a container.
+        for _ in range(120):
             _, logs, _ = await self._docker("logs", self._proxy_name, timeout=10)
             if "READY" in logs:
                 return
@@ -574,8 +623,7 @@ class DockerBackend(CommandBackend):
             "image": self._image,
             "workspace": str(ws),
             "roots": sorted(roots),
-            "network": self._options.network,
-            "allow": self._allow() if self._options.network == "allowlist" else [],
+            "network": self._options.allowed_hosts() or "none",
             "memory": self._options.memory,
             "cpus": self._options.cpus,
             "pids": self._options.pids_limit,
@@ -622,6 +670,24 @@ class DockerBackend(CommandBackend):
             return await self._create(conversation, name, fingerprint)
 
     async def _create(self, conversation: str, name: str, fingerprint: str) -> _Container:
+        """Make the conversation's container, once more if Docker failed the first time.
+
+        A busy daemon fails a start or the probe straight after it with an error of
+        its own (``No such container: <id>`` for a container it had just created).
+        That says nothing about the image or the configuration, so it is tried
+        again; a refusal that comes back twice is real and is reported.
+        """
+        try:
+            return await self._create_once(conversation, name, fingerprint)
+        except _StartFailedError as exc:
+            get_logger().warning(f"sandbox: starting the container failed, retrying: {exc}")
+            await asyncio.sleep(1)
+            try:
+                return await self._create_once(conversation, name, fingerprint)
+            except _StartFailedError as again:
+                raise BackendUnavailableError(str(again)) from again
+
+    async def _create_once(self, conversation: str, name: str, fingerprint: str) -> _Container:
         self._say("Starting the sandbox…")
         await self._ensure_network()
         mounts = self._mounts(conversation)
@@ -642,9 +708,9 @@ class DockerBackend(CommandBackend):
         ]  # fmt: skip
         if hasattr(os, "getuid"):
             argv += ["--user", f"{os.getuid()}:{os.getgid()}"]
-        if self._options.network == "none":
+        if self._options.allowed_network == "none":
             argv += ["--network", "none"]
-        elif self._options.network == "allowlist":
+        else:
             proxy = f"http://{self._proxy_name}:{PROXY_PORT}"
             argv += ["--network", self._network_name]
             for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
@@ -657,7 +723,7 @@ class DockerBackend(CommandBackend):
         code, _, err = await self._docker(*argv, timeout=120)
         if code != 0:
             await self._docker("rm", "-f", name, timeout=30)
-            raise BackendUnavailableError(f"could not start the sandbox: {err.strip()[-300:]}")
+            raise _StartFailedError(f"could not start the sandbox: {err.strip()[-300:]}")
 
         container = _Container(name, fingerprint)
         # `mkdir` as the container's user (the same uid as on the host), so the
@@ -669,6 +735,9 @@ class DockerBackend(CommandBackend):
         )  # fmt: skip
         if code != 0:
             await self._docker("rm", "-f", name, timeout=30)
+            if code == 125 or _container_is_gone(err) or "daemon" in err.lower():
+                # Docker failed the probe; the image was not looked at.
+                raise _StartFailedError(f"the sandbox stopped as it started: {err.strip()[-300:]}")
             raise BackendUnavailableError(
                 f"the image {self._image} lacks bash, timeout or ps: use `docker: image: auto` "
                 "or an image that has them"
@@ -680,11 +749,12 @@ class DockerBackend(CommandBackend):
         return container
 
     def _summary(self) -> str:
-        network = {
-            "allowlist": "network: registries and GitHub only",
-            "none": "no network",
-            "open": "network: open",
-        }[self._options.network]
+        if self._options.allowed_network == "public":
+            network = "network: public HTTPS only"
+        elif self._options.allowed_network == "none":
+            network = "no network"
+        else:
+            network = f"network: {len(self._options.allowed_network)} allowed host(s) + registries"
         return f"docker · {network}"
 
     def _mounts(self, conversation: str) -> list[str]:
@@ -835,15 +905,21 @@ class DockerBackend(CommandBackend):
         return result
 
     async def explain_failure(self, since: float) -> str:
-        if self._options.network != "allowlist":
+        if self._options.allowed_network == "none":
             return ""
         blocked = await self._blocked_since(since)
         if not blocked:
             return ""
+        hosts = ", ".join(blocked)
+        if self._options.allowed_network == "public":
+            return (
+                f"[sandbox] blocked connection(s) to: {hosts}. The sandbox only allows HTTPS "
+                "(port 443) to public addresses."
+            )
         return (
-            f"[sandbox] blocked connection(s) to: {', '.join(blocked)}. The sandbox only reaches "
-            "an allowlist of hosts (package registries and GitHub). To allow a host, add it under "
-            "`docker: allow:` in the cli tools bundle of the config."
+            f"[sandbox] blocked connection(s) to: {hosts}. The sandbox is limited to the hosts in "
+            "its `allowed_network` list (and the package registries). To allow one, add it to "
+            "`docker: allowed_network:` in the cli tools bundle of the config."
         )
 
     async def _blocked_since(self, started: float) -> list[str]:
@@ -944,7 +1020,7 @@ class DockerBackend(CommandBackend):
         count = len(pip_lines) + len(npm_lines)
         if not count:
             return
-        if self._options.network == "none":
+        if self._options.allowed_network == "none":
             self._say(
                 f"{count} packages were installed in this conversation, but the "
                 "sandbox has no network to restore them."
@@ -996,8 +1072,8 @@ def _proxy_source() -> str:
 
 __all__ = [
     "BASE_IMAGE",
-    "DEFAULT_ALLOW",
     "DERIVED_IMAGE",
+    "REGISTRY_HOSTS",
     "DockerBackend",
     "DockerOptions",
 ]

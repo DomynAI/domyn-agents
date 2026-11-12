@@ -90,7 +90,7 @@ The settings you are most likely to change:
 | `skills` | The [skills](../guides/skills.md) the agent loads. Only what is listed here is loaded. |
 | `standing_instructions` | The [standing instructions](../guides/standing-instructions.md) added to the system prompt on every turn. |
 | `workspace` | The directory the file tools are confined to. `null` means the directory the session starts from. |
-| `sandbox` | `auto` (default) runs commands in a [Docker sandbox](tools-and-approvals.md) when Docker is running, and on your machine, with a warning, when it is not. `docker` always uses the sandbox and refuses to start without Docker. `local` runs commands on your machine. The sandbox's options go in a `docker` block: `image`, `network` (`allowlist`, `none` or `open`), `allow`, `memory`, `cpus` and `docker_binary`. |
+| `sandbox` | `auto` (default) runs commands in a [Docker sandbox](tools-and-approvals.md) when Docker is running, and on your machine, with a warning, when it is not. `docker` always uses the sandbox and refuses to start without Docker. `local` runs commands on your machine. The sandbox's options go in a `docker` block: `image`, `allowed_network` (`public`, `none` or a list of hosts; see [what commands can reach](tools-and-approvals.md#what-commands-can-reach-on-the-network)), `memory`, `cpus` and `docker_binary`. |
 | `isolate_environment` | `false` lets commands use the environment you run `domyn` from instead of a virtual environment per conversation. |
 | `allowed_env` | Names of environment variables that commands may see. |
 | `compactor.strategy` | How the conversation is shortened: `two_phase` (default), `prune_only` (never calls the model) or `noop` (never shortens). |

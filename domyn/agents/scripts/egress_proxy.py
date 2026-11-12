@@ -33,9 +33,12 @@ IDLE_TIMEOUT_S = 600.0
 
 
 def host_allowed(host: str, allow: list[str]) -> bool:
-    """Whether ``host`` is on the list. ``*.example.com`` matches subdomains only."""
+    """Whether ``host`` is on the list. ``*.example.com`` matches subdomains only, and
+    ``*`` matches every name (the address check below still applies)."""
     host = host.lower().rstrip(".")
     for entry in allow:
+        if entry == "*":
+            return True
         if entry.startswith("*."):
             if host.endswith(entry[1:]) and len(host) > len(entry) - 1:
                 return True

@@ -96,7 +96,8 @@ An entry whose `type` is unknown, or that cannot be built from its keys, is skip
 | `name` | `str` | required | Name agents refer to in `tool_bundles`. |
 | `bundles` | list of `files` \| `shell` | `[files, shell]` | Which tools: `files` (`read_file`, `list_dir`, `glob_files`, `grep`, `write_file`, `append_file`, `edit_file`), `shell` (`run_command`, `check_command`, `list_commands`, `stop_command`). |
 | `workspace` | `str` | the current directory | The directory the tools can reach. |
-| `sandbox` | `local` | `local` | Where commands run. |
+| `sandbox` | `auto` \| `docker` \| `local` | `auto` | Where commands run. `auto`: in a Docker container when Docker is running, else on this machine with a warning. `docker`: always in a container, and the session does not start without Docker. `local`: on this machine. See [Files, commands and approvals](../cli/tools-and-approvals.md#running-commands-in-a-docker-sandbox). |
+| `docker` | mapping | defaults | Options of the Docker sandbox: `image` (default `auto`), `allowed_network` (`public`, `none`, or a list of hosts), `memory`, `cpus`, `pids_limit`, `docker_binary`. Ignored when `sandbox: local`. |
 | `isolate_environment` | `bool` | `true` | Commands see only a fixed set of environment variables (`PATH`, `HOME`, …), plus `allowed_env`. |
 | `allowed_env` | list of `str` | `[]` | Further environment variables commands may see. |
 

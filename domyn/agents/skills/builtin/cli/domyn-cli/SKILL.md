@@ -327,7 +327,7 @@ says which variable is missing.
 - `domyn setup` and `/model` **rewrite the whole file** from the fields they know
   about: the provider's type, model, url, `max_tokens` and `context_window`; the
   agent's name, description, instruction, stream, skills and
-  `standing_instructions`; the tool bundle's bundles, workspace, sandbox, isolation,
+  `standing_instructions`; the tool bundle's bundles, workspace, sandbox (and its `docker` options), isolation,
   `allowed_env` and `browser` options; and the compaction settings. Anything else is
   dropped, e.g. `mcp_servers`, `hooks`, `tools`, extra agents, other
   `generation_params` (temperature, …) and provider `headers`. A custom `${MY_VAR}`
@@ -353,3 +353,5 @@ To start over: `domyn setup` (it pre-fills the current values; Enter keeps them)
 | the conversation hits the model's limit and is never compacted | no `context_window` in the provider block (or it is spelled `max_model_len`). Add `context_window`; it applies from the next message |
 | `/model` says it only applies to the default configuration | the session was started from a file. Edit that file; it applies from the next message |
 | a file outside the project is refused | workspace containment. Start the CLI in that directory or set `workspace` |
+| commands do not run in the Docker sandbox | `sandbox` in the tool bundle (the `tool_bundles` entry that lists `shell`) is `local`, or it is `auto` and Docker was not running when the session started (it warns and the line under the banner says `commands: this machine (no sandbox)`). Check the value, start Docker and restart; the check from inside is `test -f /.dockerenv && echo container \|\| echo host`. `sandbox: docker` refuses to start without Docker instead |
+| a command fails with `[sandbox] blocked connection(s) to <host>` | the sandbox's `docker.allowed_network` is a list that does not have the host. Add it to the list in the tool bundle (applies from the next message), or set `allowed_network: public` (any public site over HTTPS, the default). Plain `http://`, other ports and private addresses are refused in every mode |

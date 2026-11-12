@@ -66,10 +66,7 @@ tool_bundles:
   - shell
   sandbox: auto
   docker:
-    network: allowlist     # allowlist (default), none or open
-    allow:
-    - api.github.com       # added to the hosts below
-    - "*.githubusercontent.com"
+    allowed_network: public   # the default: any public site over HTTPS
 ```
 
 What the container can see:
@@ -81,11 +78,29 @@ What the container can see:
 
 What is in the container: Python with `pip`, Node with `npm`, `git` and `curl`. There is no root, so no `apt`; the agent can install packages with `pip` and `npm`.
 
-### The network allowlist
+### What commands can reach on the network
 
-By default a command reaches `pypi.org`, `files.pythonhosted.org`, `registry.npmjs.org` and `github.com` and nothing else, through a small proxy container that refuses every other host, every other port, plain `http://` and any name that points at a private address. `pip`, `npm`, `git clone https://github.com/...` and `curl https://...` all use it. A command that fails on a blocked host says which one.
+One setting, `allowed_network` under `docker:` in the cli tools bundle of your `config.yaml`, says what a command can reach:
 
-To allow more, add hosts under `docker: allow:` in the cli tools bundle of your `config.yaml` (above). An entry is a host (`api.github.com`) or `*.example.com` for its subdomains, and applies to HTTPS on port 443. The next command recreates the container, or waits if a background command is running. Two other settings: `network: none` turns the network off and `network: open` removes the limit. An allowed host is still a way out for data, so the sandbox protects your machine, not what is in the workspace.
+```yaml
+docker:
+  allowed_network: public          # the default
+```
+
+```yaml
+docker:
+  allowed_network:                 # a list replaces `public`: only these
+  - github.com
+  - "*.example.com"
+```
+
+- **`public`** (the default): any public site over HTTPS. `curl https://domyn.com`, `git clone https://github.com/...`, `pip` and `npm` all work. Addresses on your machine or your network (`localhost`, `192.168.x.x`, cloud metadata) are refused, and so are plain `http://` and any port other than 443.
+- **A list of hosts**: only those, **plus the package registries** (`pypi.org`, `files.pythonhosted.org`, `registry.npmjs.org`), so `pip` and `npm` keep working. A list replaces `public`; they are not combined. An entry is a host (`github.com`) or `*.example.com` for its subdomains, HTTPS on port 443 only.
+- **`none`**: no network at all.
+
+A command that fails because the sandbox refused a connection says which host. With a list, the fix is to add that host to it; the next command recreates the container, or waits if a background command is running.
+
+What this protects: your machine and your network, always. With `public`, it does not stop a command from sending what it can read (files in the workspace, the variables you listed under `allowed_env`) to a public site, which is what a prompt injection would try. If that matters to you, use a list.
 
 How it behaves:
 
