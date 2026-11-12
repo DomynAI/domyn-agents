@@ -20,7 +20,7 @@ an argument the model can pass.
 
 Where commands run is a separate axis, the
 :class:`~domyn.agents.tools.builtin.backends.CommandBackend`. Two ship: the local
-machine, and a Docker container (``sandbox: docker``, ``docker_backend.py``).
+machine, and a Docker container (``sandbox: docker``, ``docker_sandbox/``).
 :func:`bundle` accepts one and returns it via :class:`BuiltinTools` so the caller
 can shut it down, because a container has to be removed and finding the end of a
 session later, under pressure, is how teardown gets forgotten.
@@ -49,7 +49,7 @@ from domyn.agents.tools.builtin.backends import (
 )
 from domyn.agents.tools.builtin.browser import browser_tools
 from domyn.agents.tools.builtin.browser_sessions import BrowserOptions, BrowserSessions
-from domyn.agents.tools.builtin.docker_backend import DockerOptions
+from domyn.agents.tools.builtin.docker_sandbox import DockerBackendOptions
 from domyn.agents.tools.builtin.files import file_tools
 from domyn.agents.tools.builtin.shell import run_command_tool, shell_tools
 from domyn.agents.tools.builtin.workspace import Workspace, WorkspaceError, is_ignored
@@ -226,7 +226,7 @@ class BuiltinBundleConfig(BaseModel):
     here."""
     browser: BrowserOptions = PydanticField(default_factory=BrowserOptions)
     """Options for the ``browser`` bundle; ignored unless it is listed."""
-    docker: DockerOptions = PydanticField(default_factory=DockerOptions)
+    docker: DockerBackendOptions = PydanticField(default_factory=DockerBackendOptions)
     """Options for the Docker sandbox; ignored when ``sandbox`` is ``local``."""
 
     def build(
@@ -272,7 +272,7 @@ __all__ = [
     "BuiltinTools",
     "CommandBackend",
     "CommandResult",
-    "DockerOptions",
+    "DockerBackendOptions",
     "LocalBackend",
     "Workspace",
     "WorkspaceError",

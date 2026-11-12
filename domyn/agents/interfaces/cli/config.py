@@ -50,7 +50,7 @@ from domyn.agents.tools.builtin import (
     BUNDLE_TOOL_NAMES,
     DEFAULT_BUNDLES,
     BrowserOptions,
-    DockerOptions,
+    DockerBackendOptions,
 )
 
 # `DOMYN_PROJECT_DIR`, defined with the tools, which read it: always set by `use_project`, to
@@ -292,7 +292,7 @@ class AgentConfig(BaseModel):
     when ``browser`` is in ``tools``, and kept when it is not, so turning
     browsing off and on again does not lose an allowlist."""
 
-    docker: DockerOptions = Field(default_factory=DockerOptions)
+    docker: DockerBackendOptions = Field(default_factory=DockerBackendOptions)
     """How the Docker sandbox runs. Only read when ``sandbox`` is not ``local``, and
     kept when it is, so switching back and forth does not lose an allowlist."""
 
@@ -1027,19 +1027,19 @@ def _entrypoint_agent_and_provider(raw: dict[str, Any]) -> tuple[dict[str, Any],
     return agent_dict, provider_dict
 
 
-def _docker_options(raw: Any) -> DockerOptions:
+def _docker_options(raw: Any) -> DockerBackendOptions:
     """The bundle's ``docker`` block, or the defaults when it cannot be read.
     Lenient for the same reason as ``_browser_options``."""
     if not raw:
-        return DockerOptions()
+        return DockerBackendOptions()
     try:
-        return DockerOptions.model_validate(raw)
+        return DockerBackendOptions.model_validate(raw)
     except ValidationError as exc:
         get_logger().warning(
             f"ignoring an invalid docker block in the config: {type(exc).__name__}"
         )
         get_logger().debug(f"docker block detail: {exc}")
-        return DockerOptions()
+        return DockerBackendOptions()
 
 
 def _browser_options(raw: Any) -> BrowserOptions:
@@ -1446,7 +1446,7 @@ def _oauth_provider_items(raw: dict[str, Any]) -> list[ConfigItem]:
     return items
 
 
-def _docker_fields(options: DockerOptions) -> list[tuple[str, str]]:
+def _docker_fields(options: DockerBackendOptions) -> list[tuple[str, str]]:
     return [
         ("docker image", options.image),
         (

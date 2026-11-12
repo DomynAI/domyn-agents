@@ -28,19 +28,20 @@ from domyn.agents.tools.builtin import (
     BuiltinBundleConfig,
     CommandBackend,
     CommandResult,
-    DockerOptions,
+    DockerBackendOptions,
     LocalBackend,
     Workspace,
     build_backend,
     shell,
 )
-from domyn.agents.tools.builtin.docker_backend import (
-    _DOCKERFILE,
-    _INSTALLS,
-    _NPM_GLOBAL,
-    REGISTRY_HOSTS,
-    DockerBackend,
-)
+from domyn.agents.tools.builtin.docker_sandbox import REGISTRY_HOSTS, DockerBackend
+from domyn.agents.tools.builtin.docker_sandbox.cli import DockerCli, DockerOutput
+from domyn.agents.tools.builtin.docker_sandbox.images import SANDBOX_DOCKERFILE
+from domyn.agents.tools.builtin.docker_sandbox.installs import NPM_GLOBAL_COMMAND, PIP_COMMAND
+from domyn.agents.tools.builtin.docker_sandbox.mounts import build_mounts
+from domyn.agents.tools.builtin.docker_sandbox.network import EgressNetwork
+from domyn.agents.tools.builtin.docker_sandbox.scope import SandboxScope, remove_orphans
+from domyn.agents.tools.builtin.docker_sandbox.state import StateFolder
 
 
 def _docker_works() -> bool:
@@ -65,43 +66,47 @@ needs_docker = pytest.mark.skipif(not _docker_works(), reason="Docker is not ava
 
 class TestOptions:
     def test_defaults(self) -> None:
-        options = DockerOptions()
+        options = DockerBackendOptions()
         assert options.image == "auto"
         assert options.allowed_network == "public"
         assert options.allowed_hosts() == ["*"]
 
     def test_unknown_keys_are_refused(self) -> None:
         with pytest.raises(ValueError):
-            DockerOptions(netwrok="none")  # type: ignore[call-arg]
+            DockerBackendOptions(netwrok="none")  # type: ignore[call-arg]
 
     def test_network_modes_are_closed(self) -> None:
         with pytest.raises(ValueError):
-            DockerOptions(allowed_network="everything")  # type: ignore[arg-type]
+            DockerBackendOptions(allowed_network="everything")  # type: ignore[arg-type]
         with pytest.raises(ValueError):
-            DockerOptions(allowed_network="open")  # type: ignore[arg-type]
+            DockerBackendOptions(allowed_network="open")  # type: ignore[arg-type]
 
     def test_a_list_replaces_public_and_keeps_the_registries(self) -> None:
-        options = DockerOptions(allowed_network=["GitHub.com", "*.example.com", "github.com"])
+        options = DockerBackendOptions(
+            allowed_network=["GitHub.com", "*.example.com", "github.com"]
+        )
         assert options.allowed_network == ["github.com", "*.example.com"]
         assert options.allowed_hosts() == [*REGISTRY_HOSTS, "github.com", "*.example.com"]
         assert "*" not in options.allowed_hosts()
 
     def test_none_has_no_proxy_hosts(self) -> None:
-        assert DockerOptions(allowed_network="none").allowed_hosts() == []
+        assert DockerBackendOptions(allowed_network="none").allowed_hosts() == []
 
     @pytest.mark.parametrize("entry", ["", "https://x.com", "x.com:443", "a/b", "*", "x y"])
     def test_a_list_entry_must_be_a_host(self, entry: str) -> None:
         with pytest.raises(ValueError):
-            DockerOptions(allowed_network=[entry])
+            DockerBackendOptions(allowed_network=[entry])
 
     def test_a_single_host_is_not_a_mode(self) -> None:
         with pytest.raises(ValueError):
-            DockerOptions(allowed_network="github.com")  # type: ignore[arg-type]
+            DockerBackendOptions(allowed_network="github.com")  # type: ignore[arg-type]
 
 
 class TestWiring:
     def test_build_backend_by_name(self, tmp_path: Path) -> None:
-        backend = build_backend("docker", Workspace.at(tmp_path), docker=DockerOptions(memory="1g"))
+        backend = build_backend(
+            "docker", Workspace.at(tmp_path), docker=DockerBackendOptions(memory="1g")
+        )
         assert isinstance(backend, DockerBackend)
         assert backend.is_isolated and backend.destroys_on_close
 
@@ -143,29 +148,29 @@ class TestWiring:
     def test_cli_config_round_trips_the_block(self) -> None:
         from domyn.agents.interfaces.cli.config import AgentConfig, _docker_options
 
-        agent = AgentConfig(sandbox="docker", docker=DockerOptions(allowed_network=["example.org"]))
+        agent = AgentConfig(
+            sandbox="docker", docker=DockerBackendOptions(allowed_network=["example.org"])
+        )
         dumped = agent.docker.model_dump(exclude_defaults=True)
         assert dumped == {"allowed_network": ["example.org"]}
         assert _docker_options(dumped).allowed_network == ["example.org"]
         assert AgentConfig(sandbox="docker").docker.model_dump(exclude_defaults=True) == {}
         # An unreadable block must not stop the wizard from starting.
-        assert _docker_options({"nope": 1}) == DockerOptions()
+        assert _docker_options({"nope": 1}) == DockerBackendOptions()
 
 
 class TestWhatIsMounted:
-    def _backend(self, tmp_path: Path, roots: tuple[Path, ...] = ()) -> DockerBackend:
+    def _specs(
+        self, tmp_path: Path, roots: tuple[Path, ...] = (), conversation: str = "c1"
+    ) -> tuple[Path, list[str]]:
         ws = tmp_path / "ws"
         ws.mkdir(exist_ok=True)
-        return DockerBackend(Workspace.at(ws, also=roots))
-
-    def _specs(self, backend: DockerBackend, conversation: str = "c1") -> list[str]:
-        mounts = backend._mounts(conversation)
-        return [m for m in mounts if m != "--mount"]
+        workspace = Workspace.at(ws, also=roots)
+        arguments = build_mounts(workspace, StateFolder.resolve(workspace.root, None), conversation)
+        return workspace.root, [a for a in arguments if a != "--mount"]
 
     def test_workspace_is_writable_and_the_agents_home_is_not(self, tmp_path: Path) -> None:
-        backend = self._backend(tmp_path)
-        ws = backend._workspace.root
-        specs = self._specs(backend)
+        ws, specs = self._specs(tmp_path)
         assert f"type=bind,source={ws},target={ws}" in specs
         assert f"type=bind,source={ws}/.domyn,target={ws}/.domyn,readonly" in specs
         assert f"type=bind,source={ws}/.domyn/processes,target={ws}/.domyn/processes" in specs
@@ -173,45 +178,43 @@ class TestWhatIsMounted:
         assert any(s.endswith("/conversations/c1") for s in specs)
 
     def test_git_hooks_and_config_are_read_only(self, tmp_path: Path) -> None:
-        backend = self._backend(tmp_path)
-        git = backend._workspace.root / ".git"
+        git = tmp_path / "ws" / ".git"
         (git / "hooks").mkdir(parents=True)
         (git / "config").write_text("[core]\n")
-        specs = self._specs(backend)
-        assert any(s.endswith(f"target={git}/hooks,readonly") for s in specs)
-        assert any(s.endswith(f"target={git}/config,readonly") for s in specs)
+        _, specs = self._specs(tmp_path)
+        assert any(s.endswith(f"target={git.resolve()}/hooks,readonly") for s in specs)
+        assert any(s.endswith(f"target={git.resolve()}/config,readonly") for s in specs)
 
     def test_instruction_files_and_agents_folder_are_masked_when_present(
         self, tmp_path: Path
     ) -> None:
-        backend = self._backend(tmp_path)
-        ws = backend._workspace.root
-        (ws / ".agents").mkdir()
+        ws = tmp_path / "ws"
+        (ws / ".agents").mkdir(parents=True)
         (ws / "AGENTS.md").write_text("x")
-        specs = self._specs(backend)
-        assert any(s.endswith(f"target={ws}/.agents,readonly") for s in specs)
-        assert any(s.endswith(f"target={ws}/AGENTS.md,readonly") for s in specs)
+        ws_root, specs = self._specs(tmp_path)
+        assert any(s.endswith(f"target={ws_root}/.agents,readonly") for s in specs)
+        assert any(s.endswith(f"target={ws_root}/AGENTS.md,readonly") for s in specs)
 
     def test_skill_roots_are_read_only(self, tmp_path: Path) -> None:
         skills = tmp_path / "skills"
         skills.mkdir()
-        backend = self._backend(tmp_path, roots=(skills,))
-        specs = self._specs(backend)
+        _, specs = self._specs(tmp_path, roots=(skills,))
         assert f"type=bind,source={skills.resolve()},target={skills.resolve()},readonly" in specs
 
     def test_nothing_else_is_mounted(self, tmp_path: Path) -> None:
-        specs = self._specs(self._backend(tmp_path))
+        _, specs = self._specs(tmp_path)
         home = str(Path.home())
         assert not any(home in s and "/ws" not in s for s in specs)
         assert not any("docker.sock" in s for s in specs)
 
     def test_a_linked_agent_home_is_refused(self, tmp_path: Path) -> None:
-        backend = self._backend(tmp_path)
+        ws = tmp_path / "ws"
+        ws.mkdir()
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
-        (backend._workspace.root / ".domyn").symlink_to(elsewhere)
+        (ws / ".domyn").symlink_to(elsewhere)
         with pytest.raises(BackendUnavailableError, match="is a link"):
-            backend._mounts("c1")
+            self._specs(tmp_path)
 
 
 class TestFingerprint:
@@ -235,8 +238,10 @@ class TestFingerprint:
 
     def test_changes_with_the_network_policy(self, tmp_path: Path) -> None:
         ws = Workspace.at(tmp_path)
-        a = DockerBackend(ws, options=DockerOptions(allowed_network="none"))._fingerprint()
-        b = DockerBackend(ws, options=DockerOptions(allowed_network=["github.com"]))._fingerprint()
+        a = DockerBackend(ws, options=DockerBackendOptions(allowed_network="none"))._fingerprint()
+        b = DockerBackend(
+            ws, options=DockerBackendOptions(allowed_network=["github.com"])
+        )._fingerprint()
         assert a != b
 
 
@@ -250,7 +255,8 @@ class TestRefusals:
     @pytest.mark.asyncio
     async def test_a_missing_docker_binary_says_so(self, tmp_path: Path) -> None:
         backend = DockerBackend(
-            Workspace.at(tmp_path), options=DockerOptions(docker_binary="/nonexistent/docker")
+            Workspace.at(tmp_path),
+            options=DockerBackendOptions(docker_binary="/nonexistent/docker"),
         )
         result = await backend.run("echo hi", timeout=5)
         assert result.backend_error and "was not found" in result.backend_error
@@ -259,7 +265,8 @@ class TestRefusals:
     @pytest.mark.asyncio
     async def test_a_missing_binary_says_how_to_get_docker(self, tmp_path: Path) -> None:
         backend = DockerBackend(
-            Workspace.at(tmp_path), options=DockerOptions(docker_binary="/nonexistent/docker")
+            Workspace.at(tmp_path),
+            options=DockerBackendOptions(docker_binary="/nonexistent/docker"),
         )
         with pytest.raises(BackendUnavailableError) as raised:
             await backend.check()
@@ -267,18 +274,21 @@ class TestRefusals:
         assert raised.value.fix and "docs.docker.com" in raised.value.fix
 
     @pytest.mark.parametrize(
-        ("platform", "expected"),
+        ("system", "expected"),
         [
-            ("darwin", "open -a Docker"),
-            ("linux", "systemctl start docker"),
-            ("win32", "Docker Desktop"),
+            ("Darwin", "open -a Docker"),
+            ("Linux", "systemctl start docker"),
+            ("Windows", "Docker Desktop"),
         ],
     )
     def test_the_start_hint_fits_the_platform(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, expected: str
+        self, monkeypatch: pytest.MonkeyPatch, system: str, expected: str
     ) -> None:
-        monkeypatch.setattr("sys.platform", platform)
-        assert expected in DockerBackend(Workspace.at(tmp_path))._start_hint()
+        monkeypatch.setattr("platform.system", lambda: system)
+        assert expected in DockerCli()._how_to_start()
+
+    def test_another_cli_is_named_in_the_hint(self) -> None:
+        assert "podman machine start" in DockerCli("/usr/local/bin/podman")._how_to_start()
 
     @pytest.mark.asyncio
     async def test_a_daemon_that_is_down_is_told_apart_from_a_missing_docker(
@@ -287,7 +297,7 @@ class TestRefusals:
         # `false` exists and exits 1 for `info`: installed, not answering.
         backend = DockerBackend(
             Workspace.at(tmp_path),
-            options=DockerOptions(docker_binary=shutil.which("false") or "false"),
+            options=DockerBackendOptions(docker_binary=shutil.which("false") or "false"),
         )
         with pytest.raises(BackendUnavailableError) as raised:
             await backend.check()
@@ -307,11 +317,11 @@ class TestInstallDetection:
         ],
     )
     def test_installs(self, command: str) -> None:
-        assert _INSTALLS.search(command)
+        assert PIP_COMMAND.search(command)
 
     @pytest.mark.parametrize("command", ["ls", "echo pipe", "cat pip.txt", "grep pipeline f"])
     def test_not_installs(self, command: str) -> None:
-        assert not _INSTALLS.search(command)
+        assert not PIP_COMMAND.search(command)
 
 
 class TestEgressProxyDecisions:
@@ -407,35 +417,40 @@ class TestNpmGlobalDetection:
         ],
     )
     def test_global_changes(self, command: str) -> None:
-        assert _NPM_GLOBAL.search(command)
+        assert NPM_GLOBAL_COMMAND.search(command)
 
     @pytest.mark.parametrize("command", ["npm install cowsay", "echo npm -g", "ls -g", "npm test"])
     def test_the_rest(self, command: str) -> None:
-        assert not _NPM_GLOBAL.search(command)
+        assert not NPM_GLOBAL_COMMAND.search(command)
 
 
-class _ScriptedDocker:
-    """A stand-in for ``docker``: each call is answered by the first matching rule,
-    and every call is recorded. No daemon needed, so these run everywhere."""
+Match = Callable[[tuple[str, ...]], bool]
+
+
+class _ScriptedCli(DockerCli):
+    """``docker`` with scripted answers: each call gets the first matching rule's next
+    answer (the last one repeats), and every call is recorded. No daemon needed."""
 
     def __init__(self) -> None:
+        super().__init__("docker")
         self.calls: list[tuple[str, ...]] = []
-        self.rules: list[tuple[Callable[[tuple[str, ...]], bool], list[tuple[int, str, str]]]] = []
+        self.exec_results: list[CommandResult] = []
+        self._rules: list[tuple[Match, list[DockerOutput]]] = []
 
-    def when(
-        self, match: Callable[[tuple[str, ...]], bool], *answers: tuple[int, str, str]
-    ) -> None:
-        """Answer matching calls with ``answers`` in turn; the last one repeats."""
-        self.rules.append((match, list(answers)))
+    def when(self, match: Match, *answers: DockerOutput) -> None:
+        self._rules.append((match, list(answers)))
 
-    async def __call__(self, *args: str, **_: Any) -> tuple[int, str, str]:
+    async def __call__(self, *args: str, **_: Any) -> DockerOutput:
         self.calls.append(args)
-        for match, answers in self.rules:
+        for match, answers in self._rules:
             if match(args):
                 return answers.pop(0) if len(answers) > 1 else answers[0]
-        return 0, "", ""
+        return DockerOutput(0, "", "")
 
-    def count(self, match: Callable[[tuple[str, ...]], bool]) -> int:
+    async def exec_command(self, *_: Any, **__: Any) -> CommandResult:
+        return self.exec_results.pop(0)
+
+    def count(self, match: Match) -> int:
         return sum(1 for call in self.calls if match(call))
 
 
@@ -443,24 +458,44 @@ def _starts(args: tuple[str, ...]) -> bool:
     return args[:1] == ("run",)
 
 
-def _probe(args: tuple[str, ...]) -> bool:
+def _starts_the_proxy(args: tuple[str, ...]) -> bool:
+    return _starts(args) and "--read-only" in args
+
+
+def _probes(args: tuple[str, ...]) -> bool:
     return args[:1] == ("exec",) and any("command -v" in a for a in args)
 
 
+def _ok(stdout: str = "") -> DockerOutput:
+    return DockerOutput(0, stdout, "")
+
+
+def _failed(stderr: str, code: int = 125) -> DockerOutput:
+    return DockerOutput(code, "", stderr)
+
+
 @pytest.fixture
-def scripted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple[DockerBackend, _ScriptedDocker]:
-    async def no_wait(_: float) -> None:
+def no_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def instantly(_: float) -> None:
         return None
 
-    monkeypatch.setattr(asyncio, "sleep", no_wait)
+    monkeypatch.setattr(asyncio, "sleep", instantly)
+
+
+@pytest_asyncio.fixture
+async def scripted(tmp_path: Path, no_waiting: None) -> tuple[DockerBackend, _ScriptedCli]:
+    """A prepared backend over a scripted ``docker``, with no network, so a container
+    is the only thing it starts."""
     workspace = tmp_path / "project"
     workspace.mkdir()
-    backend = DockerBackend(Workspace.at(workspace), options=DockerOptions(allowed_network="none"))
-    fake = _ScriptedDocker()
-    backend._docker = fake  # type: ignore[assignment]
-    return backend, fake
+    cli = _ScriptedCli()
+    backend = DockerBackend(
+        Workspace.at(workspace),
+        options=DockerBackendOptions(allowed_network="none"),
+        cli=cli,
+    )
+    await backend.prepare()
+    return backend, cli
 
 
 class TestABusyDaemon:
@@ -469,94 +504,105 @@ class TestABusyDaemon:
 
     @pytest.mark.asyncio
     async def test_a_start_that_failed_once_is_tried_again(
-        self, scripted: tuple[DockerBackend, _ScriptedDocker]
+        self, scripted: tuple[DockerBackend, _ScriptedCli]
     ) -> None:
-        backend, fake = scripted
-        fake.when(
+        backend, cli = scripted
+        cli.when(
             _starts,
-            (125, "", "docker: Error response from daemon: No such container: abc"),
-            (0, "abc\n", ""),
+            _failed("docker: Error response from daemon: No such container: abc"),
+            _ok("abc\n"),
         )
         container = await backend._ensure_container("c1")
-        assert container.name == backend._container_name("c1")
-        assert fake.count(_starts) == 2
+        assert container.name == backend.container_name("c1")
+        assert cli.count(_starts) == 2
 
     @pytest.mark.asyncio
     async def test_a_start_that_fails_twice_is_reported(
-        self, scripted: tuple[DockerBackend, _ScriptedDocker]
+        self, scripted: tuple[DockerBackend, _ScriptedCli]
     ) -> None:
-        backend, fake = scripted
-        fake.when(_starts, (125, "", "docker: Error response from daemon: boom"))
+        backend, cli = scripted
+        cli.when(_starts, _failed("docker: Error response from daemon: boom"))
         with pytest.raises(BackendUnavailableError, match="could not start the sandbox"):
             await backend._ensure_container("c1")
-        assert fake.count(_starts) == 2
+        assert cli.count(_starts) == 2
 
     @pytest.mark.asyncio
     async def test_a_probe_the_daemon_failed_does_not_blame_the_image(
-        self, scripted: tuple[DockerBackend, _ScriptedDocker]
+        self, scripted: tuple[DockerBackend, _ScriptedCli]
     ) -> None:
-        backend, fake = scripted
-        fake.when(
-            _probe,
-            (1, "", "Error response from daemon: container abc is not running"),
-            (0, "", ""),
+        backend, cli = scripted
+        cli.when(
+            _probes,
+            _failed("Error response from daemon: container abc is not running", code=1),
+            _ok(),
         )
         container = await backend._ensure_container("c1")
-        assert container.name == backend._container_name("c1")
-        assert fake.count(_starts) == 2
+        assert container.name == backend.container_name("c1")
+        assert cli.count(_starts) == 2
 
     @pytest.mark.asyncio
     async def test_an_image_without_the_tools_is_still_named_and_not_retried(
-        self, scripted: tuple[DockerBackend, _ScriptedDocker]
+        self, scripted: tuple[DockerBackend, _ScriptedCli]
     ) -> None:
-        backend, fake = scripted
-        fake.when(_probe, (1, "", ""))
+        backend, cli = scripted
+        cli.when(_probes, _failed("", code=1))
         with pytest.raises(BackendUnavailableError, match="lacks bash, timeout or ps"):
             await backend._ensure_container("c1")
-        assert fake.count(_starts) == 1
+        assert cli.count(_starts) == 1
 
     @pytest.mark.asyncio
     async def test_the_proxy_is_started_again_when_the_first_attempt_fails(
-        self, scripted: tuple[DockerBackend, _ScriptedDocker]
+        self, tmp_path: Path, no_waiting: None
     ) -> None:
-        backend, fake = scripted
-        backend._options = DockerOptions(allowed_network="public")
-        fake.when(
-            lambda a: a[:1] == ("run",) and "--read-only" in a,
-            (125, "", "Error response from daemon: No such container: p"),
-            (0, "p\n", ""),
+        cli = _ScriptedCli()
+        cli.when(
+            _starts_the_proxy,
+            _failed("Error response from daemon: No such container: p"),
+            _ok("p\n"),
         )
-        fake.when(lambda a: a[:1] == ("logs",), (0, "READY\n", ""))
-        # `inspect` of the network and the proxy: neither exists yet.
-        fake.when(lambda a: a[:1] == ("inspect",), (1, "", "No such object"))
-        fake.when(lambda a: a[:2] == ("network", "inspect"), (1, "", "No such network"))
-        await backend._ensure_network()
-        assert fake.count(lambda a: a[:1] == ("run",) and "--read-only" in a) == 2
-        assert backend._network_ready
+        cli.when(lambda a: a[:1] == ("logs",), _ok("READY\n"))
+        # Neither the network nor the proxy exists yet.
+        cli.when(lambda a: a[:1] == ("inspect",), _failed("No such object", code=1))
+        cli.when(lambda a: a[:2] == ("network", "inspect"), _failed("No such network", code=1))
+        network = EgressNetwork(cli, SandboxScope.of(tmp_path), ["*"], lambda _: None)
+
+        await network.ensure()
+
+        assert cli.count(_starts_the_proxy) == 2
 
     @pytest.mark.asyncio
     async def test_a_container_lost_between_commands_says_so(
-        self, scripted: tuple[DockerBackend, _ScriptedDocker]
+        self, scripted: tuple[DockerBackend, _ScriptedCli]
     ) -> None:
-        backend, _fake = scripted
+        backend, cli = scripted
         notices: list[str] = []
         backend.on_notice = notices.append
-        backend._prepared = True
-        backend._image = "img"
-        answers = [
+        cli.exec_results = [
             CommandResult(
                 exit_code=None, stdout="", stderr="", backend_error="Error: No such container: x"
             ),
             CommandResult(exit_code=0, stdout="", stderr=""),
         ]
 
-        async def exec_(*_: Any, **__: Any) -> CommandResult:
-            return answers.pop(0)
-
-        backend._exec = exec_  # type: ignore[method-assign]
         result = await backend.run("true", timeout=5, conversation_id="c1")
+
         assert result.exit_code == 0
         assert any("sandbox was lost" in n for n in notices)
+
+    @pytest.mark.asyncio
+    async def test_a_container_that_cannot_be_started_is_not_reported_as_lost(
+        self, scripted: tuple[DockerBackend, _ScriptedCli]
+    ) -> None:
+        backend, cli = scripted
+        notices: list[str] = []
+        backend.on_notice = notices.append
+        cli.when(_starts, _failed("Error response from daemon: No such container: abc"))
+
+        result = await backend.run("true", timeout=5, conversation_id="c1")
+
+        assert result.backend_error and "could not start the sandbox" in result.backend_error
+        assert not any("sandbox was lost" in n for n in notices)
+        assert cli.count(_starts) == 2  # tried again once, not once more as a "lost" container
 
 
 class TestAStateFolderOutsideTheWorkspace:
@@ -564,21 +610,22 @@ class TestAStateFolderOutsideTheWorkspace:
     or a project), not in the workspace. The container gets exactly the two places it
     writes in, at their host paths."""
 
-    def _backend(self, tmp_path: Path) -> tuple[DockerBackend, Path]:
+    def _folders(self, tmp_path: Path) -> tuple[Workspace, Path]:
         ws = tmp_path / "ws"
         ws.mkdir()
         state = tmp_path / "state"
         state.mkdir()
-        return DockerBackend(Workspace.at(ws), state_dir=state), state
+        return Workspace.at(ws), state
 
-    def _specs(self, backend: DockerBackend) -> list[str]:
-        return [m for m in backend._mounts("c1") if m != "--mount"]
+    def _specs(self, workspace: Workspace, state: Path) -> list[str]:
+        arguments = build_mounts(workspace, StateFolder.resolve(workspace.root, state), "c1")
+        return [a for a in arguments if a != "--mount"]
 
     def test_only_the_processes_and_the_conversations_folders_are_mounted(
         self, tmp_path: Path
     ) -> None:
-        backend, state = self._backend(tmp_path)
-        specs = self._specs(backend)
+        workspace, state = self._folders(tmp_path)
+        specs = self._specs(workspace, state)
         assert f"type=bind,source={state}/processes,target={state}/processes" in specs
         assert f"type=bind,source={state}/conversations/c1,target={state}/conversations/c1" in specs
         assert not any(f"source={state}," in spec for spec in specs), "the whole folder"
@@ -587,58 +634,58 @@ class TestAStateFolderOutsideTheWorkspace:
     def test_nothing_is_made_in_the_workspace_and_no_empty_mask_is_asked_for(
         self, tmp_path: Path
     ) -> None:
-        backend, _ = self._backend(tmp_path)
-        ws = backend._workspace.root
-        specs = self._specs(backend)
-        assert not (ws / ".domyn").exists()
-        assert not any(f"source={ws}/.domyn" in spec for spec in specs)
+        workspace, state = self._folders(tmp_path)
+        specs = self._specs(workspace, state)
+        assert not (workspace.root / ".domyn").exists()
+        assert not any(f"source={workspace.root}/.domyn" in spec for spec in specs)
 
     def test_a_projects_own_dot_domyn_is_still_read_only(self, tmp_path: Path) -> None:
-        backend, _ = self._backend(tmp_path)
-        ws = backend._workspace.root
-        (ws / ".domyn").mkdir()
-        assert f"type=bind,source={ws}/.domyn,target={ws}/.domyn,readonly" in self._specs(backend)
+        workspace, state = self._folders(tmp_path)
+        (workspace.root / ".domyn").mkdir()
+        mask = f"type=bind,source={workspace.root}/.domyn,target={workspace.root}/.domyn,readonly"
+        assert mask in self._specs(workspace, state)
 
     def test_the_shell_tools_are_told_where_it_is(self, tmp_path: Path) -> None:
-        backend, state = self._backend(tmp_path)
+        workspace, state = self._folders(tmp_path)
+        backend = DockerBackend(workspace, state_dir=state)
         assert backend.state_dir == str(state)
         assert backend.processes_dir == f"{state}/processes"
 
-    def test_without_one_it_is_dot_domyn_in_the_workspace(self, tmp_path: Path) -> None:
-        ws = tmp_path / "ws"
-        ws.mkdir()
-        backend = DockerBackend(Workspace.at(ws))
-        assert backend.state_dir == ".domyn"
-        assert backend._conversation_home("c1") == ws.resolve() / ".domyn/conversations/c1"
+    def test_without_one_it_is_dot_domyn_in_the_workspace(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("DOMYN_PROJECT_DIR", raising=False)
+        workspace, _ = self._folders(tmp_path)
+        state = StateFolder.resolve(workspace.root, None)
+        assert state.as_seen_by_commands == ".domyn"
+        assert state.conversation_home("c1") == workspace.root / ".domyn/conversations/c1"
 
     def test_the_environment_names_it_when_none_is_given(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        ws = tmp_path / "ws"
-        ws.mkdir()
+        workspace, _ = self._folders(tmp_path)
         monkeypatch.setenv("DOMYN_PROJECT_DIR", str(tmp_path / "proj"))
-        assert DockerBackend(Workspace.at(ws)).state_dir == str(tmp_path / "proj")
+        assert DockerBackend(workspace).state_dir == str(tmp_path / "proj")
 
     def test_another_state_folder_is_another_container(self, tmp_path: Path) -> None:
-        ws = tmp_path / "ws"
-        ws.mkdir()
-        a = DockerBackend(Workspace.at(ws), state_dir=tmp_path / "a")
-        b = DockerBackend(Workspace.at(ws), state_dir=tmp_path / "b")
+        workspace, _ = self._folders(tmp_path)
+        a = DockerBackend(workspace, state_dir=tmp_path / "a")
+        b = DockerBackend(workspace, state_dir=tmp_path / "b")
         assert a._fingerprint() != b._fingerprint()
 
     def test_a_link_below_it_is_refused_but_the_folder_may_be_one(self, tmp_path: Path) -> None:
-        backend, state = self._backend(tmp_path)
+        workspace, state = self._folders(tmp_path)
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
         (state / "processes").symlink_to(elsewhere)
         with pytest.raises(BackendUnavailableError, match="is a link"):
-            backend._mounts("c1")
+            self._specs(workspace, state)
 
+        real = tmp_path / "dotfiles"
+        real.mkdir()
         linked = tmp_path / "dotfiles-link"
-        linked.symlink_to(tmp_path / "state2", target_is_directory=True)
-        (tmp_path / "state2").mkdir()
-        ok = DockerBackend(backend._workspace, state_dir=linked)
-        assert ok._mounts("c1")
+        linked.symlink_to(real, target_is_directory=True)
+        assert self._specs(workspace, linked)
 
 
 class TestDefaults:
@@ -647,7 +694,7 @@ class TestDefaults:
 
     def test_the_image_has_what_a_project_needs(self) -> None:
         for wanted in ("git", "curl", "procps", "node"):
-            assert wanted in _DOCKERFILE
+            assert wanted in SANDBOX_DOCKERFILE
 
 
 @pytest_asyncio.fixture
@@ -663,7 +710,7 @@ async def sandbox(tmp_path: Path) -> AsyncIterator[Callable[..., DockerBackend]]
     ) -> DockerBackend:
         backend = DockerBackend(
             Workspace.at(workspace, also=roots),
-            options=DockerOptions(**options),
+            options=DockerBackendOptions(**options),
             state_dir=state_dir,
         )
         made.append(backend)
@@ -800,7 +847,7 @@ class TestARealContainer:
         assert install.exit_code == 0, install.stderr
         result = await _sh(backend, "python -c 'import cowsay; print(cowsay.__name__)'")
         assert result.stdout.strip() == "cowsay"
-        recorded = backend._requirements_path("c1").read_text()
+        recorded = backend._installs.requirements_path("c1").read_text()
         assert "cowsay" in recorded
 
     @pytest.mark.asyncio
@@ -816,7 +863,7 @@ class TestARealContainer:
         backend = sandbox()
         install = await _sh(backend, "npm install -g --no-audit --no-fund cowsay", timeout=180)
         assert install.exit_code == 0, install.stderr
-        assert "cowsay@" in backend._npm_globals_path("c1").read_text()
+        assert "cowsay@" in backend._installs.npm_globals_path("c1").read_text()
         assert (await _sh(backend, "cowsay hi")).exit_code == 0
         # A new container for the same conversation brings them back.
         await backend.end_conversation("c1")
@@ -875,7 +922,7 @@ class TestTheContainersLife:
     ) -> None:
         backend = sandbox()
         await _sh(backend, "pip install --quiet cowsay")
-        name = backend._container_name("c1")
+        name = backend.container_name("c1")
         assert await _exists(name)
 
         await backend.end_conversation("c1")
@@ -892,11 +939,15 @@ class TestTheContainersLife:
         backend = sandbox()
         await _sh(backend, "true", conversation="a")
         await _sh(backend, "true", conversation="b")
-        names = [backend._container_name("a"), backend._container_name("b"), backend._proxy_name]
+        names = [
+            backend.container_name("a"),
+            backend.container_name("b"),
+            backend._scope.proxy_name,
+        ]
         assert all([await _exists(n) for n in names])
         await backend.close()
         assert not any([await _exists(n) for n in names])
-        assert not await _exists(backend._network_name, kind="network")
+        assert not await _exists(backend._scope.network_name, kind="network")
 
     @pytest.mark.asyncio
     async def test_a_rebuilt_backend_adopts_the_running_container(self, sandbox: Any) -> None:
@@ -914,7 +965,7 @@ class TestTheContainersLife:
     async def test_a_container_removed_underneath_is_recreated(self, sandbox: Any) -> None:
         backend = sandbox()
         await _sh(backend, "true")
-        subprocess.run(["docker", "rm", "-f", backend._container_name("c1")], capture_output=True)
+        subprocess.run(["docker", "rm", "-f", backend.container_name("c1")], capture_output=True)
         result = await _sh(backend, "echo again")
         assert result.stdout.strip() == "again"
 
@@ -938,7 +989,7 @@ class TestTheContainersLife:
         # while `docker run` is still starting it. Either way it ends up removed, which
         # is all this test is about.
         assert started.returncode == 0 or "No such container" in started.stderr.decode()
-        await sandbox()._reap_orphans()
+        await remove_orphans(DockerCli())
         assert not await _exists(stale)
 
     @pytest.mark.asyncio
@@ -951,7 +1002,7 @@ class TestTheContainersLife:
             await asyncio.sleep(0.01)
         await backend.end_conversation("c1")
         await warming
-        assert not await _exists(backend._container_name("c1"))
+        assert not await _exists(backend.container_name("c1"))
 
     @pytest.mark.asyncio
     async def test_closing_while_a_container_is_starting_leaves_nothing(self, sandbox: Any) -> None:
@@ -961,15 +1012,15 @@ class TestTheContainersLife:
             await asyncio.sleep(0.01)
         await backend.close()
         await warming
-        assert not await _exists(backend._container_name("c1"))
-        assert not await _exists(backend._proxy_name)
+        assert not await _exists(backend.container_name("c1"))
+        assert not await _exists(backend._scope.proxy_name)
 
     @pytest.mark.asyncio
     async def test_a_live_owners_containers_are_left_alone(self, sandbox: Any) -> None:
         backend = sandbox()
         await _sh(backend, "true")
-        await sandbox()._reap_orphans()
-        assert await _exists(backend._container_name("c1"))
+        await remove_orphans(DockerCli())
+        assert await _exists(backend.container_name("c1"))
 
 
 @needs_docker
@@ -1140,11 +1191,11 @@ class TestShellToolsInTheContainer:
         state: dict[str, Any] = {}
         pip = await run(command="pip install cowsay", conversation_id="c1", state=state)
         assert "Successfully installed" in str(pip.data)
-        assert "cowsay" in backend._requirements_path("c1").read_text()
+        assert "cowsay" in backend._installs.requirements_path("c1").read_text()
         npm = await run(
             command="npm install -g --no-audit --no-fund is-odd", conversation_id="c1", state=state
         )
-        assert "is-odd@" in backend._npm_globals_path("c1").read_text(), str(npm.data)
+        assert "is-odd@" in backend._installs.npm_globals_path("c1").read_text(), str(npm.data)
         # The same conversation in a new container: both are back.
         await backend.end_conversation("c1")
         again = await run(

@@ -263,7 +263,7 @@ class TestStartingWithAutoSandbox:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         from domyn.agents.cli.commands.run import command as run_command
-        from domyn.agents.tools.builtin import DockerOptions, Workspace
+        from domyn.agents.tools.builtin import DockerBackendOptions, Workspace
         from domyn.agents.tools.builtin.backends import AutoBackend
 
         started: list[bool] = []
@@ -277,7 +277,7 @@ class TestStartingWithAutoSandbox:
 
         monkeypatch.setattr(run_command, "Repl", _Repl)
         backend = AutoBackend(
-            Workspace.at(tmp_path), docker=DockerOptions(docker_binary="/no/such/docker")
+            Workspace.at(tmp_path), docker=DockerBackendOptions(docker_binary="/no/such/docker")
         )
 
         code, text = await self._start(backend, show_status=True)

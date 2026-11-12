@@ -6,7 +6,12 @@ from typing import Any
 
 import pytest
 
-from domyn.agents.tools.builtin import BuiltinBundleConfig, DockerOptions, LocalBackend, Workspace
+from domyn.agents.tools.builtin import (
+    BuiltinBundleConfig,
+    DockerBackendOptions,
+    LocalBackend,
+    Workspace,
+)
 from domyn.agents.tools.builtin import backends as backends_module
 from domyn.agents.tools.builtin.backends import (
     AutoBackend,
@@ -43,7 +48,7 @@ def _auto(tmp_path: Path, **docker: Any) -> AutoBackend:
     backend = build_backend(
         "auto",
         Workspace.at(tmp_path),
-        docker=DockerOptions(docker_binary="/no/such/docker", **docker),
+        docker=DockerBackendOptions(docker_binary="/no/such/docker", **docker),
     )
     assert isinstance(backend, AutoBackend)
     return backend
@@ -113,7 +118,9 @@ class TestWhatIsExplicit:
     @pytest.mark.asyncio
     async def test_docker_still_refuses_when_unusable(self, tmp_path: Path) -> None:
         backend = build_backend(
-            "docker", Workspace.at(tmp_path), docker=DockerOptions(docker_binary="/no/such/docker")
+            "docker",
+            Workspace.at(tmp_path),
+            docker=DockerBackendOptions(docker_binary="/no/such/docker"),
         )
         with pytest.raises(BackendUnavailableError):
             await backend.check()
@@ -167,7 +174,7 @@ class TestTheStateFolder:
         async def refuse(self: Any) -> None:
             raise BackendUnavailableError("no docker")
 
-        monkeypatch.setattr("domyn.agents.tools.builtin.docker_backend.DockerBackend.check", refuse)
+        monkeypatch.setattr("domyn.agents.tools.builtin.docker_sandbox.DockerBackend.check", refuse)
         chosen = await auto.decide()
         assert isinstance(chosen, LocalBackend) and chosen.state_dir == str(state)
 

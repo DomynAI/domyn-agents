@@ -1,7 +1,7 @@
 """Where a command actually runs.
 
 Two backends ship here: the local machine, and a Docker container
-(``docker_backend.py``). The interface is meant for others too, e.g. a remote
+(``docker_sandbox/``). The interface is meant for others too, e.g. a remote
 executor, implemented outside the package.
 
 Each member is there for what a remote backend needs and a local one does not:
@@ -502,9 +502,9 @@ def build_backend(
         )
     if name == "docker":
         # Imported here: it needs pydantic models and a module that imports this one.
-        from domyn.agents.tools.builtin.docker_backend import DockerBackend, DockerOptions
+        from domyn.agents.tools.builtin.docker_sandbox import DockerBackend, DockerBackendOptions
 
-        options = docker if isinstance(docker, DockerOptions) else DockerOptions()
+        options = docker if isinstance(docker, DockerBackendOptions) else DockerBackendOptions()
         return DockerBackend(
             workspace, options=options, allowed_env=allowed_env, state_dir=state_dir
         )
