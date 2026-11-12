@@ -7,6 +7,8 @@ from pathlib import Path
 
 from domyn.agents.tools.builtin.backends import BackendUnavailableError
 from domyn.agents.tools.builtin.docker_sandbox.cli import (
+    ACTION_SECONDS,
+    CONTAINER_START_SECONDS,
     DockerCli,
     TransientDockerError,
     container_is_gone,
@@ -70,10 +72,10 @@ class ContainerLauncher:
         self, name: str, fingerprint: str, image: str, mounts: list[str]
     ) -> DockerContainer:
         started = await self._cli(
-            *self._run_arguments(name, fingerprint, image, mounts), timeout=120
+            *self._run_arguments(name, fingerprint, image, mounts), timeout=CONTAINER_START_SECONDS
         )
         if not started.ok:
-            await self._cli("rm", "-f", name, timeout=30)
+            await self._cli("rm", "-f", name, timeout=ACTION_SECONDS)
             raise TransientDockerError(f"could not start the sandbox: {started.error()}")
         await self._probe(name, image)
         return DockerContainer(name, fingerprint)
@@ -84,11 +86,11 @@ class ContainerLauncher:
         probed = await self._cli(
             "exec", name, "sh", "-c",
             f"mkdir -p {SANDBOX_HOME}/.local {NPM_PREFIX} && command -v bash timeout ps >/dev/null",
-            timeout=30,
+            timeout=ACTION_SECONDS,
         )  # fmt: skip
         if probed.ok:
             return
-        await self._cli("rm", "-f", name, timeout=30)
+        await self._cli("rm", "-f", name, timeout=ACTION_SECONDS)
         docker_failed = (
             probed.code == _DOCKER_ERROR
             or container_is_gone(probed.stderr)

@@ -13,7 +13,12 @@ from pathlib import Path
 from typing import Self
 
 from domyn.agents.logger import get_logger
-from domyn.agents.tools.builtin.docker_sandbox.cli import DockerCli
+from domyn.agents.tools.builtin.docker_sandbox.cli import (
+    ACTION_SECONDS,
+    INSPECT_SECONDS,
+    SLOW_ACTION_SECONDS,
+    DockerCli,
+)
 
 SANDBOX_LABEL = "domyn.sandbox"
 OWNER_LABEL = "domyn.owner-pid"
@@ -73,12 +78,12 @@ async def remove_orphans(cli: DockerCli) -> None:
         get_logger().info(
             f"sandbox: removing {len(containers)} container(s) left by a dead process"
         )
-        await cli("rm", "-f", *containers, timeout=60)
+        await cli("rm", "-f", *containers, timeout=SLOW_ACTION_SECONDS)
     networks = await _owned_by_dead_processes(cli, ("network", "ls"), name_field="Name")
     if networks:
         get_logger().info(f"sandbox: removing {len(networks)} network(s) left by a dead process")
         for name in networks:
-            await cli("network", "rm", name, timeout=20)
+            await cli("network", "rm", name, timeout=ACTION_SECONDS)
 
 
 async def _owned_by_dead_processes(
@@ -86,7 +91,12 @@ async def _owned_by_dead_processes(
 ) -> list[str]:
     columns = f'{{{{.{name_field}}}}}\t{{{{.Label "{OWNER_LABEL}"}}}}'
     found = await cli(
-        *listing, "--filter", f"label={SANDBOX_LABEL}=1", "--format", columns, timeout=20
+        *listing,
+        "--filter",
+        f"label={SANDBOX_LABEL}=1",
+        "--format",
+        columns,
+        timeout=INSPECT_SECONDS,
     )
     if not found.ok:
         return []

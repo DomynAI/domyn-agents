@@ -49,7 +49,9 @@ from domyn.agents.skills import (
 from domyn.agents.skills.external_files import missing_external_files
 from domyn.agents.skills.integration import attach_skills
 from domyn.agents.skills.layout import listed_path_is_linked
-from domyn.agents.tools.builtin.backends import BackendUnavailableError
+from domyn.agents.tools.builtin.auto_backend import AutoBackend
+from domyn.agents.tools.builtin.backends import BackendUnavailableError, CommandBackend
+from domyn.agents.tools.builtin.sandbox import SandboxBackend
 
 # markup=False for the whole session: nothing here writes rich's square-bracket
 # tags, and everything here prints text from somewhere else — tool arguments, a
@@ -339,14 +341,18 @@ def _builtin_bundles(agent: Any) -> list[Any]:
     return found
 
 
-def _command_backends(agent: Any) -> list[Any]:
+def _command_backends(agent: Any) -> list[CommandBackend]:
     """The command backends of the agent and of every sub-agent that has its own."""
-    found: list[Any] = []
+    found: list[CommandBackend] = []
     for built in _builtin_bundles(agent):
         backend = getattr(built, "backend", None)
         if backend is not None and all(backend is not b for b in found):
             found.append(backend)
     return found
+
+
+def _sandbox_backends(agent: Any) -> list[SandboxBackend]:
+    return [b for b in _command_backends(agent) if isinstance(b, SandboxBackend)]
 
 
 async def _sandbox_is_usable(agent: Any, theme: Theme, config_file: Path | None) -> bool:
@@ -359,7 +365,7 @@ async def _sandbox_is_usable(agent: Any, theme: Theme, config_file: Path | None)
     again. ``sandbox: auto`` (the default) never raises from ``check``: it falls back
     to this machine, and the warning is printed by ``_say_fallback``.
     """
-    for backend in _command_backends(agent):
+    for backend in _sandbox_backends(agent):
         try:
             await backend.check()
         except BackendUnavailableError as exc:
@@ -397,7 +403,7 @@ def _commands_status(agent: Any) -> str | None:
     backends = _command_backends(agent)
     if not backends:
         return None
-    if any(getattr(b, "is_isolated", False) for b in backends):
+    if any(b.is_isolated for b in backends):
         text = "commands: docker sandbox"
         if any(getattr(built, "browser", None) is not None for built in _builtin_bundles(agent)):
             text += "  ·  browser: this machine"
@@ -409,9 +415,9 @@ def _say_fallback(agent: Any, theme: Theme, config_file: Path | None) -> None:
     """Say, as a warning, that commands run on this machine because Docker could not
     be used and the configuration did not insist on it (``sandbox: auto``)."""
     for backend in _command_backends(agent):
-        problem = getattr(backend, "fallback", None)
-        if problem is None:
+        if not isinstance(backend, AutoBackend) or backend.fallback is None:
             continue
+        problem = backend.fallback
         style = theme.style("warning")
         console.print(
             f"\n  {problem.problem} Commands run on this machine, with no sandbox.",

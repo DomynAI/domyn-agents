@@ -92,6 +92,7 @@ from domyn.agents.planner_strategy.context_management.budget import (
 from domyn.agents.runner import PushResult, Runner
 from domyn.agents.skills import LocalDirSkillSource, SkillNotFoundError, SkillsRuntime
 from domyn.agents.skills.integration import attach_skills
+from domyn.agents.tools.builtin.sandbox import SandboxBackend
 
 if TYPE_CHECKING:
     from domyn.agents.conversation_manager import ConversationInfo
@@ -99,6 +100,12 @@ if TYPE_CHECKING:
 _T = TypeVar("_T")
 
 APPLICATION_NAME = "domyn-cli"
+
+_SANDBOX_WARM_UP_WAIT_SECONDS = 60
+"""How long leaving a session waits for a sandbox still starting in the background. A
+start can take longer than this on a machine that has to pull an image first, but a
+person who exits should not wait on it: what is left is removed by the backend's own
+``close``, which takes each conversation's lock."""
 USER_ID = "local-user"
 
 
@@ -434,7 +441,7 @@ class Repl:
             # A container being started in the background finishes first: cancelling
             # it would not stop the `docker run` already sent, and it would then
             # outlive the session.
-            await asyncio.wait(set(self._background), timeout=60)
+            await asyncio.wait(set(self._background), timeout=_SANDBOX_WARM_UP_WAIT_SECONDS)
         await self._agent.close()
 
     def _say_where_to_find_us(self) -> None:
@@ -471,7 +478,8 @@ class Repl:
             return
         if not running:
             return
-        if getattr(self._backend(), "destroys_on_close", False):
+        sandbox = self._sandbox()
+        if sandbox is not None and sandbox.destroys_on_close:
             # In a sandbox they live in the container, which goes with the session.
             self._console.print(
                 f"  {running}, and will be stopped: the sandbox they run in ends with this session.",
@@ -1784,18 +1792,14 @@ class Repl:
             if browser is not None:
                 browser.on_notice = self._say
             backend = getattr(built, "backend", None)
-            if backend is not None and hasattr(backend, "on_notice"):
+            if isinstance(backend, SandboxBackend):
                 backend.on_notice = self._say
 
-    def _sandbox(self) -> Any:
+    def _sandbox(self) -> SandboxBackend | None:
         """The command backend, when it is or may become a sandbox (a container, not
         this machine): an ``auto`` one decides when it is first prepared."""
         backend = self._backend()
-        if backend is None:
-            return None
-        if getattr(backend, "is_isolated", False) or getattr(backend, "may_isolate", False):
-            return backend
-        return None
+        return backend if isinstance(backend, SandboxBackend) else None
 
     async def _prepare_sandbox(self) -> None:
         """Get the sandbox ready before the first prompt, saying what it is doing.
@@ -1830,7 +1834,7 @@ class Repl:
 
     async def _end_sandbox_conversation(self, conversation_id: str) -> None:
         """A conversation is over: stop and destroy what it ran in."""
-        backend = self._backend()
+        backend = self._sandbox()
         if backend is None:
             return
         try:

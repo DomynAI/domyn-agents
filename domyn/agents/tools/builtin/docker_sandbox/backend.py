@@ -37,12 +37,15 @@ from pathlib import Path
 from typing import NamedTuple
 
 from domyn.agents.logger import get_logger
-from domyn.agents.tools.builtin.backends import (
-    BackendUnavailableError,
-    CommandBackend,
-    CommandResult,
+from domyn.agents.tools.builtin.backends import BackendUnavailableError, CommandResult
+from domyn.agents.tools.builtin.docker_sandbox.cli import (
+    ACTION_SECONDS,
+    INSPECT_SECONDS,
+    SLOW_ACTION_SECONDS,
+    DockerCli,
+    container_is_gone,
+    retry_once,
 )
-from domyn.agents.tools.builtin.docker_sandbox.cli import DockerCli, container_is_gone
 from domyn.agents.tools.builtin.docker_sandbox.containers import ContainerLauncher, DockerContainer
 from domyn.agents.tools.builtin.docker_sandbox.images import ensure_image
 from domyn.agents.tools.builtin.docker_sandbox.installs import InstallLog
@@ -60,6 +63,7 @@ from domyn.agents.tools.builtin.docker_sandbox.scope import (
     remove_orphans,
 )
 from domyn.agents.tools.builtin.docker_sandbox.state import StateFolder
+from domyn.agents.tools.builtin.sandbox import SandboxBackend
 from domyn.agents.tools.builtin.session import safe_id
 from domyn.agents.tools.builtin.workspace import Workspace
 
@@ -74,7 +78,7 @@ class _ExistingContainer(NamedTuple):
     fingerprint: str
 
 
-class DockerBackend(CommandBackend):
+class DockerBackend(SandboxBackend):
     """Commands run in a container per conversation. See the module docstring."""
 
     name = "docker"
@@ -183,7 +187,9 @@ class DockerBackend(CommandBackend):
             self._containers.pop(conversation, None)
             self._deferred_for.pop(conversation, None)
             with contextlib.suppress(Exception):
-                await self._cli("rm", "-f", self.container_name(conversation), timeout=30)
+                await self._cli(
+                    "rm", "-f", self.container_name(conversation), timeout=ACTION_SECONDS
+                )
 
     async def close(self) -> None:
         """Remove every container, the proxy and the network of this process.
@@ -231,9 +237,12 @@ class DockerBackend(CommandBackend):
             if self._prepared_image is not None:
                 return
             await self.check()
-            image = await ensure_image(self._cli, self._options.image, self._say)
+            image = await retry_once(self._ensure_image, describe="preparing the sandbox image")
             await remove_orphans(self._cli)
             self._prepared_image = image
+
+    async def _ensure_image(self) -> str:
+        return await ensure_image(self._cli, self._options.image, self._say)
 
     def _blocked_hint(self) -> str:
         if self._options.allowed_network == "public":
@@ -308,7 +317,7 @@ class DockerBackend(CommandBackend):
         inspected = await self._cli(
             "inspect", "-f",
             f'{{{{.State.Running}}}} {{{{index .Config.Labels "{FINGERPRINT_LABEL}"}}}}',
-            name, timeout=15,
+            name, timeout=INSPECT_SECONDS,
         )  # fmt: skip
         if not inspected.ok:
             return None
@@ -332,7 +341,7 @@ class DockerBackend(CommandBackend):
             return self._remember(conversation, DockerContainer(name, existing.fingerprint))
         if existing.running:
             self._say("Recreating the sandbox: skills or settings changed…")
-        await self._cli("rm", "-f", name, timeout=30)
+        await self._cli("rm", "-f", name, timeout=ACTION_SECONDS)
         return None
 
     def _remember(self, conversation: str, container: DockerContainer) -> DockerContainer:
@@ -372,14 +381,23 @@ class DockerBackend(CommandBackend):
             '&& kill -0 "$(cat "$d/run.pid")" 2>/dev/null && exit 3; done; exit 0'
         )
         checked = await self._cli(
-            "exec", "-w", str(self._workspace.root), container, "bash", "-c", script, timeout=20
+            "exec",
+            "-w",
+            str(self._workspace.root),
+            container,
+            "bash",
+            "-c",
+            script,
+            timeout=INSPECT_SECONDS,
         )
         return checked.code == _BACKGROUND_COMMAND_RUNNING
 
     async def _remove_scope(self) -> None:
-        listed = await self._cli("ps", "-aq", *self._scope.filter_arguments, timeout=30)
+        listed = await self._cli(
+            "ps", "-aq", *self._scope.filter_arguments, timeout=INSPECT_SECONDS
+        )
         if listed.ok and listed.stdout.split():
-            await self._cli("rm", "-f", *listed.stdout.split(), timeout=60)
+            await self._cli("rm", "-f", *listed.stdout.split(), timeout=SLOW_ACTION_SECONDS)
         if self._network is not None:
             await self._network.remove()
 

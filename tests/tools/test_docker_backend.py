@@ -10,10 +10,12 @@ tree, the network refusing a host) only exists in the real thing.
 
 # No `from __future__ import annotations`: this imports the tool modules, which
 # rely on real annotations at construction time.
+import ast
 import asyncio
 import os
 import shutil
 import subprocess
+import sys
 import time
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
@@ -22,7 +24,6 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-from domyn.agents.scripts import egress_proxy
 from domyn.agents.tools.builtin import (
     BackendUnavailableError,
     BuiltinBundleConfig,
@@ -30,11 +31,12 @@ from domyn.agents.tools.builtin import (
     CommandResult,
     DockerBackendOptions,
     LocalBackend,
+    SandboxBackend,
     Workspace,
     build_backend,
     shell,
 )
-from domyn.agents.tools.builtin.docker_sandbox import REGISTRY_HOSTS, DockerBackend
+from domyn.agents.tools.builtin.docker_sandbox import REGISTRY_HOSTS, DockerBackend, egress_proxy
 from domyn.agents.tools.builtin.docker_sandbox.cli import DockerCli, DockerOutput
 from domyn.agents.tools.builtin.docker_sandbox.images import SANDBOX_DOCKERFILE
 from domyn.agents.tools.builtin.docker_sandbox.installs import NPM_GLOBAL_COMMAND, PIP_COMMAND
@@ -134,16 +136,11 @@ class TestWiring:
         assert built.browser is not None
         assert isinstance(built.browser.backend, LocalBackend)
 
-    def test_other_backends_have_the_new_hooks_as_no_ops(self, tmp_path: Path) -> None:
-        local = LocalBackend(Workspace.at(tmp_path))
-        assert local.destroys_on_close is False
-
-        async def go() -> None:
-            await local.prepare()
-            await local.warm_up("c")
-            await local.end_conversation("c")
-
-        asyncio.run(go())
+    def test_only_sandboxes_have_a_lifecycle_to_manage(self, tmp_path: Path) -> None:
+        workspace = Workspace.at(tmp_path)
+        assert not isinstance(LocalBackend(workspace), SandboxBackend)
+        for name in ("docker", "auto"):
+            assert isinstance(build_backend(name, workspace), SandboxBackend)
 
     def test_cli_config_round_trips_the_block(self) -> None:
         from domyn.agents.interfaces.cli.config import AgentConfig, _docker_options
@@ -322,6 +319,24 @@ class TestInstallDetection:
     @pytest.mark.parametrize("command", ["ls", "echo pipe", "cat pip.txt", "grep pipeline f"])
     def test_not_installs(self, command: str) -> None:
         assert not PIP_COMMAND.search(command)
+
+
+class TestEgressProxyRunsInABareImage:
+    def test_it_imports_the_standard_library_only(self) -> None:
+        """It runs as ``python -c <source>`` in ``python:3.12-slim``, where domyn is not
+        installed: one import of anything else and the proxy fails to start."""
+        tree = ast.parse(Path(egress_proxy.__file__).read_text(encoding="utf-8"))
+        imported = {
+            alias.name.split(".")[0]
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        } | {
+            (node.module or "").split(".")[0]
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+        }
+        assert imported <= set(sys.stdlib_module_names), imported - set(sys.stdlib_module_names)
 
 
 class TestEgressProxyDecisions:
@@ -569,6 +584,42 @@ class TestABusyDaemon:
         await network.ensure()
 
         assert cli.count(_starts_the_proxy) == 2
+
+    @pytest.mark.asyncio
+    async def test_an_image_that_fails_to_pull_once_is_pulled_again(
+        self, tmp_path: Path, no_waiting: None
+    ) -> None:
+        workspace = tmp_path / "project"
+        workspace.mkdir()
+        cli = _ScriptedCli()
+        cli.when(lambda a: a[:2] == ("image", "inspect"), _failed("No such image", code=1))
+        cli.when(
+            lambda a: a[:1] == ("pull",),
+            _failed("the server supports a different API version", code=1),
+            _ok(),
+        )
+        backend = DockerBackend(Workspace.at(workspace), cli=cli)
+
+        await backend.prepare()
+
+        assert cli.count(lambda a: a[:1] == ("pull",)) == 2
+        assert cli.count(lambda a: a[:1] == ("build",)) == 1
+
+    @pytest.mark.asyncio
+    async def test_an_image_that_cannot_be_pulled_is_reported_after_one_more_try(
+        self, tmp_path: Path, no_waiting: None
+    ) -> None:
+        workspace = tmp_path / "project"
+        workspace.mkdir()
+        cli = _ScriptedCli()
+        cli.when(lambda a: a[:2] == ("image", "inspect"), _failed("No such image", code=1))
+        cli.when(lambda a: a[:1] == ("pull",), _failed("no route to host", code=1))
+        backend = DockerBackend(Workspace.at(workspace), cli=cli)
+
+        with pytest.raises(BackendUnavailableError, match=r"could not pull python:3\.12-slim"):
+            await backend.prepare()
+
+        assert cli.count(lambda a: a[:1] == ("pull",)) == 2
 
     @pytest.mark.asyncio
     async def test_a_container_lost_between_commands_says_so(

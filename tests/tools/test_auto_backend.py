@@ -12,17 +12,13 @@ from domyn.agents.tools.builtin import (
     LocalBackend,
     Workspace,
 )
-from domyn.agents.tools.builtin import backends as backends_module
-from domyn.agents.tools.builtin.backends import (
-    AutoBackend,
-    BackendUnavailableError,
-    CommandBackend,
-    CommandResult,
-    build_backend,
-)
+from domyn.agents.tools.builtin.auto_backend import AutoBackend
+from domyn.agents.tools.builtin.backend_factory import build_backend
+from domyn.agents.tools.builtin.backends import BackendUnavailableError, CommandResult
+from domyn.agents.tools.builtin.sandbox import SandboxBackend
 
 
-class _Fake(CommandBackend):
+class _Fake(SandboxBackend):
     name = "docker"
     is_isolated = True
     destroys_on_close = True
@@ -32,6 +28,12 @@ class _Fake(CommandBackend):
 
     async def check(self) -> None:
         self.calls.append("check")
+
+    async def prepare(self) -> None:
+        self.calls.append("prepare")
+
+    async def warm_up(self, conversation_id: str) -> None:
+        self.calls.append(f"warm {conversation_id}")
 
     async def run(self, command: str, **kwargs: Any) -> CommandResult:
         self.calls.append(f"run {command}")
@@ -89,12 +91,9 @@ class TestFallback:
         assert backend.fallback is not None
 
     @pytest.mark.asyncio
-    async def test_with_docker_it_is_the_sandbox(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_with_docker_it_is_the_sandbox(self, tmp_path: Path) -> None:
         fake = _Fake()
-        monkeypatch.setattr(backends_module, "build_backend", lambda *a, **k: fake)
-        backend = AutoBackend(Workspace.at(tmp_path))
+        backend = AutoBackend(Workspace.at(tmp_path), sandbox=fake)
 
         await backend.check()
         assert backend.fallback is None
@@ -107,7 +106,8 @@ class TestFallback:
     @pytest.mark.asyncio
     async def test_before_deciding_it_is_not_claimed_to_isolate(self, tmp_path: Path) -> None:
         backend = _auto(tmp_path)
-        assert backend.is_isolated is False and backend.may_isolate is True
+        assert backend.is_isolated is False
+        assert isinstance(backend, SandboxBackend)
 
     @pytest.mark.asyncio
     async def test_closing_an_undecided_backend_is_fine(self, tmp_path: Path) -> None:

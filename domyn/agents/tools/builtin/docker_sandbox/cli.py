@@ -13,6 +13,23 @@ from typing import NamedTuple, TypeVar
 from domyn.agents.logger import get_logger
 from domyn.agents.tools.builtin.backends import BackendUnavailableError, CommandResult
 
+# How long each kind of docker call may take before it is given up on. A call that
+# times out is reported as a failure like any other, and tried again where that is safe.
+DAEMON_CHECK_SECONDS = 10
+"""``docker info``: is the daemon there. Short, because a front-end asks at start-up."""
+INSPECT_SECONDS = 20
+"""Asking the daemon about something: inspect, ps, logs, network ls."""
+ACTION_SECONDS = 30
+"""Removing, creating or connecting something, and the probe in a new container."""
+SLOW_ACTION_SECONDS = 60
+"""Starting the proxy, removing several containers, listing what is installed."""
+CONTAINER_START_SECONDS = 120
+"""``docker run`` of a command container: it creates the container and starts it."""
+PULL_SECONDS = 1800
+"""Pulling an image, which can be a large download."""
+BUILD_SECONDS = 900
+"""Building the sandbox image."""
+
 # How much longer than a command's own limit the host waits. The limit is enforced
 # inside the container by `timeout`; this only bounds a `docker exec` that has
 # stopped answering.
@@ -99,7 +116,7 @@ class DockerCli:
 
     async def check_daemon(self) -> None:
         """Raise ``BackendUnavailableError`` unless the daemon answers."""
-        info = await self("info", "--format", "{{.ServerVersion}}", timeout=10)
+        info = await self("info", "--format", "{{.ServerVersion}}", timeout=DAEMON_CHECK_SECONDS)
         if info.ok:
             return
         # Short on purpose: the client's own line carries the socket path and reads

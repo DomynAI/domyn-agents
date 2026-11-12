@@ -3,8 +3,13 @@
 import time
 from collections.abc import Callable
 
-from domyn.agents.tools.builtin.backends import BackendUnavailableError
-from domyn.agents.tools.builtin.docker_sandbox.cli import DockerCli
+from domyn.agents.tools.builtin.docker_sandbox.cli import (
+    BUILD_SECONDS,
+    INSPECT_SECONDS,
+    PULL_SECONDS,
+    DockerCli,
+    TransientDockerError,
+)
 
 BASE_IMAGE = "python:3.12-slim"
 """What the default image is made from, and what the network proxy runs."""
@@ -31,19 +36,18 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \\
  && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 """
 
-_PULL_SECONDS = 1800
-_BUILD_SECONDS = 900
-
 Notify = Callable[[str], None]
 
 
 async def ensure_image(cli: DockerCli, wanted: str, notify: Notify) -> str:
     """The image to run commands in, pulled or built first if this machine lacks it.
 
-    ``wanted`` is ``auto`` for the image built here, or the name of one to pull.
+    ``wanted`` is ``auto`` for the image built here, or the name of one to pull. A
+    pull or a build that fails raises ``TransientDockerError``: a daemon that has just
+    woken answers with errors a moment later it does not.
     """
     image = DERIVED_IMAGE if wanted == "auto" else wanted
-    if (await cli("image", "inspect", image, timeout=20)).ok:
+    if (await cli("image", "inspect", image, timeout=INSPECT_SECONDS)).ok:
         return image
     if wanted == "auto":
         await _build_default(cli, notify)
@@ -55,26 +59,24 @@ async def ensure_image(cli: DockerCli, wanted: str, notify: Notify) -> str:
 async def _pull_named(cli: DockerCli, image: str, notify: Notify) -> None:
     notify(f"Pulling sandbox image {image} (first run only)…")
     started = time.time()
-    pulled = await cli("pull", image, timeout=_PULL_SECONDS)
+    pulled = await cli("pull", image, timeout=PULL_SECONDS)
     if not pulled.ok:
-        raise BackendUnavailableError(
-            f"could not pull the sandbox image {image}: {pulled.error(200)}"
-        )
+        raise TransientDockerError(f"could not pull the sandbox image {image}: {pulled.error(200)}")
     notify(f"Pulled {image} in {time.time() - started:.0f}s.")
 
 
 async def _build_default(cli: DockerCli, notify: Notify) -> None:
     notify("Preparing the sandbox image (first run only; Python, Node, git and curl)…")
     started = time.time()
-    pulled = await cli("pull", BASE_IMAGE, timeout=_PULL_SECONDS)
+    pulled = await cli("pull", BASE_IMAGE, timeout=PULL_SECONDS)
     if not pulled.ok:
-        raise BackendUnavailableError(
+        raise TransientDockerError(
             f"could not pull {BASE_IMAGE}: {pulled.error(200)}. Check the network, or set "
             "`docker: image:` to an image you already have."
         )
     built = await cli(
-        "build", "-t", DERIVED_IMAGE, "-", stdin=SANDBOX_DOCKERFILE, timeout=_BUILD_SECONDS
+        "build", "-t", DERIVED_IMAGE, "-", stdin=SANDBOX_DOCKERFILE, timeout=BUILD_SECONDS
     )
     if not built.ok:
-        raise BackendUnavailableError(f"could not build the sandbox image: {built.error()}")
+        raise TransientDockerError(f"could not build the sandbox image: {built.error()}")
     notify(f"Sandbox image ready ({time.time() - started:.0f}s).")

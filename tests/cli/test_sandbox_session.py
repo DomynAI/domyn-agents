@@ -21,11 +21,12 @@ from domyn.agents.tools.builtin import (
     BuiltinTools,
     CommandBackend,
     CommandResult,
+    SandboxBackend,
 )
 from tests.cli.test_repl_session import _agent, _repl
 
 
-class FakeSandbox(CommandBackend):
+class FakeSandbox(SandboxBackend):
     name = "fake-sandbox"
     is_isolated = True
     destroys_on_close = True
@@ -45,6 +46,9 @@ class FakeSandbox(CommandBackend):
             raise RuntimeError("Docker is not running")
         if self.on_notice:
             self.on_notice("Preparing the sandbox image (first run only)…")
+
+    async def check(self) -> None:
+        self.events.append(("check", ""))
 
     async def warm_up(self, conversation_id: str) -> None:
         self.events.append(("warm_up", conversation_id))
@@ -264,7 +268,7 @@ class TestStartingWithAutoSandbox:
     ) -> None:
         from domyn.agents.cli.commands.run import command as run_command
         from domyn.agents.tools.builtin import DockerBackendOptions, Workspace
-        from domyn.agents.tools.builtin.backends import AutoBackend
+        from domyn.agents.tools.builtin.auto_backend import AutoBackend
 
         started: list[bool] = []
 

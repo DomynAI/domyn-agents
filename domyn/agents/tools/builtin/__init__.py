@@ -40,17 +40,18 @@ from pydantic import BaseModel
 from pydantic import Field as PydanticField
 
 from domyn.agents.logger import get_logger
+from domyn.agents.tools.builtin.backend_factory import build_backend
 from domyn.agents.tools.builtin.backends import (
     BackendUnavailableError,
     CommandBackend,
     CommandResult,
     LocalBackend,
-    build_backend,
 )
 from domyn.agents.tools.builtin.browser import browser_tools
 from domyn.agents.tools.builtin.browser_sessions import BrowserOptions, BrowserSessions
 from domyn.agents.tools.builtin.docker_sandbox import DockerBackendOptions
 from domyn.agents.tools.builtin.files import file_tools
+from domyn.agents.tools.builtin.sandbox import SandboxBackend
 from domyn.agents.tools.builtin.shell import run_command_tool, shell_tools
 from domyn.agents.tools.builtin.workspace import Workspace, WorkspaceError, is_ignored
 
@@ -178,7 +179,7 @@ def bundle(
             # Chrome: there the browser stays on this machine, unsandboxed.
             resolved = resolved or LocalBackend(space, allowed_env=allowed_env)
             browser_backend = resolved
-            if resolved.is_isolated or getattr(resolved, "may_isolate", False):
+            if isinstance(resolved, SandboxBackend):
                 if resolved.is_isolated:
                     get_logger().warning(
                         "the browser bundle runs on this machine, outside the sandbox"
@@ -274,6 +275,7 @@ __all__ = [
     "CommandResult",
     "DockerBackendOptions",
     "LocalBackend",
+    "SandboxBackend",
     "Workspace",
     "WorkspaceError",
     "browser_tools",

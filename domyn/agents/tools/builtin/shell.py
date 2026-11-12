@@ -48,6 +48,7 @@ from domyn.agents.core import ApprovalType
 from domyn.agents.tools.base import UpdateToolResult
 from domyn.agents.tools.builtin import processes
 from domyn.agents.tools.builtin.backends import CommandBackend, CommandResult, LocalBackend
+from domyn.agents.tools.builtin.sandbox import SandboxBackend
 from domyn.agents.tools.builtin.workspace import Workspace
 
 # Long enough for an install or a test suite, short enough that a hung command
@@ -282,7 +283,7 @@ def build_run_command(
             )
             if _detaches(command):
                 text += DETACHED_NOTE
-            if observed.exit_code not in (0, None):
+            if observed.exit_code not in (0, None) and isinstance(backend, SandboxBackend):
                 explained = await backend.explain_failure(began)
                 if explained:
                     text += f"\n{explained}"

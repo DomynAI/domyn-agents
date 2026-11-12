@@ -17,7 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from domyn.agents.logger import get_logger
-from domyn.agents.tools.builtin.docker_sandbox.cli import DockerCli
+from domyn.agents.tools.builtin.docker_sandbox.cli import SLOW_ACTION_SECONDS, DockerCli
 from domyn.agents.tools.builtin.docker_sandbox.containers import DockerContainer
 from domyn.agents.tools.builtin.docker_sandbox.state import StateFolder
 
@@ -106,7 +106,7 @@ class InstallLog:
         frozen = await self._cli(
             "exec", container.name, "bash", "-c",
             'export PATH="$HOME/.local/bin:$PATH"; pip freeze --user 2>/dev/null',
-            timeout=60,
+            timeout=SLOW_ACTION_SECONDS,
         )  # fmt: skip
         if frozen.ok:
             _write(self.requirements_path(conversation), frozen.stdout, "Python packages")
@@ -115,7 +115,7 @@ class InstallLog:
         listed = await self._cli(
             "exec", container.name, "bash", "-c",
             'export PATH="$HOME/.npm-global/bin:$PATH"; npm ls -g --depth=0 --json 2>/dev/null',
-            timeout=60,
+            timeout=SLOW_ACTION_SECONDS,
         )  # fmt: skip
         packages = _npm_packages(listed.stdout)
         if packages is not None:
