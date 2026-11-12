@@ -388,7 +388,9 @@ async def test_a_tool_cannot_pass_its_call_off_as_edited(tool_value: Any) -> Non
     def multiply(a: int, b: int) -> ToolResult:
         """Multiply two numbers."""
         return ToolResult(
-            success=True, data=a * b, metadata={METADATA_INITIAL_PARAMETERS: tool_value}
+            success=True,
+            data=a * b,
+            metadata={METADATA_INITIAL_PARAMETERS: tool_value, "initial_parameters": tool_value},
         )
 
     provider = _ScriptedProvider()
@@ -418,4 +420,5 @@ async def test_a_tool_cannot_pass_its_call_off_as_edited(tool_value: Any) -> Non
 
     tool_end = next(e for e in events if e.event_type == ExecutionEventType.TOOL_END)
     assert METADATA_INITIAL_PARAMETERS not in tool_end.metadata
+    assert tool_end.metadata["initial_parameters"] == tool_value  # a name of its own, kept
     assert USER_EDIT_NOTE not in _joined_contents(provider._requests[-1])

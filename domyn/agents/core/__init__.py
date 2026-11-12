@@ -300,10 +300,10 @@ METADATA_VISIBILITY_ONLY = "visibility_only"
 # no approval at the same time (see ``Runner._run_tool_calls``). A TOOL_START
 # without it is run as soon as it arrives, as every call used to be.
 METADATA_TOOL_BATCH = "tool_batch"
-# Set on the TOOL_END or TOOL_ERROR of a call whose arguments the user changed before
-# approving it (``PARAMS_UPDATE``): its initial arguments, the model's. The action holds
-# the final ones, which the tool ran with.
-METADATA_INITIAL_PARAMETERS = "initial_parameters"
+# Set by the runner on the result of a call the user edited (``PARAMS_UPDATE``): its initial
+# arguments, the model's; the action holds the final ones. Prefixed, so no tool's metadata
+# uses it by chance, and dropped from a tool's own anyway.
+METADATA_INITIAL_PARAMETERS = "domyn_initial_parameters"
 # Set on an EXTERNAL_PART event to say whether its content should be rendered
 # into the messages sent to the model. Defaults to False when absent: an
 # externally-injected part is for display/history only unless explicitly
