@@ -794,7 +794,12 @@ class BrowserSessions:
         for line in _SNAPSHOT_LINE.finditer(text):
             key, label = line["ref"], line["label"]
             if label and key in refs and not refs[key][1]:
-                refs[key] = (refs[key][0], str(json.loads(label)))
+                try:
+                    refs[key] = (refs[key][0], str(json.loads(label)))
+                except json.JSONDecodeError:
+                    get_logger().warning(
+                        "Failed to decode JSON label: %s, while visiting %s", label, url
+                    )
         return url, text, refs
 
     async def take_snapshot(self, conversation_id: str, full: bool, title: str = "") -> str:
