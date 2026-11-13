@@ -4,7 +4,7 @@ name: Docker backend image
 # built here, pushed to the repository `IMAGE_REPOSITORY` names (images.py) and only pulled by the CLI, so
 # nobody builds it on their machine.
 #
-# - A version tag, called by release.yml: tagged with the version (`1.7.0`, `1.7.1a2`),
+# - A version tag, called by release.yml: tagged with the version (`0.1.1`, `0.1.2a1`),
 #   which is what a `domyn` of that version pulls. It holds that very release's wheel,
 #   because the file and browser tools run in it. A stable release also moves `latest`
 #   (`LATEST_TAG`), what a dev or editable install (a version no image has) pulls; the
@@ -67,7 +67,7 @@ jobs:
       - name: Build the wheel
         run: uv build --wheel
 
-      # `1.7.0` for the tag v1.7.0 (a stable release is also `latest`); the input of a
+      # `0.1.1` for the tag v0.1.1 (a stable release is also `latest`); the input of a
       # manual run; `pr` for a pull request, which is not pushed.
       - name: Tags
         id: tag

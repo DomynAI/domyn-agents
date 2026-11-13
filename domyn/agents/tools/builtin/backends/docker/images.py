@@ -20,7 +20,7 @@ needs no login. Defined here only: CI reads it from this file (``scripts/backend
 LATEST_TAG = "latest"
 """The newest stable release, which CI moves with each one. What a build with no
 published image of its own pulls: an editable install or a commit between releases has a
-version like ``1.7.1.dev3+g1a2b3c4``, which no image has, and the release is what pip and
+version like ``0.1.1a6.dev12+ged86876``, which no image has, and the release is what pip and
 the curl installer give. Defined here only, like ``IMAGE_REPOSITORY``."""
 
 IMAGE_TAG_ENVIRONMENT_VARIABLE = "DOMYN_BACKEND_IMAGE_TAG"
@@ -33,7 +33,7 @@ def default_image(version: str | None = None) -> str:
     """The image that matches this release of ``domyn``.
 
     The image carries the same ``domyn`` as the CLI that starts it, because the file
-    and browser tools run in it. A release or an alpha (``1.7.0``, ``1.7.1a2``) has an
+    and browser tools run in it. A release or an alpha (``0.1.1``, ``0.1.2a1``) has an
     image tagged with its version; anything else pulls the rolling tag.
     """
     if version is None:

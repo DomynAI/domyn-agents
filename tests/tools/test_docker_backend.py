@@ -870,10 +870,10 @@ class TestTheImage:
     """Pulled, never built: CI publishes the image of each release."""
 
     def test_a_release_pulls_the_image_of_its_version(self) -> None:
-        assert default_image("1.7.0") == f"{IMAGE_REPOSITORY}:1.7.0"
-        assert default_image("1.7.1a2") == f"{IMAGE_REPOSITORY}:1.7.1a2"
+        assert default_image("0.1.1") == f"{IMAGE_REPOSITORY}:0.1.1"
+        assert default_image("0.1.2a1") == f"{IMAGE_REPOSITORY}:0.1.2a1"
 
-    @pytest.mark.parametrize("version", ["1.7.1.dev3+g1a2b3c4", "0.1.dev1", "", "1.7.0+local"])
+    @pytest.mark.parametrize("version", ["0.1.1a6.dev12+ged86876", "0.1.dev1", "", "0.1.1+local"])
     def test_a_build_without_an_image_of_its_own_pulls_the_latest_release_image(
         self, version: str
     ) -> None:
@@ -884,9 +884,9 @@ class TestTheImage:
         cli = _ScriptedCli()
         cli.when(lambda a: a[:2] == ("image", "inspect"), _ok())
 
-        image = await ensure_image(cli, f"{IMAGE_REPOSITORY}:1.7.0", lambda _: None)
+        image = await ensure_image(cli, f"{IMAGE_REPOSITORY}:0.1.1", lambda _: None)
 
-        assert image.endswith(":1.7.0") and cli.count(lambda a: a[:1] == ("pull",)) == 0
+        assert image.endswith(":0.1.1") and cli.count(lambda a: a[:1] == ("pull",)) == 0
 
     @pytest.mark.asyncio
     async def test_the_rolling_image_is_pulled_each_time_and_a_copy_is_kept_when_that_fails(
