@@ -27,6 +27,8 @@ _FRAME_CHARS = 400
 RECALL_TOOL_CHARS = 20_000
 # Turns whose recall is remembered, so the next request of a turn reuses it.
 _CACHED_TURNS = 64
+# How long closing waits for the memory updates still running before dropping them.
+UPDATE_DRAIN_SECONDS = 30.0
 
 
 def _known_section(known: Sequence[str], instruction: str) -> str:
@@ -70,8 +72,8 @@ class MemoryAsset(StrEnum):
     FORGET_TOOL = "forget"
     """``AGENTIC``: the tool that removes a fact by its id."""
     UPDATE_HOOK = "update_memory"
-    """``AUTOMATIC``: the post-agent hook, whose ``HOOK_END`` event carries the fact
-    it stored (none when it stored nothing)."""
+    """``AUTOMATIC``: the post-agent hook. It starts :meth:`BaseMemoryManager.update_memory`
+    in the background and returns at once, so its ``HOOK_END`` carries nothing."""
 
 
 class MemoryExecutionMode(StrEnum):
@@ -184,6 +186,9 @@ class BaseMemoryManager(BaseModel, ABC):
     _turns: OrderedDict[tuple[str | None, str | None, str], str] = PrivateAttr(
         default_factory=OrderedDict
     )
+    # The updates started by the AUTOMATIC hook and not finished yet: held here so
+    # the event loop does not collect them mid-flight, and so closing can wait.
+    _updates: set[asyncio.Task[str | None]] = PrivateAttr(default_factory=set)
 
     # auto-register sub types
     def __init_subclass__(cls, **kwargs):
@@ -396,12 +401,41 @@ class BaseMemoryManager(BaseModel, ABC):
             return []
         return [m.memory for m in page.items]
 
+    async def start_memory_update(self, agent: BaseAgent, context: InteractionContext) -> None:
+        """Start :meth:`update_memory` in the background and return at once.
+
+        The ``AUTOMATIC`` mode's post-agent hook: deciding and writing a memory takes
+        model calls, and the turn has nothing to wait for. ``context`` is the copy
+        the runner hands its listener hooks, so the task owns it. What it stores is
+        only logged; :meth:`wait_for_updates` waits for what is still running.
+        """
+        task = asyncio.create_task(self.update_memory(agent, context))
+        self._updates.add(task)
+        task.add_done_callback(self._updates.discard)
+
+    async def wait_for_updates(self, timeout: float | None = UPDATE_DRAIN_SECONDS) -> None:
+        """Wait for the background memory updates still running, at most ``timeout``.
+
+        Those still running then are cancelled, with a warning: a process exiting
+        would cancel them anyway, and an endpoint that hangs must not hang the exit.
+        """
+        pending = set(self._updates)
+        if not pending:
+            return
+        _, still_running = await asyncio.wait(pending, timeout=timeout)
+        if still_running:
+            get_logger().warning(
+                f"memory: {len(still_running)} update(s) still running after {timeout}s, dropped"
+            )
+            for task in still_running:
+                task.cancel()
+            await asyncio.gather(*still_running, return_exceptions=True)
+
     async def update_memory(self, agent: BaseAgent, context: InteractionContext) -> str | None:
         """Store what the turn holds worth remembering, and return it; ``None`` for nothing.
 
-        Run as the ``AUTOMATIC`` mode's post-agent hook, whose event carries the
-        returned fact, so an interface can say what was remembered. Errors are
-        logged, never propagated.
+        The work of the ``AUTOMATIC`` mode's post-agent hook, which runs it in the
+        background (:meth:`start_memory_update`). Errors are logged, never propagated.
         """
         try:
             memory_content = await self._extract_memory_from_turn(agent, context)
@@ -416,6 +450,7 @@ class BaseMemoryManager(BaseModel, ABC):
                     agent=agent,
                     run_config=context.run_config,
                 )
+                get_logger().info("memory: stored a fact from the turn")
                 return memory_content
         except Exception as e:
             get_logger().warning(f"update_memory failed, skipping: {type(e).__name__}")

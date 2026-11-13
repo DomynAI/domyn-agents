@@ -1,9 +1,9 @@
 """Whether a turn holds something worth remembering about the user.
 
 In ``AUTOMATIC`` mode a memory manager runs after every turn
-(:meth:`~domyn.agents.memory.managers.base.BaseMemoryManager.update_memory`), and
-without a decision model it asks the agent's LLM two things in one call: whether
-to store anything, and what. Most turns hold nothing worth keeping, so most of
+(:meth:`~domyn.agents.memory.managers.base.BaseMemoryManager.update_memory`, in the
+background), and without a decision model it asks the agent's LLM two things in
+one call: whether to store anything, and what. Most turns hold nothing worth keeping, so most of
 those calls end in "no".
 
 With a decision model the two halves are split. The model answers the yes/no — a

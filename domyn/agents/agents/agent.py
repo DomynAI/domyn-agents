@@ -188,10 +188,11 @@ class Agent(BaseAgent):
                 self.tools.append(memory_tool)
                 self.tools.extend(self._memory_reading_tools())
             elif self.memory_manager.execution_mode == MemoryExecutionMode.AUTOMATIC:
-                # Its HOOK_END carries the fact it stored, for an interface to show.
+                # Starts the update in the background and returns: the turn ends
+                # without waiting for the model calls that decide and write it.
                 memory_post_hook = FunctionHook(
                     name=MemoryAsset.UPDATE_HOOK,
-                    fun=self.memory_manager.update_memory,  # type: ignore
+                    fun=self.memory_manager.start_memory_update,  # type: ignore
                     trigger=HookPhase.POST_AGENT_CALL,
                     type=HookType.LISTENER,
                 )
@@ -249,7 +250,8 @@ class Agent(BaseAgent):
         self.tools.extend(t for t in skill_tools(self.skills) if t.name not in present)
 
     async def close(self, *, _visited: set[int] | None = None) -> None:
-        """Release what this agent's built-in tool bundles hold, and recurse into
+        """Release what this agent's built-in tool bundles hold, after waiting for the
+        memory updates its ``AUTOMATIC`` hook left running, and recurse into
         sub-agents that carry their own. Best-effort and idempotent — a single
         bundle failing to close must not stop the rest of the tree from being
         torn down, and nothing upstream can act on the failure anyway.
@@ -262,6 +264,15 @@ class Agent(BaseAgent):
         if id(self) in visited:
             return
         visited.add(id(self))
+
+        if self.memory_manager is not None:
+            # Before the tools: the updates the AUTOMATIC hook left running would
+            # otherwise be cancelled by the process exiting.
+            try:
+                await self.memory_manager.wait_for_updates()
+            except Exception as exc:
+                get_logger().warning(f"could not finish memory updates: {type(exc).__name__}")
+                get_logger().debug(f"memory update teardown detail: {exc}")
 
         for built in self.builtin_tools:
             try:
