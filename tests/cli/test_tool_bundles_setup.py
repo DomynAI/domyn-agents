@@ -54,7 +54,7 @@ def _mounted(config: dict[str, Any]) -> list[str] | None:
     if not agent.get("tool_bundles"):
         return None
     entries = {b["name"]: b for b in config.get("tool_bundles") or []}
-    return list(entries[agent["tool_bundles"][0]]["bundles"])
+    return list(entries[agent["tool_bundles"][0]["use"]]["bundles"])
 
 
 def _run(
@@ -75,7 +75,10 @@ class TestAFirstSetup:
         result = _run(console, theme, [*FIELDS, "", ""], path=tmp_path / "config.yaml")
 
         assert result is not None
-        assert result["agents"][0]["tool_bundles"] == ["cli_tools"]
+        assert result["agents"][0]["tool_bundles"] == [
+            {"use": "cli_tools", "workspace": "workspace"}
+        ]
+        assert {"id": "workspace", "type": "local_dir", "paths": ["."]} in result["resources"]
         assert _mounted(result) == list(BUNDLES)
         assert "browser" in (_mounted(result) or [])
 

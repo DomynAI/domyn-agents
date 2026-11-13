@@ -24,6 +24,15 @@ from domyn.agents.registry import (
     get_planner_strategy_registry,
     get_tool_registry,
 )
+from domyn.agents.resources import Resource, ResourceError
+from domyn.agents.resources.config import (
+    check_agent_names,
+    check_bundle_resource,
+    effective_resources,
+    parse_bundle_use,
+    parse_resources,
+    resolve_ids,
+)
 from domyn.agents.tools import DelegateTool, FunctionTool, StreamableFunctionTool
 from domyn.agents.tools.builtin import BuiltinBundleConfig, BuiltinTools
 from domyn.agents.tools.mcp import MCPServerStreamableHTTPConfig
@@ -54,6 +63,14 @@ class ConfigurationV1(BaseModel):
         description=(
             "Named OAuth provider templates, referenced by name from mcp_servers "
             "and tools entries via their own oauth_provider key."
+        ),
+    )
+    resources: list[Resource] = Field(
+        default_factory=list,
+        description=(
+            "Places files live (local folders, remote stores), each with a unique id that "
+            "tool bundles, skills and instructions sources and agents name. Never derived "
+            "from an agent's name, so renaming an agent does not move its files."
         ),
     )
     tool_bundles: list[BuiltinBundleConfig] = Field(
@@ -138,6 +155,12 @@ class ConfigurationV1(BaseModel):
         A raw config typically has string references for tools, llm_providers, etc.
         """
 
+        # Resources are only ever declared as mappings: one is enough to say the file
+        # has not been through from_dict yet.
+        resources = obj.get("resources") or []
+        if resources and isinstance(resources[0], dict):
+            return True
+
         # Check for raw agent definitions (with string tool and hook references)
         agents = obj.get("agents", [])
         if agents and isinstance(agents[0], dict):
@@ -152,6 +175,9 @@ class ConfigurationV1(BaseModel):
                 return True
             agent_hooks = agents[0].get("hooks", [])
             if agent_hooks and isinstance(agent_hooks[0], str):
+                return True
+            agent_bundles = agents[0].get("tool_bundles", [])
+            if agent_bundles and isinstance(agent_bundles[0], str | dict):
                 return True
 
         # Check for raw hook definitions in the unified 'hooks' key
@@ -222,9 +248,26 @@ class ConfigurationV1(BaseModel):
         # Not an Agent field (expanded away during from_dict, like planner_strategy
         # above), but a legitimate raw-config key — documented unconditionally.
         ordered_properties["tool_bundles"] = {
-            "description": "List of tool bundle names (defined in the top-level tool_bundles list) whose built-in tools should be mounted on this agent.",
-            "items": {"type": "string", "description": "Name of a tool bundle"},
+            "description": "The tool bundles (defined in the top-level tool_bundles list) whose built-in tools are mounted on this agent, each bound to the resource that is its workspace.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "use": {"type": "string", "description": "Name of a tool bundle"},
+                    "workspace": {
+                        "type": "string",
+                        "description": "Id of the resource the bundle works in (its first root is the workspace)",
+                    },
+                },
+                "required": ["use", "workspace"],
+            },
             "title": "Tool Bundles",
+            "type": "array",
+            "default": [],
+        }
+        ordered_properties["resources"] = {
+            "description": "Ids of resources this agent may use beyond those its tool bundles and sources name. Optional: a reference already grants access.",
+            "items": {"type": "string", "description": "Id of a resource"},
+            "title": "Resources",
             "type": "array",
             "default": [],
         }
@@ -260,6 +303,7 @@ class ConfigurationV1(BaseModel):
             "planner_strategy",
             "tools",
             "tool_bundles",
+            "resources",
             "sub_agents",
             "hooks",
             "context_visibility",
@@ -429,6 +473,33 @@ class ConfigurationV1(BaseModel):
             pass
 
     @classmethod
+    def _resources_schema(cls) -> dict[str, Any]:
+        """The ``resources`` list, one variant per type: the base class alone would
+        show only the fields every type shares."""
+        from domyn.agents.resources.base import Resource as _Resource
+
+        variants = []
+        for tag, subclass in sorted(_Resource._registry.items()):
+            schema = subclass.model_json_schema()
+            properties = schema.get("properties", {})
+            properties["type"] = {"const": tag, "type": "string", "title": "Type"}
+            variants.append(
+                {
+                    "type": "object",
+                    "title": subclass.__name__,
+                    "properties": properties,
+                    "required": sorted({"id", "type", *schema.get("required", [])}),
+                }
+            )
+        return {
+            "type": "array",
+            "title": "Resources",
+            "description": cls.model_fields["resources"].description,
+            "items": {"anyOf": variants},
+            "default": [],
+        }
+
+    @classmethod
     def model_json_schema(  # type: ignore[override]
         cls, by_alias: bool = True, ref_template: str = "#/$defs/{model}", **kwargs: Any
     ) -> dict[str, Any]:
@@ -518,6 +589,8 @@ class ConfigurationV1(BaseModel):
                         agent_schema["properties"]
                     )
 
+            clean_schema["properties"]["resources"] = cls._resources_schema()
+
             # Customize tools properties to specify hooks should only be strings
             if (
                 "tools" in clean_schema["properties"]
@@ -581,6 +654,18 @@ class ConfigurationV1(BaseModel):
                     # Override or add the value
                     result[key] = value
             return result
+
+        # RESOURCES — first, so every reference below can be checked against them.
+        # Declared only: nothing is read or created here.
+        declared_resources = parse_resources(config_dict.get("resources") or [])
+        check_agent_names(
+            declared_resources,
+            (
+                a["name"]
+                for a in config_dict.get("agents", [])
+                if isinstance(a, dict) and a.get("name")
+            ),
+        )
 
         # LLM PROVIDER
         providers_registry = get_llm_registry()
@@ -947,17 +1032,42 @@ class ConfigurationV1(BaseModel):
             # expand built-in tool bundles referenced by name into real tool
             # instances — built here rather than in the tools loop above because
             # one bundle produces several tools at once (see `tool_bundles` block)
+            agent_name = agent_config["name"]
             agent_builtin_tools: list[BuiltinTools] = []
-            for bundle_name in agent_config.get("tool_bundles", []):
-                if bundle_name not in tool_bundles:
-                    raise ValueError(f"Tool bundle '{bundle_name}' not found in configuration")
-                built = tool_bundles[bundle_name].build(extra_roots=extra_workspace_roots)
+            referenced: list[Resource] = []
+            for entry in agent_config.get("tool_bundles") or []:
+                use = parse_bundle_use(entry, agent_name)
+                if use.bundle not in tool_bundles:
+                    raise ValueError(f"Tool bundle '{use.bundle}' not found in configuration")
+                (workspace,) = resolve_ids(
+                    [use.workspace],
+                    declared_resources,
+                    f"Agent {agent_name!r}, tool bundle {use.bundle!r}",
+                )
+                check_bundle_resource(use, tool_bundles[use.bundle].bundles, workspace, agent_name)
+                built = tool_bundles[use.bundle].build(
+                    resource=workspace, extra_roots=extra_workspace_roots
+                )
                 agent_builtin_tools.append(built)
                 new_tools.extend(built.tools)
+                referenced.append(workspace)
 
             agent_config["tools"] = new_tools
             agent_config["builtin_tools"] = agent_builtin_tools
             agent_config.pop("tool_bundles", None)
+
+            # skills and instructions read from resources: bound here, by id
+            for key in ("skills", "standing_instructions"):
+                referenced.extend(_bind_resource_source(agent_config, key, declared_resources))
+
+            listed = agent_config.get("resources") or []
+            if not isinstance(listed, list):
+                raise ResourceError(
+                    f"Agent {agent_name!r}: 'resources' must be a list of resource ids"
+                )
+            agent_config["resources"] = effective_resources(
+                resolve_ids(listed, declared_resources, f"Agent {agent_name!r}"), referenced
+            )
 
             # a decision model is optional, per agent, and absent by default:
             # without this key every caller behaves exactly as it does today
@@ -1027,6 +1137,7 @@ class ConfigurationV1(BaseModel):
             "planner_strategies": list(planner_strategies.values()),
             "mcp_servers": list(mcp_servers.values()),
             "tool_bundles": list(tool_bundles.values()),
+            "resources": list(declared_resources.values()),
             "entrypoint": config_dict.get("entrypoint", ""),
             "final": config_dict.get("final", False),
             "metadata": config_dict.get("metadata"),
@@ -1057,6 +1168,7 @@ class ConfigurationV1(BaseModel):
             serialized_hooks.append(hook_dict)
 
         return {
+            "resources": [resource.model_dump(exclude_none=True) for resource in self.resources],
             "agents": serialized_agents,
             "tools": serialized_tools,
             "hooks": serialized_hooks,
@@ -1071,3 +1183,55 @@ class ConfigurationV1(BaseModel):
         """Load Configuration from a YAML file."""
         config_dict = load_from_file(file_path)
         return cls.from_dict(config_dict)
+
+
+def _bind_resource_source(
+    agent_config: dict[str, Any], key: str, declared: dict[str, Resource]
+) -> list[Resource]:
+    """Bind a ``type: resource`` skills or instructions source to what it names.
+
+    Replaces the source mapping under ``agent_config[key]`` with the built, bound
+    source and returns the resources it reads. Any other source is left as it is.
+    """
+    from domyn.agents.instructions.sources import ResourceInstructionsSource
+    from domyn.agents.skills.sources import ResourceSkillSource
+
+    source_class: type[ResourceSkillSource] | type[ResourceInstructionsSource] = (
+        ResourceSkillSource if key == "skills" else ResourceInstructionsSource
+    )
+    runtime = agent_config.get(key)
+    if not isinstance(runtime, dict):
+        return []
+    source = runtime.get("source")
+    if isinstance(source, dict) and source.get("type") == "local_dir":
+        # Refused, not read: a folder named here would be a place with no id, which no
+        # `resources:` entry declares and `Agent.resources` would not show.
+        raise ResourceError(
+            f"Agent {agent_config.get('name')!r}: a {key} source of type 'local_dir' is not "
+            "accepted in a configuration file. Declare the folders as a resource, "
+            "`resources: [{id: <id>, type: local_dir, paths: [...]}]`, and read them with "
+            f"`{key}: {{source: {{type: resource, resource: <id>"
+            + (", path: ." if key == "skills" else "")
+            + "}}`, or run `domyn setup` again"
+        )
+    tag = source_class.model_fields["type"].default
+    if isinstance(source, dict) and source.get("type") == tag:
+        if not source.get("resource"):
+            raise ResourceError(
+                f"Agent {agent_config.get('name')!r}: the {key} source is of type "
+                f"'{tag}' and names none: add `resource: <resource id>`"
+            )
+        try:
+            built = source_class.model_validate(source)
+        except ValueError as exc:
+            raise ResourceError(
+                f"Agent {agent_config.get('name')!r}: invalid {key} source: {exc}"
+            ) from exc
+    elif isinstance(source, source_class):
+        built = source
+    else:
+        return []
+    resolve_ids(built.ids, declared, f"Agent {agent_config.get('name')!r}, {key} source")
+    built.bind(declared)
+    agent_config[key] = {**runtime, "source": built}
+    return built.bound

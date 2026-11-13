@@ -17,6 +17,7 @@ from rich.console import Console
 from domyn.agents import Agent
 from domyn.agents.instructions import InstructionRuntime, LocalDirInstructionsSource
 from domyn.agents.interfaces.cli import Theme
+from domyn.agents.interfaces.cli import config as cfg
 from domyn.agents.interfaces.cli.inventory import Inventory, describe_change, take_inventory
 from domyn.agents.interfaces.cli.repl import Repl
 from domyn.agents.llm import BaseLLMProvider, LLMMessage, LLMResponse
@@ -242,26 +243,23 @@ class TestTheCommandsReadTheFilesNow:
 
 
 def _write_config(path: Path, skill_paths: list[str], instruction: str = "Be brief.") -> None:
-    path.write_text(
-        yaml.safe_dump(
-            {
-                "entrypoint": "Assistant",
-                "llm_providers": [{"name": "p", "type": "openai", "model_name": "m"}],
-                "planner_strategies": [{"name": "plain", "type": "tool_use"}],
-                "agents": [
-                    {
-                        "name": "Assistant",
-                        "description": "test agent",
-                        "instruction": instruction,
-                        "llm_provider": "p",
-                        "planner_strategy": "plain",
-                        "skills": {"source": {"type": "local_dir", "paths": skill_paths}},
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
+    agent: dict[str, Any] = {
+        "name": "Assistant",
+        "description": "test agent",
+        "instruction": instruction,
+        "llm_provider": "p",
+        "planner_strategy": "plain",
+    }
+    config: dict[str, Any] = {
+        "entrypoint": "Assistant",
+        "llm_providers": [{"name": "p", "type": "openai", "model_name": "m"}],
+        "planner_strategies": [{"name": "plain", "type": "tool_use"}],
+        "agents": [agent],
+    }
+    if skill_paths:
+        config["resources"] = [{"id": "skills", "type": "local_dir", "paths": skill_paths}]
+        agent["skills"] = {"source": {"type": "resource", "resource": "skills", "path": "."}}
+    path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
 
 class TestTheConfigIsReadEveryTurn:
@@ -423,7 +421,7 @@ class TestAutodiscoverCommand:
         from domyn.agents.interfaces.cli import setup as cli_setup
 
         # Absolute stand-ins for `.domyn/skills` and `.agents/skills`, read in this order.
-        local = (folders / "domyn-local", folders / "agents-local")
+        local = (folders / "domyn-local" / "skills", folders / "agents-local" / "skills")
         _skill(local[0], "mine")
         _skill(local[1], "shared")
         for module in (cli_config, cli_setup, cli_repl):
@@ -436,7 +434,7 @@ class TestAutodiscoverCommand:
     @staticmethod
     def _paths(config: Path) -> list[str]:
         raw = yaml.safe_load(config.read_text(encoding="utf-8"))
-        return list(raw["agents"][0].get("skills", {}).get("source", {}).get("paths", []))
+        return list(cfg.source_paths(raw, raw["agents"][0].get("skills"), "skills") or [])
 
     @pytest.mark.asyncio
     async def test_on_lists_both_folders_first_and_loads_their_skills_now(
@@ -451,8 +449,8 @@ class TestAutodiscoverCommand:
         await repl.run()
 
         assert self._paths(config) == [
-            str(folders / "domyn-local"),
-            str(folders / "agents-local"),
+            str(folders / "domyn-local" / "skills"),
+            str(folders / "agents-local" / "skills"),
             str(folders / "skills"),
         ]
         text = out.getvalue()
@@ -468,7 +466,11 @@ class TestAutodiscoverCommand:
     ) -> None:
         _write_config(
             config,
-            [str(folders / "domyn-local"), str(folders / "agents-local"), str(folders / "skills")],
+            [
+                str(folders / "domyn-local" / "skills"),
+                str(folders / "agents-local" / "skills"),
+                str(folders / "skills"),
+            ],
         )
         repl, out = _session(folders)
         TestTheConfigIsReadEveryTurn._wire(repl, config)

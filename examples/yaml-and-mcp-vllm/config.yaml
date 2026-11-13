@@ -16,10 +16,18 @@ llm_providers:
     url: ${VLLM_URL}
     api_key: ${VLLM_API_KEY}
 
-# The built-in file tools, confined to the folder the agent runs in: reading runs freely,
-# writing waits for your approval. Add `shell` to `bundles` for commands, which always ask.
+# Where files live, each with an id the rest of the file names. `.` is the folder the
+# agent runs in.
+resources:
+  - id: project
+    type: local_dir
+    paths: [.]
+
+# The built-in file tools: reading runs freely, writing waits for your approval. Add
+# `shell` to `bundles` for commands, which always ask. Each agent binds the bundle to a
+# resource, which is the only folder the tools can reach.
 tool_bundles:
-  - name: workspace
+  - name: file_tools
     bundles: [files]
 
 # Every tool the server offers is added to the agents that name it.
@@ -49,6 +57,7 @@ agents:
       answering about them. For questions about an open-source library, ask DeepWiki
       about its GitHub repository (owner/name). Write a file only when asked to.
     llm_provider: llm
-    tool_bundles: [workspace]
+    tool_bundles:
+      - {use: file_tools, workspace: project}
     mcp_servers: [deepwiki]
     stream: true

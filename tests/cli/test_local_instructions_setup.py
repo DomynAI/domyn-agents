@@ -83,7 +83,7 @@ def _run(
 
 def _paths(config: dict[str, Any]) -> list[str]:
     declared = config["agents"][0].get("standing_instructions")
-    return [] if declared is None else declared["source"]["paths"]
+    return list(cfg.source_paths(config, declared, "standing_instructions") or [])
 
 
 class TestTheQuestion:
@@ -186,7 +186,14 @@ class TestWhatTheAgentLoads:
         _write(project / ".agents" / "AGENTS.md", "agents brief")
         monkeypatch.chdir(project)
 
-        source = LocalDirInstructionsSource(paths=[Path(p) for p in _paths(result)])
+        # Through the source the config declares: the project's folders say to be walked.
+        from domyn.agents.instructions.sources import ResourceInstructionsSource
+        from domyn.agents.resources import resolve_resource
+
+        declared = {r["id"]: resolve_resource(r) for r in result["resources"]}
+        source = ResourceInstructionsSource.model_validate(
+            result["agents"][0]["standing_instructions"]["source"]
+        ).bind(declared)
         loaded = await InstructionRuntime(source=source).load()
 
         assert [one.text for one in loaded.soul] == ["user soul"]

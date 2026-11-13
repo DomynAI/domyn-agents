@@ -24,6 +24,7 @@ from domyn.agents.interfaces.cli.config import (
     unique_paths,
 )
 from domyn.agents.loader import load_from_file
+from domyn.agents.resources import LocalDirResource
 from domyn.agents.skills import (
     AllSkillsSelector,
     IndexSelector,
@@ -59,8 +60,9 @@ def elsewhere(tmp_path: Path) -> Path:
 def _tools(workspace: Path, *, skill_dirs: Iterable[Path] = ()) -> list[Any]:
     """Built-in file tools bound to ``workspace``, with ``skill_dirs`` as extra
     reachable roots — exactly what a `tool_bundles:` entry expands into."""
-    bundle = BuiltinBundleConfig(name="test", bundles=["files"], workspace=str(workspace))
-    return bundle.build(extra_roots=[str(d) for d in skill_dirs]).tools
+    bundle = BuiltinBundleConfig(name="test", bundles=["files"])
+    resource = LocalDirResource(id="workspace", paths=[str(workspace)])
+    return bundle.build(resource=resource, extra_roots=[str(d) for d in skill_dirs]).tools
 
 
 class TestTheModelIsToldWhereTheyAre:

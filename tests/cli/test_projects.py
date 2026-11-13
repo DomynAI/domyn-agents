@@ -18,7 +18,7 @@ from domyn.agents.cli.cli import app
 from domyn.agents.interfaces.cli import Theme
 from domyn.agents.interfaces.cli import config as cfg
 from domyn.agents.interfaces.cli import export as cli_export
-from domyn.agents.interfaces.cli.export import export_configuration
+from domyn.agents.interfaces.cli.export import ExportError, export_configuration
 from domyn.agents.loader import interpolate_env_vars, load_application_from_file
 from domyn.agents.skills import LocalDirSkillSource, SkillQuery
 
@@ -45,21 +45,39 @@ def _skill(folder: Path, name: str, *, external: list[str] | None = None) -> Pat
 
 
 def _config(*skill_paths: str, instructions: list[str] | None = None) -> dict[str, Any]:
+    """Skills read from ``skill_paths`` and instructions from ``instructions``, each
+    through a resource, as a configuration declares them."""
     agent: dict[str, Any] = {
         "name": "Assistant",
         "description": "d",
         "instruction": "i",
         "llm_provider": "p",
-        "skills": {"source": {"type": "local_dir", "paths": list(skill_paths)}},
     }
-    if instructions is not None:
-        agent["standing_instructions"] = {"source": {"type": "local_dir", "paths": instructions}}
-    return {
+    resources: list[dict[str, Any]] = []
+    if skill_paths:
+        resources.append({"id": "skills", "type": "local_dir", "paths": list(skill_paths)})
+        agent["skills"] = {"source": {"type": "resource", "resource": "skills", "path": "."}}
+    if instructions:
+        resources.append({"id": "instructions", "type": "local_dir", "paths": instructions})
+        agent["standing_instructions"] = {
+            "source": {"type": "resource", "resource": "instructions"}
+        }
+    config: dict[str, Any] = {
         "version": "1.0",
         "entrypoint": "Assistant",
         "llm_providers": [{"name": "p", "type": "vllm", "model_name": "m", "url": "http://x"}],
         "agents": [agent],
     }
+    if resources:
+        config["resources"] = resources
+    return config
+
+
+def _set_skills(raw: dict[str, Any], paths: list[str]) -> None:
+    """Point the config's skills at ``paths``, through its ``skills`` resource."""
+    raw["resources"] = [r for r in raw.get("resources") or [] if r["id"] != "skills"]
+    raw["resources"].append({"id": "skills", "type": "local_dir", "paths": paths})
+    raw["agents"][0]["skills"] = {"source": {"type": "resource", "resource": "skills", "path": "."}}
 
 
 def _write_project(name: str, raw: dict[str, Any]) -> Path:
@@ -70,8 +88,7 @@ def _write_project(name: str, raw: dict[str, Any]) -> Path:
 
 
 def _skill_paths(raw: dict[str, Any]) -> list[str]:
-    paths: list[str] = raw["agents"][0]["skills"]["source"]["paths"]
-    return paths
+    return list(cfg.source_paths(raw, raw["agents"][0]["skills"], "skills") or [])
 
 
 class TestNames:
@@ -290,30 +307,38 @@ class TestWhatIsTheProjectsAlone:
         monkeypatch.delenv("HOME_ONLY")
 
     def test_export_never_carries_them_out(self, tmp_path: Path) -> None:
-        # Not even when a skill declares them: an `external_files` entry walking up
-        # into the project, and a declared folder holding the others.
+        # Not even when a skill declares them, in a declared folder of its own.
         folder = _write_project("p", _config())
-        skill = _skill(
-            folder / "skills" / "mine" / "essay",
-            "essay",
-            external=["../../../credentials", "data/"],
-        )
-        (folder / "credentials").write_text("KEY=secret\n", encoding="utf-8")
+        skill = _skill(folder / "skills" / "mine" / "essay", "essay", external=["data/"])
         (skill / "data").mkdir()
         for private in ("approvals.yaml", "conversations.db", "conversations.db-wal", "ok.csv"):
             (skill / "data" / private).write_text("secret", encoding="utf-8")
         cfg.use_project("p")
         raw = cfg.read_raw_config()
         assert raw is not None
-        raw["agents"][0]["skills"]["source"]["paths"] = [str(skill)]
+        _set_skills(raw, [str(skill)])
 
-        report = export_configuration(
-            raw, tmp_path / "out", cwd=tmp_path, install_dir=folder / cfg.BUILTIN_SKILLS_DIRNAME
-        )
+        report = export_configuration(raw, tmp_path / "out", cwd=tmp_path)
 
         copied = {p.name for p in report.dest.rglob("*") if p.is_file()}
         assert copied == {"config.yaml", ".info", "SKILL.md", "ok.csv"}
-        assert len([d for d in report.dropped if "never exported" in d]) == 4
+        assert len([d for d in report.dropped if "never exported" in d]) == 3
+
+    def test_a_skill_reaching_up_to_them_refuses_the_export(self, tmp_path: Path) -> None:
+        # `../../../credentials` is outside the folder the skill is read through.
+        folder = _write_project("p", _config())
+        skill = _skill(
+            folder / "skills" / "mine" / "essay", "essay", external=["../../../credentials"]
+        )
+        (folder / "credentials").write_text("KEY=secret\n", encoding="utf-8")
+        cfg.use_project("p")
+        raw = cfg.read_raw_config()
+        assert raw is not None
+        _set_skills(raw, [str(skill)])
+
+        with pytest.raises(ExportError, match="credentials"):
+            export_configuration(raw, tmp_path / "out", cwd=tmp_path)
+        assert not (tmp_path / "out").exists()
 
 
 class TestSetupFindsTheKey:
@@ -559,7 +584,8 @@ class TestPathsInAProject:
             ".domyn/skills",
             "${DOMYN_PROJECT_DIR}/skills",
         ]
-        assert written["agents"][0]["standing_instructions"]["source"]["paths"] == [
+        declared = written["agents"][0]["standing_instructions"]
+        assert cfg.source_paths(written, declared, "standing_instructions") == [
             "${DOMYN_PROJECT_DIR}"
         ]
         assert cfg.expand_project_dir(written, folder) == raw
@@ -626,7 +652,8 @@ class TestPathsInAProject:
         assert seen[0]["source"]["paths"] == [str(folder / "skills/old"), ".domyn/skills"]
         # ...and the file names the project's own files through the variable.
         on_disk = yaml.safe_load((folder / cfg.CONFIG_FILENAME).read_text())
-        assert _skill_paths(on_disk) == ["${DOMYN_PROJECT_DIR}/skills/new", ".domyn/skills"]
+        # `.domyn/skills` is the autodiscovery resource, read first so the project wins.
+        assert _skill_paths(on_disk) == [".domyn/skills", "${DOMYN_PROJECT_DIR}/skills/new"]
         assert saved is not None and _skill_paths(saved) == _skill_paths(on_disk)
 
 
@@ -643,7 +670,6 @@ class TestAnExportIsAProject:
             _config(str(source.parent), instructions=[str(instructions)]),
             exported,
             cwd=tmp_path,
-            install_dir=tmp_path / "no-install",
         )
 
         cfg.projects_dir().mkdir(parents=True)
@@ -658,7 +684,9 @@ class TestAnExportIsAProject:
         paths = cfg.collect_skill_workspace_roots(raw)
         loaded = asyncio.run(LocalDirSkillSource(paths=paths).load(SkillQuery(task="x")))
         assert [skill.name for skill in loaded.index.skills] == ["essay"]
-        declared = raw["agents"][0]["standing_instructions"]["source"]["paths"]
+        declared = cfg.source_paths(
+            raw, raw["agents"][0]["standing_instructions"], "standing_instructions"
+        )
         assert all(p.startswith("${DOMYN_PROJECT_DIR}/") for p in declared)
         resolved = [Path(interpolate_env_vars(p, "test")) for p in declared]
         assert all(p.is_dir() for p in resolved)

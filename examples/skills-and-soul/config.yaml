@@ -33,6 +33,13 @@ tools:
       - name: refund_time
         value: 3-5 working days
 
+# The folder this example's files are in, as the folder `domyn run` is started in: skills
+# are read from its skills/, instructions from its top.
+resources:
+  - id: support
+    type: local_dir
+    paths: [.]
+
 agents:
   - name: SupportAgent
     description: The support agent of an online coffee shop.
@@ -44,14 +51,14 @@ agents:
     tools:
       [get_user_id_from_name, get_customer_orders, get_order_info, get_payment_info, refund_payment]
     stream: true
-    # Every skill in skills/. The prompt lists them by name and description, and the agent
-    # reads one with `skill_view` when the task needs it.
+    # Every skill in skills/ of the `support` folder. The prompt lists them by name and
+    # description, and the agent reads one with `skill_view` when the task needs it.
     skills:
       source:
-        type: local_dir
-        paths: [skills]
-    # Added to the system prompt on every message.
+        type: resource
+        resource: support
+    # Its SOUL.md, added to the system prompt on every message.
     standing_instructions:
       source:
-        type: local_dir
-        paths: [SOUL.md]
+        type: resource
+        resource: support

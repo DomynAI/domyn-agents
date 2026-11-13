@@ -30,7 +30,12 @@ from typing import IO, TYPE_CHECKING, Any, cast
 import yaml
 
 from domyn.agents.agents.agent import MAX_AGENT_NAME_LENGTH
-from domyn.agents.instructions.discovery import AUTODISCOVERY_DIRS, find_instruction_files
+from domyn.agents.instructions.discovery import (
+    AGENTS_FILENAMES,
+    AUTODISCOVERY_DIRS,
+    SOUL_FILENAME,
+    find_instruction_files,
+)
 from domyn.agents.integrations.domyn_platform_sdk import (
     SDK_REQUIREMENT,
     PlatformSDKNotInstalledError,
@@ -41,6 +46,7 @@ from domyn.agents.integrations.domyn_platform_sdk import (
 )
 from domyn.agents.interfaces.cli.config import (
     AUTO_CONTEXT_WINDOW,
+    CLI_RESOURCE_IDS,
     DECISION_LEVEL_BLURB,
     DECISION_LEVELS,
     DEFAULT_DECISION_KEY_ENV,
@@ -59,8 +65,10 @@ from domyn.agents.interfaces.cli.config import (
     credentials_path,
     current_decisions_from,
     current_settings_from,
+    declared_resources,
     describe_configuration_v1,
     describe_project,
+    editing_config,
     expand_project_dir,
     find_api_key,
     in_project_terms,
@@ -1318,7 +1326,8 @@ def _choose_imported_instructions(
     if source and source.get("type") != "local_dir":
         return _choose_instructions(console, theme, current)
     declared = [str(path) for path in source.get("paths") or []]
-    discard.extend(Path(entry) for entry in declared)
+    for entry in declared:
+        discard.extend(_imported_instruction_files(Path(entry)))
     if declared:
         console.print(
             "  Imported instructions unlisted, and deleted once the setup is saved",
@@ -1328,15 +1337,32 @@ def _choose_imported_instructions(
     return _choose_instructions(console, theme, None)
 
 
+def _imported_instruction_files(path: Path) -> list[Path]:
+    """The instruction files an imported entry reads: itself when it is a file, a
+    folder's ``SOUL.md`` and ``AGENTS.md``, never the folder: an export puts what one
+    folder holds in one place, so the folder may hold skills too."""
+    if path.is_dir() and not path.is_symlink():
+        return [
+            path / name for name in (SOUL_FILENAME, *AGENTS_FILENAMES) if (path / name).is_file()
+        ]
+    return [path]
+
+
 def _discard_imported(path: Path, project: Path) -> None:
     """Delete an instruction file or folder the import copied, i.e. one inside the
-    project; anything else is only unlisted."""
+    project; anything else is only unlisted. The folders a deleted file leaves empty
+    go with it, up to the project: a folder that held only instructions disappears,
+    one that holds skills too stays."""
     if not _inside(path, project) or path.is_symlink():
         return
     if path.is_dir():
         shutil.rmtree(path, ignore_errors=True)
     elif path.is_file():
         path.unlink()
+        folder = path.parent
+        while folder != project and _inside(folder, project) and not any(folder.iterdir()):
+            folder.rmdir()
+            folder = folder.parent
 
 
 def _choose_local_skills(
@@ -1466,6 +1492,33 @@ def _keep(
 
 
 def run_setup(
+    console: Console,
+    theme: Theme,
+    existing: dict[str, Any] | None = None,
+    *,
+    path: Path | None = None,
+    provider_only: bool = False,
+    imported: ProjectImport | None = None,
+) -> dict[str, Any] | None:
+    """Walk the user through configuration and persist it as a ConfigurationV1 file.
+
+    The built-ins are installed where ``existing`` says (its ``builtin_skills``
+    resource), which is not the file on disk yet when it was just imported: see
+    `_run_setup` for the rest.
+    """
+    expanded = expand_project_dir(existing, active_project()) if existing else None
+    with editing_config(expanded):
+        return _run_setup(
+            console,
+            theme,
+            existing,
+            path=path,
+            provider_only=provider_only,
+            imported=imported,
+        )
+
+
+def _run_setup(
     console: Console,
     theme: Theme,
     existing: dict[str, Any] | None = None,
@@ -1679,6 +1732,7 @@ def run_setup(
         other_names = {
             str(a.get("name")) for a in (existing or {}).get("agents") or [] if isinstance(a, dict)
         } - {d.agent.name}
+        resource_ids = {*CLI_RESOURCE_IDS, *declared_resources(existing or {})}
         default_name = AgentConfig().name
         while True:
             name = _ask(
@@ -1695,6 +1749,9 @@ def run_setup(
                 )
             elif name in other_names:
                 problem = f"Another agent of this config is called {name} — try another name"
+            elif name in resource_ids:
+                # The loader refuses an agent named like a resource.
+                problem = f"{name} is the id of a resource of this config — try another name"
             else:
                 break
             console.print(

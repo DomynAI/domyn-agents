@@ -18,7 +18,9 @@ import copy
 import hashlib
 import os
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -45,7 +47,7 @@ from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.context_management.compaction import CompactionConfig
 from domyn.agents.skills import LocalDirSkillSource
 from domyn.agents.skills.catalog import BUILTIN_SKILLS_ROOT
-from domyn.agents.skills.layout import listed_path_is_linked
+from domyn.agents.skills.layout import listed_path_is_linked, walk_skill_tree
 from domyn.agents.tools.builtin import BUNDLE_TOOL_NAMES, DEFAULT_BUNDLES, BrowserOptions
 
 # `DOMYN_PROJECT_DIR`, defined with the tools, which read it: always set by `use_project`, to
@@ -468,9 +470,168 @@ def home_dir() -> Path:
     return _active_project or GLOBAL_DIR
 
 
+def declared_resources(raw: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """The ``resources:`` entries of a raw config, by id. Malformed ones are skipped:
+    reporting them is the loader's job."""
+    return {
+        str(entry["id"]): entry
+        for entry in raw.get("resources") or []
+        if isinstance(entry, dict) and entry.get("id")
+    }
+
+
+def _source_entries(source: dict[str, Any]) -> list[Any]:
+    entries = source.get("resource")
+    entries = [entries] if isinstance(entries, str | dict) else entries
+    return list(entries) if isinstance(entries, list) else []
+
+
+def _entry_id(entry: Any) -> str | None:
+    if isinstance(entry, str):
+        return entry
+    if isinstance(entry, dict) and isinstance(entry.get("id"), str):
+        return str(entry["id"])
+    return None
+
+
+def source_resource_ids(source: dict[str, Any]) -> list[str]:
+    """The ids a ``type: resource`` source names, in order, entries and bare ids alike."""
+    return [one for one in map(_entry_id, _source_entries(source)) if one]
+
+
+def source_subpath(source: dict[str, Any], key: str) -> str:
+    """The source's own ``path``: what an entry naming none reads under each root."""
+    return _normal_subpath(source.get("path", _SOURCE_DEFAULT_PATH.get(key, ".")))
+
+
+def _normal_subpath(value: Any) -> str:
+    path = str(value).strip("/")
+    return "." if path in ("", ".") else path
+
+
+def source_refs(source: dict[str, Any], key: str) -> list[tuple[str, str, bool]]:
+    """``(id, subpath, walk)`` for every entry of a ``type: resource`` source, the
+    source's ``path`` filled in where an entry names none."""
+    default = source_subpath(source, key)
+    refs: list[tuple[str, str, bool]] = []
+    for entry in _source_entries(source):
+        resource_id = _entry_id(entry)
+        if resource_id is None:
+            continue
+        if isinstance(entry, dict):
+            subpath = _normal_subpath(entry["path"]) if entry.get("path") else default
+            refs.append((resource_id, subpath, bool(entry.get("walk"))))
+        else:
+            refs.append((resource_id, default, False))
+    return refs
+
+
+def source_path_lists(raw: dict[str, Any], runtime: Any, key: str) -> list[dict[str, Any]]:
+    """Every mapping holding a ``paths`` list an agent's skills or instructions source
+    reads each path of whole: each ``local_dir`` resource a ``type: resource`` source
+    names with no subpath (and, in setup's own form, a ``local_dir`` source itself).
+    The lists can be edited in place; a resource read through a subpath, or not a
+    local folder, is not among them."""
+    source = runtime.get("source") if isinstance(runtime, dict) else None
+    if not isinstance(source, dict):
+        return []
+    if source.get("type") == "local_dir":
+        return [source]
+    if source.get("type") != "resource":
+        return []
+    declared = declared_resources(raw)
+    found: list[dict[str, Any]] = []
+    for one, subpath, _ in source_refs(source, key):
+        resource = declared.get(one)
+        if subpath != "." or not isinstance(resource, dict):
+            continue
+        if resource.get("type") == "local_dir":
+            if isinstance(resource.get("paths"), str):
+                resource["paths"] = [resource["paths"]]
+            if isinstance(resource.get("paths"), list) and resource not in found:
+                found.append(resource)
+    return found
+
+
+def drop_empty_resources(raw: dict[str, Any]) -> None:
+    """Remove, in place, every ``local_dir`` resource left with no path, and its entry
+    from the sources that name it; a source left naming none goes with it. An empty list
+    would not load."""
+    empty = {
+        str(r.get("id"))
+        for r in raw.get("resources") or []
+        if isinstance(r, dict) and r.get("type") == "local_dir" and not r.get("paths")
+    }
+    if not empty:
+        return
+    raw["resources"] = [
+        r for r in raw.get("resources") or [] if not (isinstance(r, dict) and r.get("id") in empty)
+    ]
+    if not raw["resources"]:
+        del raw["resources"]
+    for agent in raw.get("agents") or []:
+        if not isinstance(agent, dict):
+            continue
+        for key in ("skills", "standing_instructions"):
+            runtime = agent.get(key)
+            source = runtime.get("source") if isinstance(runtime, dict) else None
+            if not isinstance(source, dict) or source.get("type") != "resource":
+                continue
+            left = [e for e in _source_entries(source) if _entry_id(e) not in empty]
+            if not left:
+                del agent[key]
+            else:
+                source["resource"] = left[0] if len(left) == 1 else left
+
+
+def source_paths(raw: dict[str, Any], runtime: Any, key: str) -> list[Any] | None:
+    """The paths an agent's skills or instructions source reads, as written:
+    ``<root>/<subpath>`` for every root of the ``local_dir`` resources a ``type:
+    resource`` source names (a ``local_dir`` source's own, in setup's internal form).
+    ``None`` for any other source."""
+    source = runtime.get("source") if isinstance(runtime, dict) else None
+    if not isinstance(source, dict):
+        return None
+    if source.get("type") == "local_dir":
+        return list(source.get("paths") or [])
+    if source.get("type") != "resource":
+        return None
+    declared = declared_resources(raw)
+    found: list[Any] = []
+    for one, subpath, _ in source_refs(source, key):
+        resource = declared.get(one)
+        if not isinstance(resource, dict) or resource.get("type") != "local_dir":
+            return None
+        roots = resource.get("paths") or []
+        for root in [roots] if isinstance(roots, str) else roots:
+            found.append(root if subpath == "." else f"{str(root).rstrip('/')}/{subpath}")
+    return found
+
+
+def bundle_workspace(raw: dict[str, Any], entry: Any) -> dict[str, Any] | None:
+    """The resource an agent's ``tool_bundles`` entry is bound to, when declared."""
+    if not isinstance(entry, dict) or not isinstance(entry.get("workspace"), str):
+        return None
+    return declared_resources(raw).get(entry["workspace"])
+
+
+def _bundle_use_name(entry: Any) -> Any:
+    """The bundle an agent's ``tool_bundles`` entry uses (a bare name, as old files
+    wrote it, is read as its own name so `/config` can still show it)."""
+    return entry.get("use") if isinstance(entry, dict) else entry
+
+
 def _config_paths(raw: dict[str, Any]) -> Iterable[list[Any]]:
     """Every list of paths a config reads files from: each agent's ``local_dir``
-    skills and standing instructions. Yielded for rewriting in place."""
+    skills and standing instructions, and every ``local_dir`` resource. Yielded for
+    rewriting in place."""
+    for resource in raw.get("resources") or []:
+        if isinstance(resource, dict) and resource.get("type") == "local_dir":
+            paths = resource.get("paths")
+            if isinstance(paths, str):
+                paths = resource["paths"] = [paths]
+            if isinstance(paths, list):
+                yield paths
     for agent in raw.get("agents") or []:
         if not isinstance(agent, dict):
             continue
@@ -680,6 +841,36 @@ def find_api_key(name: str) -> FoundKey | None:
 CLI_DEFAULT_PROVIDER_NAME = "default_provider"
 CLI_DEFAULT_TOOL_BUNDLE_NAME = "cli_tools"
 
+# The resources `domyn setup` writes and owns: the agent's workspace, the folders its
+# skills are read from, and its SOUL.md / AGENTS.md. Each is rewritten whole by every
+# setup, removed when it would be empty, and never named after the agent, so renaming
+# the agent moves nothing.
+CLI_WORKSPACE_RESOURCE = "workspace"
+CLI_SKILLS_RESOURCE = "skills"
+CLI_INSTRUCTIONS_RESOURCE = "instructions"
+CLI_BUILTIN_SKILLS_RESOURCE = "builtin_skills"
+"""The folder setup installs the chosen built-in skills into (`skills_install_dir`),
+read whole: it holds exactly the chosen ones, as setup rewrites it every time."""
+CLI_AUTODISCOVERY_RESOURCE = "autodiscovery"
+"""The project's own folders, ``.domyn`` and ``.agents`` of wherever domyn runs: skills
+read their ``skills/``, instructions walk them. Written only when setup's autodiscovery
+questions are answered yes."""
+CLI_SOURCE_RESOURCE_IDS: tuple[str, ...] = (
+    CLI_AUTODISCOVERY_RESOURCE,
+    CLI_SKILLS_RESOURCE,
+    CLI_BUILTIN_SKILLS_RESOURCE,
+    CLI_INSTRUCTIONS_RESOURCE,
+)
+"""The resources setup writes for the skills and instructions sources."""
+CLI_RESOURCE_IDS: tuple[str, ...] = (CLI_WORKSPACE_RESOURCE, *CLI_SOURCE_RESOURCE_IDS)
+_SOURCE_RESOURCES = {
+    "skills": CLI_SKILLS_RESOURCE,
+    "standing_instructions": CLI_INSTRUCTIONS_RESOURCE,
+}
+# What a `type: resource` source reads under each root when it names no `path`, as
+# `ResourceSkillSource` / `ResourceInstructionsSource` default it.
+_SOURCE_DEFAULT_PATH = {"skills": "skills", "standing_instructions": "."}
+
 
 CLI_DEFAULT_DECISION_PROVIDER_NAME = "decision_model"
 
@@ -852,10 +1043,13 @@ def configuration_v1_dict_from(
         "stream": agent.stream,
     }
 
-    if agent.skills:
-        agent_dict["skills"] = agent.skills
-    if agent.standing_instructions:
-        agent_dict["standing_instructions"] = agent.standing_instructions
+    # Skills and instructions are read from resources `domyn setup` owns: the folders
+    # are declared once, under `resources:`, and the sources name them by id.
+    skills, instructions, resources = _setup_sources(agent.skills, agent.standing_instructions)
+    if skills:
+        agent_dict["skills"] = skills
+    if instructions:
+        agent_dict["standing_instructions"] = instructions
 
     config: dict[str, Any] = {
         "version": "1.0",
@@ -876,7 +1070,6 @@ def configuration_v1_dict_from(
             {
                 "name": CLI_DEFAULT_TOOL_BUNDLE_NAME,
                 "bundles": list(agent.tools),
-                "workspace": agent.workspace,
                 "sandbox": agent.sandbox,
                 "isolate_environment": agent.isolate_environment,
                 "allowed_env": list(agent.allowed_env),
@@ -886,10 +1079,225 @@ def configuration_v1_dict_from(
         browser = agent.browser.model_dump(exclude_defaults=True)
         if browser:
             config["tool_bundles"][0]["browser"] = browser
-        agent_dict["tool_bundles"] = [CLI_DEFAULT_TOOL_BUNDLE_NAME]
+        agent_dict["tool_bundles"] = [
+            {"use": CLI_DEFAULT_TOOL_BUNDLE_NAME, "workspace": CLI_WORKSPACE_RESOURCE}
+        ]
+        resources.insert(
+            0,
+            {
+                "id": CLI_WORKSPACE_RESOURCE,
+                "type": "local_dir",
+                "paths": [agent.workspace or "."],
+            },
+        )
+    if resources:
+        config["resources"] = resources
 
     kept = _keep_unowned(config, existing)
     return _apply_decisions(kept, decisions)
+
+
+def _inside(path: Path, folder: Path) -> bool:
+    return path == folder or folder in path.parents
+
+
+def _local_paths_of(mapping: Any) -> list[str] | None:
+    """The paths of setup's internal ``local_dir`` form, ``None`` for any other source."""
+    source = mapping.get("source") if isinstance(mapping, dict) else None
+    if not isinstance(source, dict) or source.get("type") != "local_dir":
+        return None
+    return [str(path) for path in source.get("paths") or []]
+
+
+def _autodiscovery_root(key: str, path: str) -> str | None:
+    """The folder of the project an autodiscovery entry of setup's lists stands for
+    (``.domyn/skills`` and ``.domyn`` are both ``.domyn``), or ``None``."""
+    if key == "skills":
+        return Path(path).parent.as_posix() if is_skill_autodiscovery(path) else None
+    return Path(path).as_posix() if is_instruction_autodiscovery(path) else None
+
+
+def _setup_sources(skills: Any, instructions: Any) -> tuple[Any, Any, list[dict[str, Any]]]:
+    """The skills and instructions mappings as written to the file, and the resources
+    they read from — what setup writes for its internal ``local_dir`` paths.
+
+    - the user's own paths become `CLI_SKILLS_RESOURCE` / `CLI_INSTRUCTIONS_RESOURCE`;
+    - the built-ins are not listed one by one: their install folder is the root of
+      `CLI_BUILTIN_SKILLS_RESOURCE`, read whole (it holds exactly the chosen ones);
+    - the autodiscovery entries (``.domyn/skills``, ``.domyn``…) become one resource,
+      `CLI_AUTODISCOVERY_RESOURCE`, whose roots are the project's folders: skills read
+      ``skills/`` under them, instructions walk them.
+
+    Each source names its resources in a fixed order (`_ENTRY_ORDER`), so a project
+    skill wins a name over the user's, the user's over a built-in, and the user's soul
+    comes before the project's while the project's brief is read last. A mapping
+    with no path left is ``None``; any other source was not written by setup and is
+    returned as it is.
+    """
+    resources: dict[str, dict[str, Any]] = {}
+    roots: list[str] = []
+
+    def add(resource_id: str, paths: list[str]) -> None:
+        entry = resources.setdefault(
+            resource_id, {"id": resource_id, "type": "local_dir", "paths": []}
+        )
+        entry["paths"].extend(p for p in paths if p not in entry["paths"])
+
+    written: dict[str, Any] = {}
+    for key, mapping in (("skills", skills), ("standing_instructions", instructions)):
+        paths = _local_paths_of(mapping)
+        if paths is None:
+            written[key] = mapping
+            continue
+        entries: list[Any] = []
+        install = skills_install_dir().expanduser().absolute() if key == "skills" else None
+        for path in paths:
+            root = _autodiscovery_root(key, path)
+            if root is not None:
+                roots.append(root)
+                entry: Any = (
+                    {"id": CLI_AUTODISCOVERY_RESOURCE, "path": "skills"}
+                    if key == "skills"
+                    else {"id": CLI_AUTODISCOVERY_RESOURCE, "walk": True}
+                )
+            elif install is not None and _inside(Path(path).expanduser().absolute(), install):
+                add(CLI_BUILTIN_SKILLS_RESOURCE, [str(install)])
+                entry = CLI_BUILTIN_SKILLS_RESOURCE
+            else:
+                add(_SOURCE_RESOURCES[key], [path])
+                entry = _SOURCE_RESOURCES[key]
+            if entry not in entries:
+                entries.append(entry)
+        rest = {k: v for k, v in (mapping or {}).items() if k != "source"}
+        # Setup's own in a fixed order, whatever order the paths came in: the project's
+        # skills, then the user's, then the built-ins, so each wins a name over the next;
+        # the user's instructions, then the project's, whose brief is read last.
+        entries.sort(key=lambda entry: _ENTRY_ORDER[key].index(str(_entry_id(entry))))
+        # Entries setup does not own (an export's snapshot, a hand-written resource),
+        # put back where they were.
+        for at, kept in (mapping or {}).get("source", {}).get("keep") or []:
+            entries.insert(min(at, len(entries)), kept)
+        if not entries:
+            written[key] = rest or None
+            continue
+        source: dict[str, Any] = {
+            "type": "resource",
+            "resource": entries[0] if len(entries) == 1 else entries,
+        }
+        if _SOURCE_DEFAULT_PATH[key] != ".":
+            source["path"] = "."
+        written[key] = {**rest, "source": source}
+    if roots:
+        add(CLI_AUTODISCOVERY_RESOURCE, list(dict.fromkeys(roots)))
+    order = [
+        CLI_AUTODISCOVERY_RESOURCE,
+        CLI_SKILLS_RESOURCE,
+        CLI_BUILTIN_SKILLS_RESOURCE,
+        CLI_INSTRUCTIONS_RESOURCE,
+    ]
+    owned = [resources[one] for one in order if one in resources]
+    return written["skills"], written["standing_instructions"], owned
+
+
+_ENTRY_ORDER = {
+    "skills": [CLI_AUTODISCOVERY_RESOURCE, CLI_SKILLS_RESOURCE, CLI_BUILTIN_SKILLS_RESOURCE],
+    "standing_instructions": [CLI_INSTRUCTIONS_RESOURCE, CLI_AUTODISCOVERY_RESOURCE],
+}
+
+
+def as_local_source(raw: dict[str, Any], key: str, mapping: Any) -> Any:
+    """The reverse of `_setup_sources`, for the wizard: a source reading the resources
+    setup owns, in the shapes it writes them, as the ``local_dir`` paths setup edits —
+    the built-ins' install folder as the folder of each skill installed in it, and the
+    autodiscovery resource as the entries setup lists for it (``.domyn/skills`` for
+    skills, ``.domyn`` for instructions). Entries naming other resources (a
+    hand-written one) are kept aside with their place (``keep``) and written back
+    there. A source naming none of setup's own, or one of
+    them in another shape, is returned as it is, and setup leaves it alone."""
+    if not isinstance(mapping, dict):
+        return mapping
+    source = mapping.get("source")
+    if not isinstance(source, dict) or source.get("type") != "resource":
+        return mapping
+    refs = source_refs(source, key)
+    expected = (
+        {
+            CLI_AUTODISCOVERY_RESOURCE: ("skills", False),
+            CLI_SKILLS_RESOURCE: (".", False),
+            CLI_BUILTIN_SKILLS_RESOURCE: (".", False),
+        }
+        if key == "skills"
+        else {
+            CLI_INSTRUCTIONS_RESOURCE: (".", False),
+            CLI_AUTODISCOVERY_RESOURCE: (".", True),
+        }
+    )
+    owned = [ref for ref in refs if ref[0] in expected]
+    if not owned or any(expected[one] != (subpath, walk) for one, subpath, walk in owned):
+        return mapping
+    entries = _source_entries(source)
+    keep = [
+        [at, entry]
+        for at, entry in enumerate(entries)
+        if _entry_id(entry) is not None and _entry_id(entry) not in expected
+    ]
+    declared = declared_resources(raw)
+    paths: list[Any] = []
+    for resource_id, subpath, _ in owned:
+        resource = declared.get(resource_id)
+        if not isinstance(resource, dict) or resource.get("type") != "local_dir":
+            return mapping
+        roots = resource.get("paths") or []
+        roots = [roots] if isinstance(roots, str) else list(roots)
+        if resource_id == CLI_BUILTIN_SKILLS_RESOURCE:
+            for root in roots:
+                folder = Path(str(root)).expanduser()
+                paths.extend(str(found.path) for found in walk_skill_tree(folder))
+        elif subpath != ".":
+            paths.extend((Path(str(root)) / subpath).as_posix() for root in roots)
+        else:
+            paths.extend(roots)
+    local: dict[str, Any] = {"type": "local_dir", "paths": paths}
+    if keep:
+        local["keep"] = keep
+    return {**mapping, "source": local}
+
+
+def set_agent_source(
+    raw: dict[str, Any], agent_dict: dict[str, Any], key: str, mapping: dict[str, Any] | None
+) -> None:
+    """Write setup's ``local_dir`` form of an agent's skills or instructions back into
+    ``raw`` in place, as setup writes it (`_setup_sources`), the other of the two read
+    back as it is: the two share the autodiscovery resource. For the commands that
+    change one setting outside the wizard (``/skills-autodiscover``)."""
+    other = "standing_instructions" if key == "skills" else "skills"
+    current = {key: mapping, other: as_local_source(raw, other, agent_dict.get(other))}
+    skills, instructions, owned = _setup_sources(
+        current["skills"], current["standing_instructions"]
+    )
+    resources = list(raw.get("resources") or [])
+    at = next(
+        (
+            i
+            for i, one in enumerate(resources)
+            if isinstance(one, dict) and one.get("id") in CLI_SOURCE_RESOURCE_IDS
+        ),
+        None,
+    )
+    resources = [
+        r for r in resources if not (isinstance(r, dict) and r.get("id") in CLI_SOURCE_RESOURCE_IDS)
+    ]
+    place = at if at is not None and at <= len(resources) else len(resources)
+    resources[place:place] = owned
+    if resources:
+        raw["resources"] = resources
+    else:
+        raw.pop("resources", None)
+    for name, value in (("skills", skills), ("standing_instructions", instructions)):
+        if value:
+            agent_dict[name] = value
+        else:
+            agent_dict.pop(name, None)
 
 
 def _apply_decisions(config: dict[str, Any], decisions: DecisionsChoice | None) -> dict[str, Any]:
@@ -937,7 +1345,15 @@ def _apply_decisions(config: dict[str, Any], decisions: DecisionsChoice | None) 
 #: What the wizard builds from its own prompts and may therefore replace whole.
 #: Everything else in the file belongs to whoever wrote it.
 _WIZARD_OWNS: frozenset[str] = frozenset(
-    {"version", "entrypoint", "llm_providers", "planner_strategies", "agents", "tool_bundles"}
+    {
+        "version",
+        "entrypoint",
+        "llm_providers",
+        "planner_strategies",
+        "agents",
+        "tool_bundles",
+        "resources",
+    }
 )
 
 #: Same, one level down, for the entrypoint agent the wizard rebuilds.
@@ -969,6 +1385,16 @@ def _keep_unowned(config: dict[str, Any], existing: dict[str, Any] | None) -> di
     for key, value in existing.items():
         if key not in _WIZARD_OWNS:
             config.setdefault(key, value)
+
+    # Resources: setup's own ids are rewritten whole (and dropped when empty);
+    # anything else declared there is someone else's and stays, after them.
+    kept_resources = [
+        entry
+        for entry in existing.get("resources") or []
+        if not (isinstance(entry, dict) and entry.get("id") in CLI_RESOURCE_IDS)
+    ]
+    if kept_resources:
+        config["resources"] = [*(config.get("resources") or []), *kept_resources]
 
     previous_agents = existing.get("agents")
     if not isinstance(previous_agents, list) or not previous_agents:
@@ -1062,8 +1488,13 @@ def current_settings_from(
     )
 
     bundles = {b.get("name"): b for b in raw.get("tool_bundles", []) if isinstance(b, dict)}
-    bundle_names = agent_dict.get("tool_bundles") or []
-    bundle = bundles.get(bundle_names[0]) if bundle_names else None
+    bundle_uses = agent_dict.get("tool_bundles") or []
+    bundle = bundles.get(_bundle_use_name(bundle_uses[0])) if bundle_uses else None
+    workspace_resource = bundle_workspace(raw, bundle_uses[0]) if bundle_uses else None
+    workspace_roots = (workspace_resource or {}).get("paths") or []
+    if isinstance(workspace_roots, str):
+        workspace_roots = [workspace_roots]
+    workspace = str(workspace_roots[0]) if workspace_roots else None
     default_agent = AgentConfig()
     # A missing `bundles` key mounts what `BuiltinBundleConfig` defaults it to.
     tools = list(bundle.get("bundles", DEFAULT_BUNDLES) or []) if bundle else default_agent.tools
@@ -1076,17 +1507,17 @@ def current_settings_from(
         isolate_environment=bundle.get("isolate_environment", default_agent.isolate_environment)
         if bundle
         else default_agent.isolate_environment,
-        workspace=bundle.get("workspace", default_agent.workspace)
-        if bundle
-        else default_agent.workspace,
+        workspace=workspace if workspace not in (None, ".") else default_agent.workspace,
         # Read back because the wizard rewrites the whole file: a field read
         # here is a field every `domyn setup` and `/model` silently dropped.
         allowed_env=list(bundle.get("allowed_env") or []) if bundle else default_agent.allowed_env,
         browser=_browser_options(bundle.get("browser") if bundle else None),
         stream=agent_dict.get("stream", default_agent.stream),
-        skills=agent_dict.get("skills", default_agent.skills),
-        standing_instructions=agent_dict.get(
-            "standing_instructions", default_agent.standing_instructions
+        skills=as_local_source(raw, "skills", agent_dict.get("skills", default_agent.skills)),
+        standing_instructions=as_local_source(
+            raw,
+            "standing_instructions",
+            agent_dict.get("standing_instructions", default_agent.standing_instructions),
         ),
     )
 
@@ -1157,6 +1588,10 @@ def _skills_summary(skills: Any, *, absent: str) -> str:
     if not isinstance(source, dict) or not source.get("type"):
         return "(unrecognised)"
     source_type = str(source["type"])
+    if source_type == "resource":
+        ids = ", ".join(source_resource_ids(source)) or "(none)"
+        subpath = source.get("path")
+        return f"resource: {ids}" + (f" (path {subpath})" if subpath else "")
     if source_type != LocalDirSkillSource.model_fields["type"].default:
         return source_type
     paths = ", ".join(str(p) for p in source.get("paths") or [])
@@ -1273,8 +1708,8 @@ def _agent_tool_names(
     nothing, as `bundle()` skips an unknown name rather than failing.
     """
     names = [str(t) for t in agent.get("tools") or []]
-    for entry_name in agent.get("tool_bundles") or []:
-        entry = bundle_entries.get(entry_name) or {}
+    for use in agent.get("tool_bundles") or []:
+        entry = bundle_entries.get(_bundle_use_name(use)) or {}
         for builtin in entry.get("bundles") or []:
             names.extend(f"{tool}({builtin})" for tool in BUNDLE_TOOL_NAMES.get(builtin, ()))
     return list(dict.fromkeys(names))
@@ -1291,9 +1726,12 @@ def _agent_bundle_names(
     the file declares, and seeing it is how a typo gets noticed.
     """
     names: list[str] = []
-    for entry_name in agent.get("tool_bundles") or []:
+    for use in agent.get("tool_bundles") or []:
+        entry_name = _bundle_use_name(use)
         entry = bundle_entries.get(entry_name) or {}
-        names.extend(f"{builtin}({entry_name})" for builtin in entry.get("bundles") or [])
+        workspace = use.get("workspace") if isinstance(use, dict) else None
+        tag = f"{entry_name} in {workspace}" if workspace else str(entry_name)
+        names.extend(f"{builtin}({tag})" for builtin in entry.get("bundles") or [])
     return list(dict.fromkeys(names))
 
 
@@ -1341,6 +1779,8 @@ def _agent_items(raw: dict[str, Any]) -> list[ConfigItem]:
             ),
             ("stream", str(a.get("stream", True))),
         ]
+        if a.get("resources"):
+            fields.insert(-1, ("resources", ", ".join(str(r) for r in a["resources"])))
         items.append(ConfigItem(name=str(a.get("name", "?")), fields=fields))
     return items
 
@@ -1481,13 +1921,29 @@ def _tool_bundle_items(raw: dict[str, Any]) -> list[ConfigItem]:
         fields = [
             ("bundles", ", ".join(b.get("bundles") or []) or "(none)"),
             ("sandbox", str(b.get("sandbox", "local"))),
-            ("workspace", b.get("workspace") or "(cwd)"),
             ("isolate_environment", str(b.get("isolate_environment", True))),
             ("allowed_env", ", ".join(b.get("allowed_env") or []) or "(none)"),
         ]
         if "browser" in (b.get("bundles") or []):
             fields += _browser_fields(_browser_options(b.get("browser")))
         items.append(ConfigItem(name=str(b.get("name", "?")), fields=fields))
+    return items
+
+
+def _resource_items(raw: dict[str, Any]) -> list[ConfigItem]:
+    items: list[ConfigItem] = []
+    for r in raw.get("resources") or []:
+        if not isinstance(r, dict):
+            continue
+        fields = [("type", str(r.get("type") or "?"))]
+        paths = r.get("paths")
+        if paths:
+            fields.append(
+                ("paths", ", ".join(str(p) for p in ([paths] if isinstance(paths, str) else paths)))
+            )
+        if r.get("read_only"):
+            fields.append(("read_only", "True"))
+        items.append(ConfigItem(name=str(r.get("id", "?")), fields=fields))
     return items
 
 
@@ -1560,6 +2016,7 @@ def describe_configuration_v1(
         ConfigSection("Hooks", _hook_items(raw)),
         ConfigSection("MCP Servers", _mcp_server_items(all_mcp_servers)),
         ConfigSection("OAuth Providers", _oauth_provider_items(raw)),
+        ConfigSection("Resources", _resource_items(raw)),
         ConfigSection("Tool Bundles", _tool_bundle_items(raw)),
         ConfigSection("Context Managers", _context_manager_items(raw)),
         ConfigSection("Decision Models", _decision_items(raw)),
@@ -1728,8 +2185,9 @@ def collect_skill_workspace_roots(raw: dict[str, Any]) -> list[Path]:
 
     Scans **every** agent's ``skills.source``, not only the entrypoint's:
     ``extra_workspace_roots`` widens every tool bundle alike, and a sub-agent's
-    skills must be as openable as the root's. Only ``local_dir`` sources have
-    directories; any other type contributes nothing.
+    skills must be as openable as the root's. Only ``local_dir`` sources and
+    ``resource`` sources over ``local_dir`` resources have directories; any other
+    type contributes nothing.
 
     A path that goes through a symlink (`listed_path_is_linked`) is left out, as the
     loader leaves it out.
@@ -1737,16 +2195,14 @@ def collect_skill_workspace_roots(raw: dict[str, Any]) -> list[Path]:
     Malformed shapes are skipped rather than raised on — reporting a bad config
     is the loader's job, not this scan's.
     """
-    local_dir_type = LocalDirSkillSource.model_fields["type"].default
     configured: list[Path] = []
 
     for agent_dict in raw.get("agents") or []:
         if not isinstance(agent_dict, dict):
             continue
-        skills = agent_dict.get("skills")
-        source = skills.get("source") if isinstance(skills, dict) else None
-        if isinstance(source, dict) and source.get("type") == local_dir_type:
-            for path in source.get("paths") or []:
+        listed_paths = source_paths(raw, agent_dict.get("skills"), "skills")
+        if listed_paths is not None:
+            for path in listed_paths:
                 try:
                     listed = Path(interpolate_env_vars(path, "the configuration"))
                 except ValueError:
@@ -1808,12 +2264,44 @@ def is_instruction_autodiscovery(path: str | Path) -> bool:
     return Path(str(path)) in AUTODISCOVERY_DIRS
 
 
+_config_in_setup: ContextVar[dict[str, Any] | None] = ContextVar("_config_in_setup", default=None)
+"""The config `domyn setup` is editing, while it runs: the one `skills_install_dir`
+follows, as the file on disk may not be it yet (an import writes it at the end)."""
+
+
+@contextmanager
+def editing_config(raw: dict[str, Any] | None) -> Iterator[None]:
+    """For the length of the block, `skills_install_dir` follows ``raw`` (setup's own
+    config, with the project's paths spelled out) rather than the file on disk."""
+    token = _config_in_setup.set(raw or {})
+    try:
+        yield
+    finally:
+        _config_in_setup.reset(token)
+
+
 def skills_install_dir() -> Path:
     """Where ``domyn setup`` installs the builtin skills, and replaces them on every run.
 
-    Owned by setup, so nothing else belongs in it. Read only through the paths the
-    config lists, never scanned. A project has its own, inside its folder.
+    The root of the config's `CLI_BUILTIN_SKILLS_RESOURCE`, when it declares one: a
+    project made from an export keeps installing where its built-ins came in
+    (``resources/builtin-skills``). Otherwise ``<home>/builtin-skills``, and setup
+    writes the resource naming it. The config is the one setup is editing, while it
+    runs (`editing_config`), else the file. Owned by setup, so nothing else belongs in it.
     """
+    raw = _config_in_setup.get()
+    if raw is None:
+        raw = read_raw_config(config_path()) or {}
+    resource = declared_resources(raw).get(CLI_BUILTIN_SKILLS_RESOURCE)
+    roots = resource.get("paths") if isinstance(resource, dict) else None
+    roots = [roots] if isinstance(roots, str) else roots
+    if isinstance(roots, list) and roots and isinstance(roots[0], str) and roots[0].strip():
+        written = roots[0]
+        ref = f"${{{PROJECT_DIR_VAR}}}"
+        if written.startswith(ref):
+            written = str(home_dir()) + written[len(ref) :]
+        if "$" not in written:
+            return Path(written).expanduser().absolute()
     return home_dir() / BUILTIN_SKILLS_DIRNAME
 
 
@@ -1832,18 +2320,25 @@ def builtin_skill_dirs() -> list[Path]:
     return sorted(d for d in BUILTIN_SKILLS_ROOT.iterdir() if d.is_dir())
 
 
-def resolve_instruction_dirs(declared: list[Path] | None) -> list[Path]:
+def resolve_instruction_dirs(
+    declared: list[Path] | None, walked: Iterable[Path] = ()
+) -> list[Path]:
     """The paths the root agent reads ``SOUL.md`` / ``AGENTS.md`` from: what the agent
     declares, and nothing else.
 
-    An autodiscovery entry that lands in `GLOBAL_DIR` is dropped: started from
-    ``$HOME``, ``./.domyn`` *is* ``~/.domyn``, which is not an instructions folder.
+    A walked folder (or an autodiscovery entry) that lands in `GLOBAL_DIR` is dropped:
+    started from ``$HOME``, ``./.domyn`` *is* ``~/.domyn``, which is not an
+    instructions folder.
     """
     home = GLOBAL_DIR.expanduser().resolve()
+    walked = set(walked)
     return unique_paths(
         path
         for path in declared or []
-        if not (is_instruction_autodiscovery(path) and path.expanduser().resolve() == home)
+        if not (
+            (path in walked or is_instruction_autodiscovery(path))
+            and path.expanduser().resolve() == home
+        )
     )
 
 

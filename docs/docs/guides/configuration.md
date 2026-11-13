@@ -60,6 +60,7 @@ Sections are lists of named entries, and agents refer to them by name: `llm_prov
 | `planner_strategies` | How agents reason and call tools. See [Planner strategies](planner-strategies.md). |
 | `context_managers` | Custom context managers for the strategies. See [Planner strategies](planner-strategies.md). |
 | `tools` | Python functions and single MCP tools. See [Tools](#tools). |
+| `resources` | Folders, each with an id that bundles and sources refer to. See [Built-in tools](#built-in-tools). |
 | `tool_bundles` | The built-in file and shell tools. See [Built-in tools](#built-in-tools). |
 | `mcp_servers`, `oauth_providers` | Remote MCP servers whose tools agents use. See [MCP servers](#mcp-servers). |
 | `hooks` | Code that runs around agents and tools. See [Hooks](#hooks). |
@@ -160,21 +161,35 @@ The `type` of an entry under `tools` is one of `function`, `StreamableFunctionTo
 
 ### Built-in tools
 
-The built-in [file and shell tools](../cli/tools-and-approvals.md) are added in bundles. Declare the bundle once and list it in each agent that should have it:
+The built-in [file and shell tools](../cli/tools-and-approvals.md) are added in bundles. A bundle names no folder: declare the folders as `resources`, each with an id, declare the bundle once, and bind it on each agent to the resource it works in:
 
 ```yaml
+resources:
+  - id: project
+    type: local_dir
+    paths: [./project]
+  - id: research_notes
+    type: local_dir
+    paths: [./notes]
+
 tool_bundles:
   - name: workspace_tools
     bundles: [files, shell]
-    workspace: ./project
 
 agents:
   - name: Coder
     ...
-    tool_bundles: [workspace_tools]
+    tool_bundles:
+      - {use: workspace_tools, workspace: project}
+  - name: Researcher
+    ...
+    tool_bundles:
+      - {use: workspace_tools, workspace: research_notes}
 ```
 
-`files` adds `read_file`, `list_dir`, `glob_files`, `grep`, `write_file`, `append_file` and `edit_file`; `shell` adds `run_command`, `check_command`, `list_commands` and `stop_command`. Without `bundles`, both are added. The tools can reach only the `workspace` directory (the current directory by default), and writing files or running commands needs approval.
+`files` adds `read_file`, `list_dir`, `glob_files`, `grep`, `write_file`, `append_file` and `edit_file`; `shell` adds `run_command`, `check_command`, `list_commands` and `stop_command`. Without `bundles`, both are added. The tools can reach only the resource's folders, the first being the workspace, and writing files or running commands needs approval. A resource with `read_only: true` keeps the `files` tools from writing; commands still run in it, since a local folder cannot stop a process from writing. Two agents may name the same resource, to share files.
+
+A bundle named without a workspace (`tool_bundles: [workspace_tools]`) stops the load: there is no default folder. The same goes for an id no resource declares. An agent is identified by its name and has no id; what it owns is a resource, so renaming an agent does not move its files.
 
 ## MCP servers
 
@@ -271,18 +286,48 @@ Keys that are not recognized are ignored without an error.
 An agent can also declare:
 
 - `skills`, the skill directories it reads (see [Skills](skills.md));
-- `standing_instructions`, its `SOUL.md` and `AGENTS.md` (see [Standing instructions](standing-instructions.md)).
+- `standing_instructions`, its `SOUL.md` and `AGENTS.md` (see [Standing instructions](standing-instructions.md));
+- `resources`, ids of resources it may use that none of the above names. Naming a resource anywhere on the agent already grants it, so this list is only for extras an application acts on.
+
+Both sources read resources: skills from their `skills` folder (`path` to choose another), instructions from their top. With several, the earlier one wins. An entry can read its own way: `{id, path}` reads another folder in that resource, and, for instructions, `walk: true` reads its subfolders too.
 
 ```yaml
+resources:
+  - id: project
+    type: local_dir
+    paths: [., .domyn]
+
+agents:
+  - name: Coder
+    ...
+    skills:
+      source: {type: resource, resource: project}            # ./skills, .domyn/skills
+    standing_instructions:
+      source: {type: resource, resource: project}            # ./SOUL.md, .domyn/AGENTS.md…
+```
+
+The same folders read in two ways, the way `domyn setup` writes a project's `.domyn` and `.agents`:
+
+```yaml
+resources:
+  - id: autodiscovery
+    type: local_dir
+    paths: [.domyn, .agents]
+
+agents:
+  - name: Coder
+    ...
     skills:
       source:
-        type: local_dir
-        paths: [./skills]
+        type: resource
+        resource: [{id: autodiscovery, path: skills}]        # .domyn/skills, .agents/skills
     standing_instructions:
       source:
-        type: local_dir
-        paths: [./instructions]
+        type: resource
+        resource: [{id: autodiscovery, walk: true}]          # every AGENTS.md below them
 ```
+
+A `local_dir` source, listing folders itself, is refused in a configuration file: what an agent reads is always a resource with an id. It remains for agents built in Python.
 
 An agent that runs in another process is declared with `type: delegate` and a `transport`. See [Remote agents](remote-agents.md).
 

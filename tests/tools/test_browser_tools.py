@@ -21,6 +21,7 @@ from domyn.agents.approvals import (
     build_request,
     compute_subject,
 )
+from domyn.agents.resources import LocalDirResource
 from domyn.agents.runner import _proposed_pattern
 from domyn.agents.tools.builtin import (
     BuiltinBundleConfig,
@@ -1045,10 +1046,9 @@ class TestOptions:
         entry = BuiltinBundleConfig(
             name="x",
             bundles=["browser"],
-            workspace=str(tmp_path),
             browser={"engine": "lightpanda", "allowed_domains": ["a.com"]},
         )
-        built = entry.build()
+        built = entry.build(resource=LocalDirResource(id="w", paths=[str(tmp_path)]))
         assert built.browser is not None
         assert built.browser.options.engine == "lightpanda"
         assert built.browser.backend is built.backend

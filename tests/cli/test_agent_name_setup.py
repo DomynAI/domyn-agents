@@ -121,6 +121,24 @@ class TestTheAgentName:
         assert result is not None
         assert [a["name"] for a in result["agents"]] == ["Coder", "Helper"]
 
+    def test_a_resource_id_is_refused_and_asked_again(
+        self, console: MagicMock, theme: Theme, tmp_path: Path
+    ) -> None:
+        # The loader refuses an agent named like a resource: setup's own, or another one.
+        existing = _existing("Assistant")
+        existing["resources"] = [{"id": "stash", "type": "local_dir", "paths": ["/s"]}]
+
+        result = _run(
+            console,
+            theme,
+            [*FIELDS, "skills", "stash", "Coder", ""],
+            existing,
+            tmp_path / "config.yaml",
+        )
+
+        assert result is not None
+        assert result["entrypoint"] == "Coder"
+
     def test_a_name_longer_than_an_agent_accepts_is_refused_and_asked_again(
         self, console: MagicMock, theme: Theme, tmp_path: Path
     ) -> None:

@@ -6,6 +6,7 @@ import platform
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -27,6 +28,9 @@ from domyn.agents.tools.builtin.session import StateFolders
 
 P = f"${{{cfg.PROJECT_DIR_VAR}}}"
 BUILTINS = cfg.BUILTIN_SKILLS_DIRNAME
+INSTALLED = f"resources/{BUILTINS}"
+"""Where an export puts the built-ins: the install folder is a resource folder like any."""
+_REAL_INSTALL_DIR = cfg.skills_install_dir
 # Captured at import, before the CLI conftest replaces it for every test.
 _REAL_CHOOSE_INSTRUCTIONS = cli_setup._choose_instructions
 BUILTIN = list_builtin_skills()[0]
@@ -35,9 +39,11 @@ BUILTIN = list_builtin_skills()[0]
 @pytest.fixture(autouse=True)
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(cfg, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
-    # Where setup really installs: the selected project's own `builtin-skills/`, which
-    # the CLI conftest points elsewhere for every test.
-    monkeypatch.setattr(cli_setup, "skills_install_dir", lambda: cfg.home_dir() / BUILTINS)
+    # Where setup really installs: where the config's `builtin_skills` resource points,
+    # else the selected project's own `builtin-skills/`. The CLI conftest points it
+    # elsewhere for every test.
+    monkeypatch.setattr(cli_setup, "skills_install_dir", _REAL_INSTALL_DIR)
+    monkeypatch.setattr(cfg, "skills_install_dir", _REAL_INSTALL_DIR)
     return cfg.GLOBAL_DIR
 
 
@@ -81,15 +87,15 @@ def _config(*skill_paths: str, instructions: list[str] | None = None) -> dict[st
 
 def _skill_paths(raw: dict[str, Any] | None) -> list[str]:
     assert raw is not None
-    paths: list[str] = raw["agents"][0]["skills"]["source"]["paths"]
-    return paths
+    return list(cfg.source_paths(raw, raw["agents"][0]["skills"], "skills") or [])
 
 
-def _instruction_paths(raw: dict[str, Any] | None) -> list[str]:
-    if raw is None:
+def _instruction_paths(runtime: dict[str, Any] | None, raw: Any = None) -> list[str]:
+    """The paths of an instructions mapping: setup's own form, or as saved, read
+    through the resource it names in ``raw``."""
+    if runtime is None:
         return []
-    paths: list[str] = raw["source"]["paths"]
-    return paths
+    return list(cfg.source_paths(raw or {}, runtime, "standing_instructions") or [])
 
 
 def _console() -> Console:
@@ -114,15 +120,21 @@ def exported(tmp_path: Path) -> Path:
     soul.parent.mkdir()
     soul.write_text("be terse\n", encoding="utf-8")
 
+    assert builtin_path.parent.parent == install_dir
+    # As setup writes it: the user's skills, then the built-ins' install folder whole.
+    config = _config(instructions=[str(soul), str(instructions)])
+    config["resources"] = [
+        {"id": "skills", "type": "local_dir", "paths": [str(tmp_path / "mine")]},
+        {"id": "builtin_skills", "type": "local_dir", "paths": [str(install_dir)]},
+        {"id": "instructions", "type": "local_dir", "paths": [str(soul), str(instructions)]},
+    ]
+    agent = config["agents"][0]
+    agent["skills"] = {
+        "source": {"type": "resource", "resource": ["skills", "builtin_skills"], "path": "."}
+    }
+    agent["standing_instructions"] = {"source": {"type": "resource", "resource": "instructions"}}
     dest = tmp_path / "shared"
-    export_configuration(
-        _config(
-            str(builtin_path), str(tmp_path / "mine"), instructions=[str(soul), str(instructions)]
-        ),
-        dest,
-        cwd=tmp_path,
-        install_dir=install_dir,
-    )
+    export_configuration(config, dest, cwd=tmp_path)
     return dest
 
 
@@ -132,22 +144,23 @@ class TestImportingAnExport:
 
         imported = import_project(exported, project)
 
-        builtin_path, mine_path = _skill_paths(imported.config)
-        # The built-in in the folder the project's setup installs to, as exported:
+        mine_path, builtin_root = _skill_paths(imported.config)
+        # The built-ins' folder, as exported, is where the project's setup installs:
         # nothing is recognised or installed again.
-        assert builtin_path.startswith(f"{P}/{BUILTINS}/")
-        builtin = project / builtin_path.removeprefix(f"{P}/")
-        assert builtin.name == BUILTIN.name and (builtin / "SKILL.md").is_file()
-        assert mine_path.startswith(f"{P}/skills/")
+        assert builtin_root == f"{P}/{INSTALLED}"
+        assert (project / INSTALLED / BUILTIN.relative_path / "SKILL.md").is_file()
+        assert mine_path.startswith(f"{P}/resources/")
         assert (project / mine_path.removeprefix(f"{P}/") / "essay" / "SKILL.md").is_file()
-        assert imported.copied == [BUILTINS, "instructions", "skills"]
+        assert imported.copied == ["resources"]
 
     def test_the_instructions_keep_their_place(self, exported: Path, tmp_path: Path) -> None:
         project = tmp_path / "new"
 
         imported = import_project(exported, project)
 
-        declared = imported.config["agents"][0]["standing_instructions"]["source"]["paths"]
+        declared = _instruction_paths(
+            imported.config["agents"][0]["standing_instructions"], imported.config
+        )
         assert declared and all(p.startswith(f"{P}/") for p in declared)
         assert all((project / p.removeprefix(f"{P}/")).exists() for p in declared)
         souls = [p for p in declared if p.endswith("/SOUL.md")]
@@ -165,6 +178,25 @@ class TestImportingAnExport:
         assert not (project / cfg.PrivateFiles.CREDENTIALS).exists()
         assert not (project / ".env").exists()
 
+    def test_a_resource_folder_keeps_its_hidden_name_and_nothing_else_hidden_comes(
+        self, exported: Path, tmp_path: Path
+    ) -> None:
+        # `.domyn` and `.agents` are copied under their own names (`export._folder_name`).
+        _skill(exported / "resources" / ".domyn" / "skills" / "review", "review")
+        (exported / "resources" / ".domyn" / "skills" / "review" / ".env").write_text("K=1\n")
+        (exported / "resources" / ".domyn" / ".git").mkdir()
+        (exported / "resources" / ".domyn" / ".git" / "config").write_text("x\n")
+        (exported / "resources" / ".hidden.md").write_text("x\n")
+        project = tmp_path / "new"
+
+        import_project(exported, project)
+
+        copied = project / "resources" / ".domyn"
+        assert (copied / "skills" / "review" / "SKILL.md").is_file()
+        assert not (copied / "skills" / "review" / ".env").exists()
+        assert not (copied / ".git").exists()
+        assert not (project / "resources" / ".hidden.md").exists()
+
     @pytest.mark.parametrize("folder", list(StateFolders))
     def test_a_sessions_working_state_is_left_behind_at_the_top_only(
         self, exported: Path, tmp_path: Path, folder: str
@@ -173,7 +205,7 @@ class TestImportingAnExport:
         # session's environments and logs. Below the top it is anyone's folder.
         (exported / folder / "c1").mkdir(parents=True)
         (exported / folder / "c1" / "out.log").write_text("secret\n")
-        nested = next((exported / "skills").rglob("SKILL.md")).parent / folder
+        nested = next((exported / "resources").rglob("SKILL.md")).parent / folder
         nested.mkdir()
         (nested / "notes.md").write_text("mine\n")
         project = tmp_path / "new"
@@ -195,7 +227,7 @@ class TestRefused:
             _config(instructions=["${DOMYN_PROJECT_DIR}/../../.ssh/id_rsa"]),
             _config(instructions=["${DOMYN_PROJECT_DIR}/${HOME}/.ssh/id_rsa"]),
             {**_config(), "tools": [{"name": "t", "type": "function", "path": "/tmp/t.py"}]},
-            {**_config(), "tool_bundles": [{"name": "b", "workspace": "~"}]},
+            {**_config(), "resources": [{"id": "workspace", "type": "local_dir", "paths": ["~"]}]},
         ],
         ids=["absolute", "relative", "home", "climbing", "variable", "tool", "workspace"],
     )
@@ -333,10 +365,12 @@ class TestTheProjectSkillsPicker:
     ) -> tuple[Path, dict[str, Any]]:
         project = tmp_path / "new"
         config = import_project(exported, project).config
-        skills = cfg.expand_project_dir(config, project)["agents"][0]["skills"]
         # The project is selected while it is set up, so setup installs into its own.
-        monkeypatch.setattr(cli_setup, "skills_install_dir", lambda: project / BUILTINS)
-        return project, skills
+        monkeypatch.setattr(cli_setup, "skills_install_dir", lambda: project / INSTALLED)
+        monkeypatch.setattr(cfg, "skills_install_dir", lambda: project / INSTALLED)
+        # As setup edits them: every built-in by its own folder.
+        _, agent, _ = cfg.current_settings_from(cfg.expand_project_dir(config, project))
+        return project, agent.skills
 
     @pytest.fixture
     def picker(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
@@ -369,11 +403,12 @@ class TestTheProjectSkillsPicker:
 
         others = [skill.name for skill in list_builtin_skills() if skill.name != BUILTIN.name]
         assert others, "the catalog has one skill only: nothing would be missing"
-        assert picker["options"] == [BUILTIN.name, "essay", "poem", *others]
-        assert picker["selected"] == [BUILTIN.name, "essay", "poem"]
+        # In the config's order: the user's own skills, then the built-ins.
+        assert picker["options"] == ["essay", "poem", BUILTIN.name, *others]
+        assert picker["selected"] == ["essay", "poem", BUILTIN.name]
         # All the project's ticked, no built-in added: the paths stay as written.
         assert result == skills
-        assert sorted(p.name for p in (project / BUILTINS).rglob("SKILL.md")) == ["SKILL.md"]
+        assert sorted(p.name for p in (project / INSTALLED).rglob("SKILL.md")) == ["SKILL.md"]
 
     def test_a_missing_built_in_sits_in_its_category_with_the_exported_ones(
         self, imported: tuple[Path, dict[str, Any]], picker: dict[str, Any]
@@ -382,7 +417,7 @@ class TestTheProjectSkillsPicker:
 
         cli_setup._choose_project_skills(_console(), THEME, skills, project)
 
-        group = f"{BUILTINS}/{BUILTIN.category}"
+        group = f"{INSTALLED}/{BUILTIN.category}"
         same_category = [s.name for s in list_builtin_skills() if s.category == BUILTIN.category]
         assert picker["groups"][group] == same_category
 
@@ -390,7 +425,7 @@ class TestTheProjectSkillsPicker:
         self, imported: tuple[Path, dict[str, Any]], picker: dict[str, Any]
     ) -> None:
         project, skills = imported
-        builtin_path, folder = skills["source"]["paths"]
+        folder, builtin_path = skills["source"]["paths"]
         exported_file = Path(builtin_path) / "SKILL.md"
         exported_file.write_text(exported_file.read_text() + "\nedited\n", encoding="utf-8")
         extra = next(skill for skill in list_builtin_skills() if skill.name != BUILTIN.name)
@@ -399,8 +434,8 @@ class TestTheProjectSkillsPicker:
         result = cli_setup._choose_project_skills(_console(), THEME, skills, project)
 
         assert result is not None
-        added = project / BUILTINS / extra.relative_path
-        assert result["source"]["paths"] == [builtin_path, str(added), folder]
+        added = project / INSTALLED / extra.relative_path
+        assert result["source"]["paths"] == [folder, builtin_path, str(added)]
         assert (added / "SKILL.md").is_file()
         # Added, not reinstalled: the exported built-in keeps its edit.
         assert exported_file.read_text().endswith("\nedited\n")
@@ -427,13 +462,13 @@ class TestTheProjectSkillsPicker:
         self, imported: tuple[Path, dict[str, Any]], picker: dict[str, Any]
     ) -> None:
         project, skills = imported
-        builtin, folder = skills["source"]["paths"]
+        folder, builtin = skills["source"]["paths"]
         picker["keep"] = {BUILTIN.name, "poem"}
 
         result = cli_setup._choose_project_skills(_console(), THEME, skills, project)
 
         assert result is not None
-        assert result["source"]["paths"] == [builtin, f"{folder}/poem"]
+        assert result["source"]["paths"] == [f"{folder}/poem", builtin]
 
     def test_nothing_ticked_lists_nothing(
         self, imported: tuple[Path, dict[str, Any]], picker: dict[str, Any]
@@ -516,7 +551,11 @@ class TestTheImportedInstructions:
             _console(), THEME, self._current(project), discard=discard
         )
 
-        assert discard == [project / "instructions"]
+        # The files the folder contributes, never the folder: it may hold skills too.
+        assert discard == [
+            project / "instructions" / "SOUL.md",
+            project / "instructions" / "AGENTS.md",
+        ]
         assert (project / "instructions" / "SOUL.md").is_file()
 
     def test_an_undeclared_file_is_not_the_project_s_and_stays(
@@ -563,13 +602,13 @@ class TestTheCommand:
         project = cfg.project_dir(exported.name)
         saved = yaml.safe_load((project / cfg.CONFIG_FILENAME).read_text())
         assert saved["llm_providers"][0]["model_name"] == "imported-model"
-        builtin_path, mine_path = _skill_paths(saved)
-        assert builtin_path.startswith(f"{P}/{BUILTINS}/")
-        assert mine_path.startswith(f"{P}/skills/")
+        mine_path, builtin_root = _skill_paths(saved)
+        assert builtin_root == f"{P}/{INSTALLED}"
+        assert mine_path.startswith(f"{P}/resources/")
         # The built-in catalog was not offered, so nothing was installed: the one
         # built-in there is the exported one.
-        assert len(list((project / BUILTINS).rglob("SKILL.md"))) == 1
-        declared = saved["agents"][0]["standing_instructions"]["source"]["paths"]
+        assert len(list((project / INSTALLED).rglob("SKILL.md"))) == 1
+        declared = _instruction_paths(saved["agents"][0]["standing_instructions"], saved)
         assert declared and all(p.startswith(f"{P}/") for p in declared)
         souls = [p for p in declared if p.endswith("/SOUL.md")]
         assert len(souls) == 1 and (project / souls[0].removeprefix(f"{P}/")).is_file()
@@ -609,7 +648,7 @@ class TestTheCommand:
 
         assert result.exit_code == 0, result.output
         assert "Skills of the imported project" in result.output
-        assert len(list((cfg.project_dir(exported.name) / BUILTINS).rglob("SKILL.md"))) == 1
+        assert len(list((cfg.project_dir(exported.name) / INSTALLED).rglob("SKILL.md"))) == 1
 
     def test_instructions_not_kept_are_erased_then_asked_as_in_any_setup(
         self, exported: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answers: list[str]
@@ -643,14 +682,14 @@ class TestTheCommand:
         monkeypatch.setattr(cli_setup, "_choose_instructions", _REAL_CHOOSE_INSTRUCTIONS)
         project = cfg.project_dir(exported.name)
         # The instructions question answered with the project's own folder.
-        answers.append(str(project / "instructions"))
+        answers.append(str(project / "resources" / "brief"))
 
         result = CliRunner().invoke(app, ["setup", "--import", str(exported)])
 
         assert result.exit_code == 0, result.output
         saved = yaml.safe_load((project / cfg.CONFIG_FILENAME).read_text())
-        declared = _instruction_paths(saved["agents"][0].get("standing_instructions"))
-        assert declared and all(p.startswith(f"{P}/instructions/") for p in declared)
+        declared = _instruction_paths(saved["agents"][0].get("standing_instructions"), saved)
+        assert declared and all(p.startswith(f"{P}/resources/brief/") for p in declared)
         assert all((project / p.removeprefix(f"{P}/")).is_file() for p in declared)
 
     def test_going_back_to_keep_them_keeps_their_files(
@@ -674,7 +713,7 @@ class TestTheCommand:
         assert result.exit_code == 0, result.output
         project = cfg.project_dir(exported.name)
         saved = yaml.safe_load((project / cfg.CONFIG_FILENAME).read_text())
-        declared = _instruction_paths(saved["agents"][0]["standing_instructions"])
+        declared = _instruction_paths(saved["agents"][0]["standing_instructions"], saved)
         assert declared
         assert all((project / p.removeprefix(f"{P}/")).exists() for p in declared)
 
@@ -781,3 +820,35 @@ class TestTheCommand:
         assert result.exit_code == 1
         assert "--import cannot be combined with --show" in result.output
         assert not cfg.projects_dir().exists()
+
+
+class TestErasingImportedInstructions:
+    """Only instruction files are deleted, never a folder: an export puts what one
+    folder holds in one place, so the folder of an instruction may hold skills too."""
+
+    def test_a_folder_loses_its_instructions_and_keeps_its_skills(self, tmp_path: Path) -> None:
+        folder = tmp_path / "project" / "resources" / "domyn"
+        _skill(folder / "skills" / "essay", "essay")
+        (folder / "SOUL.md").write_text("soul\n")
+        (folder / "deep").mkdir()
+        (folder / "deep" / "AGENTS.md").write_text("deep\n")
+        current = {
+            "source": {
+                "type": "local_dir",
+                "paths": [str(folder), str(folder / "deep" / "AGENTS.md")],
+            }
+        }
+        discard: list[Path] = []
+
+        with patch.object(cli_setup, "_choose_instructions", lambda *_: None):
+            cli_setup._choose_imported_instructions(_console(), THEME, current, discard=discard)
+        for path in discard:
+            cli_setup._discard_imported(path, tmp_path / "project")
+
+        assert sorted(p.relative_to(folder).as_posix() for p in discard) == [
+            "SOUL.md",
+            "deep/AGENTS.md",
+        ]
+        assert not (folder / "SOUL.md").exists()
+        assert not (folder / "deep").exists(), "a folder left empty goes too"
+        assert (folder / "skills" / "essay" / "SKILL.md").is_file()

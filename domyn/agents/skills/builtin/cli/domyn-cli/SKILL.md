@@ -43,7 +43,7 @@ place of `~/.domyn/` entirely — see *Which configuration this session runs* be
 | `~/.domyn/config.yaml` | provider, model, default agent, tools, compaction. A `./.domyn/config.yaml` in the directory the CLI was started from is **not** read: a folder's own configuration is a project (`--project`) or a file passed to `domyn run` |
 | `~/.domyn/credentials` | API keys as `NAME=value`, permissions 0600. Written by `domyn setup` |
 | `~/.domyn/builtin-skills/` | the built-in skills chosen in `domyn setup`, copied from the package. **`domyn setup` deletes and rewrites this directory every time**, so nothing of the user's own belongs here. It is not scanned: `config.yaml` lists each skill in it by absolute path |
-| `SOUL.md`, `AGENTS.md` (or `AGENT.md`) | standing instructions: identity, tone and preferences (`SOUL.md`, follows the user), what the agent is working on (`AGENTS.md`, follows the task). Read from the paths under `standing_instructions.source.paths` in `config.yaml`: the files `domyn setup` was pointed at, plus `./.domyn` and `./.agents` (subfolders included) when the user turned that on. **`~/.domyn/SOUL.md` and `~/.domyn/AGENTS.md` are not read** unless setup was given their path, and neither are the ones at a project's top. `/config` lists the files in use |
+| `SOUL.md`, `AGENTS.md` (or `AGENT.md`) | standing instructions: identity, tone and preferences (`SOUL.md`, follows the user), what the agent is working on (`AGENTS.md`, follows the task). Read from the `paths` of the `instructions` resource in `config.yaml` (the agent's `standing_instructions.source` names it): the files `domyn setup` was pointed at, plus `./.domyn` and `./.agents` (subfolders included) when the user turned that on. **`~/.domyn/SOUL.md` and `~/.domyn/AGENTS.md` are not read** unless setup was given their path, and neither are the ones at a project's top. `/config` lists the files in use |
 | `~/.domyn/approvals.yaml` | tool approvals the user granted with "always" |
 | `~/.domyn/state.yaml` | settings remembered between sessions (`verbose`, `auto_approve`), written by `/verbose`, `/auto`, Shift+Tab and `-v`. A project has its own in its folder. Never exported. Do not edit it to turn auto-approve on for the user: tell them to use `/auto` |
 | `~/.domyn/projects/<folder>-<hash>/approvals.yaml` | approvals for this project only, one file per directory the CLI starts in. `./.domyn/approvals.yaml` is not read. Not used when the CLI is started from the home directory itself |
@@ -99,9 +99,9 @@ hand.
 | provider / model / key, through `/model` | immediately | `/model` rewrites the file and reloads the agent |
 | a skill file **edited** in a folder the config already lists | **next message** | listed skills are read again on every turn. Suggest `/clear` if the old version was already read into this conversation |
 | a **new** skill added to `./.domyn/skills` or `./.agents/skills` | **next message** with autodiscovery on (`.domyn/skills` and `.agents/skills` in the paths); otherwise once it is listed in `config.yaml` | see *Adding a skill* |
-| a new `skills.source.paths` entry | **next message** | it is part of `config.yaml` |
+| a new entry in the `paths` of the `skills` resource | **next message** | it is part of `config.yaml` |
 | `SOUL.md` / `AGENTS.md` edited, created or deleted in a directory the session reads them from | **next message** | they are read again on every turn, nothing to reload. `/config` shows what is loaded right now |
-| `standing_instructions.source.paths` in `config.yaml` | **next message** | it is part of `config.yaml` |
+| the `paths` of the `instructions` resource in `config.yaml` | **next message** | it is part of `config.yaml` |
 | `credentials`, `.env`, exported env vars | **next start only** | read once, at startup (`/model` is the exception: a key typed there is used right away) |
 | approvals | right away | managed with `/approvals` |
 | `state.yaml` edited by hand | **next start only** | read once, at startup; `/verbose` and `/auto` write it |
@@ -116,18 +116,20 @@ next message.
 ## Adding a skill
 
 A skill is a markdown file with YAML frontmatter. **A skill is loaded only when
-something names it**: the agent's `skills.source.paths` in `config.yaml`. **Both are
+something names it**: the `paths` of the `skills` resource in `config.yaml`, which the agent's `skills.source` names. **Both are
 read again before every message**: `config.yaml` itself
 (when it changed, the agent is rebuilt from it, so a path added during a session is
 in use from the next message, no restart), and the skill files inside the listed
 paths (so a new or edited skill in a listed folder is too). `/skills` and `/skill`
 read them the same way when used.
 
-Two entries are special: **`.domyn/skills`** and **`.agents/skills`** in the paths are
-*autodiscovery*, turned on by `domyn setup` — "load `./.domyn/skills` (domyn's folder)
-and `./.agents/skills` (the folder other agent tools share) of the folder `domyn run`
-is started in". Being listed folders, a skill created in either loads from the next
-turn, with no change to the config. If both hold a skill with the same name,
+One resource is special: **`autodiscovery`** (`paths: [.domyn, .agents]`), turned on by
+`domyn setup` — "load `./.domyn/skills` (domyn's folder) and `./.agents/skills` (the
+folder other agent tools share) of the folder `domyn run` is started in". The skills
+source reads its `skills/` folders (`{id: autodiscovery, path: skills}`), the
+instructions source walks it (`{id: autodiscovery, walk: true}`). Being folders it
+reads every turn, a skill created in either loads from the next turn, with no change
+to the config. If both hold a skill with the same name,
 `./.domyn/skills` wins. The user can turn both on or off inside a session with
 `/skills-autodiscover on|off` (bare `/skills-autodiscover` shows the current state), which writes
 the same entries setup does and applies from the next message.
@@ -150,8 +152,8 @@ Steps:
    by the existing skill (see precedence below); do it on purpose or not at all.
    Then decide where the new skill goes:
 
-   - **Autodiscovery is on** (the `skills` row lists `.domyn/skills` and
-     `.agents/skills`): create it in **`./.domyn/skills/<name>/`**, relative to the
+   - **Autodiscovery is on** (the skills source names the `autodiscovery` resource):
+     create it in **`./.domyn/skills/<name>/`**, relative to the
      folder the CLI was started in. Nothing else to do: it is loaded from the next
      message.
    - **Autodiscovery is off**: create it in the **`skills/` folder of the
@@ -172,18 +174,22 @@ Steps:
    marked unavailable.
    **`external_files` must list every file the skill uses** besides its `SKILL.md`:
    `domyn export` copies a skill as its `SKILL.md` plus exactly those files, so a
-   file left off the list stays behind and the exported skill breaks.
+   file left off the list stays behind and the exported skill breaks. A listed file
+   outside the folder the skill is read through (a shared helper two folders above a
+   skill listed by its own folder) stops the export: list the folder holding both.
 3. **Create it with the right tool.** `write_file` can create the file in both
    places (the user is asked to approve): `./.domyn/skills` is inside the workspace,
    and the configuration's `skills/` folder is reachable while it holds an installed
    built-in skill. If `write_file` refuses the path (no built-in installed there),
    create it with a shell command instead.
 4. **With autodiscovery off, add the skill to the config.** Append the new skill's
-   folder to the `paths` list under the root agent's `skills: source:` in the file
-   `/config` names. In a project, write it as
+   folder to the `paths` of the `skills` resource (under `resources:`) in the file
+   `/config` names; if there is none, add `{id: skills, type: local_dir, paths: [...]}`
+   and the id `skills` to the root agent's `skills: source: resource:` list, before
+   `builtin_skills`. In a project, write it as
    `${DOMYN_PROJECT_DIR}/skills/<name>`, the way the installed skills are written
    there, so the project still works moved or exported; without a project, write the
-   absolute path. Put it before the built-in skills if it should win a name clash.
+   absolute path. The built-ins are another resource, read after it.
    The file tools cannot open the configuration folder's `config.yaml`, so this is a
    shell command the user approves; keep the YAML valid, and change nothing else.
 5. **Check, then tell the user it is loaded from their next message.** With
@@ -200,10 +206,10 @@ Steps:
      so the question does not come as a surprise.
 
 **Where skills come from, in precedence order** (if two have the same name, the
-first one found wins): the paths in the agent's `skills.source.paths` in
-`config.yaml`, in the order listed. `domyn setup` writes `.domyn/skills` and
-`.agents/skills` (autodiscovery) first, then the user's own skills it was pointed at,
-then the built-in ones it installed, so a skill of the user's beats a built-in of the
+first one found wins): the resources the root agent's skills source names, in that
+order. `domyn setup` names `autodiscovery` (`.domyn/skills`, `.agents/skills`) first,
+then `skills` (the user's own skills it was pointed at), then `builtin_skills` (the
+built-in ones it installed), so a skill of the user's beats a built-in of the
 same name.
 
 Nothing else is searched. The skills inside the package are not a fallback: they are
@@ -220,8 +226,9 @@ folder) is named at startup as "Skill not found: ..." — except `.domyn/skills`
 project (`domyn setup --project <name>`, then `domyn run --project <name>`).
 
 **The built-in skills** are chosen in `domyn setup`, which copies each chosen one
-(and the files it shares with others) into `~/.domyn/builtin-skills/` and lists it in
-`config.yaml`. The project's own skills are listed where they are: nothing is
+(and the files it shares with others) into the folder of the `builtin_skills` resource
+in `config.yaml` (`~/.domyn/builtin-skills/` by default), read whole: it holds exactly
+the chosen ones. `domyn skill remove` cannot unlist one built-in: untick it in setup. The project's own skills are listed where they are: nothing is
 copied. To change either choice, the user re-runs `domyn setup`, which pre-ticks the
 current ones. For the built-ins it rewrites the directory from scratch: a skill left
 unticked disappears, and one that changed in the package arrives in its new version.
@@ -327,8 +334,9 @@ says which variable is missing.
 - `domyn setup` and `/model` **rewrite the whole file** from the fields they know
   about: the provider's type, model, url, `max_tokens` and `context_window`; the
   agent's name, description, instruction, stream, skills and
-  `standing_instructions`; the tool bundle's bundles, workspace, sandbox, isolation,
-  `allowed_env` and `browser` options; and the compaction settings. Anything else is
+  `standing_instructions`; the tool bundle's bundles, sandbox, isolation,
+  `allowed_env` and `browser` options; the `workspace`, `skills` and `instructions`
+  resources (any other resource is kept); and the compaction settings. Anything else is
   dropped, e.g. `mcp_servers`, `hooks`, `tools`, extra agents, other
   `generation_params` (temperature, …) and provider `headers`. A custom `${MY_VAR}`
   key reference is replaced by the provider's usual variable name. If the file has
@@ -352,4 +360,4 @@ To start over: `domyn setup` (it pre-fills the current values; Enter keeps them)
 | "Tool-call arguments still malformed after 3 retries" | the answer hit `max_tokens`. Raise it through `/model` |
 | the conversation hits the model's limit and is never compacted | no `context_window` in the provider block (or it is spelled `max_model_len`). Add `context_window`; it applies from the next message |
 | `/model` says it only applies to the default configuration | the session was started from a file. Edit that file; it applies from the next message |
-| a file outside the project is refused | workspace containment. Start the CLI in that directory or set `workspace` |
+| a file outside the project is refused | workspace containment. Start the CLI in that directory or set the `workspace` resource's `paths` |

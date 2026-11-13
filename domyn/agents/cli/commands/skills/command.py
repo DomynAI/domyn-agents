@@ -16,13 +16,16 @@ from domyn.agents.interfaces.cli import Theme
 from domyn.agents.interfaces.cli.config import (
     collect_skill_workspace_roots,
     config_path,
+    drop_empty_resources,
     is_skill_autodiscovery,
     read_raw_config,
     skills_install_dir,
+    source_path_lists,
+    source_paths,
 )
 from domyn.agents.interfaces.cli.skills_view import find_skill, render_skills
 from domyn.agents.loader import interpolate_env_vars
-from domyn.agents.skills import LocalDirSkillSource, SkillIndex, SkillNotFoundError, SkillQuery
+from domyn.agents.skills import SkillIndex, SkillNotFoundError, SkillQuery
 from domyn.agents.skills.layout import listed_path_is_linked
 
 console = Console()
@@ -120,33 +123,35 @@ def _remove(theme: Theme, name: str, path: Path, raw: dict[str, Any] | None) -> 
     own = {skill_file, skill_file.parent} if skill_file.name == "SKILL.md" else {skill_file}
     explicit: list[str] = []
     covering: list[str] = []
-    local_dir_type = LocalDirSkillSource.model_fields["type"].default
+
+    def resolved(entry: Any) -> Path | None:
+        """A path as the loader reads it: `${VAR}` filled in, relative to the current
+        folder, and no symlink followed (the loader loads nothing through one)."""
+        try:
+            listed = Path(interpolate_env_vars(str(entry), "the configuration")).expanduser()
+        except ValueError:
+            return None
+        return None if listed_path_is_linked(listed) else listed.resolve()
+
     for agent_dict in raw.get("agents") or []:
         skills = agent_dict.get("skills") if isinstance(agent_dict, dict) else None
-        source = skills.get("source") if isinstance(skills, dict) else None
-        if not isinstance(source, dict) or source.get("type") != local_dir_type:
-            continue
-        paths = source.get("paths")
-        if not isinstance(paths, list):
-            continue
-        # Over a copy, since a matching entry is removed from `paths` as it goes.
-        for entry in list(paths):
-            # Read as the loader reads it: `${VAR}` filled in, relative to the current
-            # folder, and no symlink followed (the loader loads nothing through one).
-            try:
-                listed = Path(interpolate_env_vars(str(entry), "the configuration")).expanduser()
-            except ValueError:
-                continue
-            if listed_path_is_linked(listed):
-                continue
-            resolved = listed.resolve()
-            if resolved in own:
-                explicit.append(entry)
-                paths.remove(entry)
-            elif resolved in skill_file.parents:
+        # Unlisted from the resources the agent's skills source reads each path of
+        # whole (what `domyn setup` writes for the user's own).
+        for paths in (holder["paths"] for holder in source_path_lists(raw, skills, "skills")):
+            # Over a copy, since a matching entry is removed from `paths` as it goes.
+            for entry in list(paths):
+                if resolved(entry) in own:
+                    explicit.append(entry)
+                    paths.remove(entry)
+        # Every folder the source reads, subpaths included (`.domyn/skills` of the
+        # autodiscovery resource): one holding the skill is named, never edited.
+        for entry in source_paths(raw, skills, "skills") or []:
+            where = resolved(entry)
+            if where is not None and where not in own and where in skill_file.parents:
                 covering.append(entry)
 
     if explicit:
+        drop_empty_resources(raw)
         path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
         listed_entries = ", ".join(dict.fromkeys(explicit))
         console.print(
@@ -167,7 +172,15 @@ def _remove(theme: Theme, name: str, path: Path, raw: dict[str, Any] | None) -> 
     if covering:
         # Listed only through a folder: unlisting that would unload its other skills too.
         autodiscovered = next((e for e in covering if is_skill_autodiscovery(e)), None)
-        if autodiscovered is not None:
+        install = skills_install_dir().expanduser().resolve()
+        if install in skill_file.parents:
+            # The built-ins are read through the folder setup installs them into.
+            message = (
+                f"'{descriptor.name}' is a built-in skill, loaded from {install} with every "
+                "other built-in setup installed. To stop loading it, run `domyn setup` and "
+                "untick it."
+            )
+        elif autodiscovered is not None:
             message = (
                 f"'{descriptor.name}' is loaded by ./{Path(str(autodiscovered)).as_posix()} "
                 f"autodiscovery, not listed on its own in {path}. To stop loading it, turn "
