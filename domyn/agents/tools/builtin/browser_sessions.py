@@ -32,15 +32,6 @@ _REF = re.compile(
     r"^@?(e\d{1,7})$"
 )  # Match any element that looks like an agent-browser ref e + a number with 1 to 7 digits optionally starting with a `@`
 
-# One line of a snapshot's text, read from its start: the role, the label when
-# there is one (a JSON string), then the attribute group holding the ref. The
-# label is consumed before the group is looked for, so page text such as
-# `[ref=e5]` inside a label names no ref.
-_SNAPSHOT_LINE = re.compile(
-    r'^\s*- \S+(?: (?P<label>"(?:[^"\\]|\\.)*"))? \[(?:[^\]"]*, )?ref=(?P<ref>e\d{1,7})[,\]]',
-    re.MULTILINE,
-)
-
 INSTALL_HINT = (
     "It ships with the standalone build of domyn. Otherwise install it with "
     "`npm install -g agent-browser` (or `brew install agent-browser`)."
@@ -445,6 +436,14 @@ class BrowserSessions:
     # or ` --version` is typed, measured on 0.38.1). Not a list of its flags,
     # which the next release can outgrow.
     _OPTION_SHAPED: ClassVar[re.Pattern[str]] = re.compile(r"-\S*")
+    # One line of a snapshot's text, read from its start: the role, the label when
+    # there is one (a JSON string), then the attribute group holding the ref. The
+    # label is consumed before the group is looked for, so page text such as
+    # `[ref=e5]` inside a label names no ref.
+    _SNAPSHOT_LINE: ClassVar[re.Pattern[str]] = re.compile(
+        r'^\s*- \S+(?: (?P<label>"(?:[^"\\]|\\.)*"))? \[(?:[^\]"]*, )?ref=(?P<ref>e\d{1,7})[,\]]',
+        re.MULTILINE,
+    )
 
     _NO_PAGE: ClassVar[str] = (
         "No page is open in this conversation's browser: none was opened yet, or the browser "
@@ -791,7 +790,7 @@ class BrowserSessions:
         #   - its JSON name is empty (a name the browser gives always wins).
         # The label is a JSON string, quotes and escapes included, so
         # `json.loads` turns `"say \"hi\""` into `say "hi"`.
-        for line in _SNAPSHOT_LINE.finditer(text):
+        for line in self._SNAPSHOT_LINE.finditer(text):
             key, label = line["ref"], line["label"]
             if label and key in refs and not refs[key][1]:
                 try:
