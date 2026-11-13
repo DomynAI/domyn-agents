@@ -308,6 +308,11 @@ class BaseLLMProvider(BaseModel, ABC):
         ),
     )
 
+    max_reply_keys: ClassVar[tuple[str, ...]] = ("max_tokens", "max_completion_tokens")
+    """The request keys that carry the reply's ceiling (``max_reply_tokens``): the
+    chat-completions spellings, ``max_completion_tokens`` being OpenAI's newer one. A
+    provider whose API names it otherwise declares its own."""
+
     context_window_catalog: ClassVar[str | None] = None
     """The models.dev provider whose catalogue knows this provider's windows by model
     id. Only for hosted APIs: on a self-hosted endpoint the window is how the server was
@@ -332,6 +337,26 @@ class BaseLLMProvider(BaseModel, ABC):
     append_text_last_message: str | None = Field(
         default=None, description="Text to append to the last user message"
     )
+
+    @property
+    def max_reply_tokens(self) -> int | None:
+        """The ceiling on the reply this provider asks for, or `None` if it sets none.
+
+        Read from what the request is built from: ``generation_params``, then ``body``,
+        which is merged into the payload after it and so wins, under the provider's
+        ``max_reply_keys``. Only a positive integer counts (``bool`` is an ``int``).
+        Compaction reserves this much room under the window, so a request leaves the
+        reply the room it asks for.
+        """
+        limit: int | None = None
+        for source in (getattr(self, "generation_params", None), getattr(self, "body", None)):
+            if not isinstance(source, dict):
+                continue
+            for key in self.max_reply_keys:
+                value = source.get(key)
+                if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                    limit = value
+        return limit
 
     @model_validator(mode="before")
     @classmethod

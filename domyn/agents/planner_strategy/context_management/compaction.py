@@ -65,19 +65,26 @@ counting on another basis — a cache-excluded `input_tokens` reads 4 tokens on 
 prompt of 8,561 — and trusting it would mean never compacting at all."""
 
 
+DEFAULT_RESERVE_TOKENS = 16_384
+"""The reserve when neither the policy nor the provider sets one."""
+
+
 class CompactionPolicy(BaseModel):
     """When to act, and how much to keep."""
 
     enabled: bool = True
 
-    reserve_tokens: int = Field(
-        default=16_384,
+    reserve_tokens: int | None = Field(
+        default=None,
         gt=0,
         description=(
             "Space reserved for the reply. The threshold is `window - reserve`. "
-            "Absolute rather than a percentage: it reserves what *one* reply "
-            "needs, which does not scale with the window. A percentage would need "
-            "a second parameter for small windows."
+            "`None`, the default, reserves what the provider asks the reply to fit "
+            "in (`max_reply_tokens`, its `max_tokens`), else `DEFAULT_RESERVE_TOKENS`: "
+            "a fixed reserve under a larger `max_tokens` let a request just under the "
+            "threshold ask for more than the window holds. Absolute rather than a "
+            "percentage: it reserves what *one* reply needs, which does not scale "
+            "with the window."
         ),
     )
     keep_recent_tokens: int = Field(
@@ -403,6 +410,21 @@ def _context_window(agent: Any) -> int | None:
     if isinstance(window, int) and not isinstance(window, bool) and window > 0:
         return window
     return None
+
+
+def _reserve(policy: "CompactionPolicy", agent: Any) -> int:
+    """The room kept for the reply: the policy's when it sets one, else the provider's
+    reply ceiling, else ``DEFAULT_RESERVE_TOKENS``.
+
+    Validated as ``_context_window`` validates the window, for the same reason: a test
+    double's attribute is a mock, and must not become a reserve.
+    """
+    if policy.reserve_tokens is not None:
+        return policy.reserve_tokens
+    limit = getattr(getattr(agent, "llm_provider", None), "max_reply_tokens", None)
+    if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
+        return limit
+    return DEFAULT_RESERVE_TOKENS
 
 
 def _adopt_window(agent: Any, window: int | None) -> None:
@@ -759,7 +781,7 @@ class Compactor(BaseModel):
         fixed += int(self.estimator.estimate_tool_definitions(tool_defs or []))
         correction, base = self._anchor(state, agent)
         current = conversation + fixed + correction
-        reserve = self.policy.reserve_tokens
+        reserve = _reserve(self.policy, agent)
         return Budget(
             context_window=window if window is not None else reserve + current // 2,
             reserve_tokens=reserve,
@@ -1134,7 +1156,7 @@ class Compactor(BaseModel):
             estimator=self.estimator,
             context_window=window,
             threshold_tokens=(
-                _threshold(window, self.policy.reserve_tokens)
+                _threshold(window, _reserve(self.policy, agent))
                 if self.active and window is not None
                 else None
             ),
@@ -1747,7 +1769,10 @@ class CompactionConfig(BaseModel):
     )
     reserve_tokens: int | None = Field(
         default=None,
-        description="Headroom kept below the window. `None` uses the framework default.",
+        description=(
+            "Headroom kept below the window. `None` reserves the provider's `max_tokens`, "
+            "or the framework default when the provider sets none."
+        ),
     )
     keep_recent_tokens: int | None = Field(
         default=None,
