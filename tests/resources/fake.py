@@ -1,6 +1,6 @@
 """A resource that is not on this machine, held in memory.
 
-Stands in for a platform's own type (``platform_fs``): what the library must handle
+Stands in for a type an application registers itself: what the library must handle
 for any resource without local folders — read through the file-store view, refused
 as a place to run commands — is tested against it.
 """

@@ -46,8 +46,8 @@ def parse_resources(entries: Iterable[Any]) -> dict[str, Resource]:
 
 
 def check_agent_names(declared: Mapping[str, Resource], agent_names: Iterable[str]) -> None:
-    """Rule 1, second half: an agent with no resource is keyed by its name on the
-    platform, so the two namespaces must not meet."""
+    """Rule 1, second half: an application may key the files of an agent with no
+    resource by its name, so the two namespaces must not meet."""
     clashing = sorted(set(declared) & set(agent_names))
     if clashing:
         raise ResourceError(
