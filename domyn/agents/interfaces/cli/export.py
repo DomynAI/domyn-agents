@@ -1067,9 +1067,6 @@ class PrivatePlaces:
             return cls(homes=frozenset(), projects=None)
 
 
-_STATE_FOLDER_NAMES = frozenset(StateFolders)
-
-
 def is_private(path: Path, places: PrivatePlaces) -> bool:
     """Whether ``path`` is one of the files a domyn home keeps for its owner alone:
     the credentials, the approvals, the state file (what the CLI remembers
@@ -1092,7 +1089,7 @@ def is_private(path: Path, places: PrivatePlaces) -> bool:
     except (OSError, RuntimeError):
         return False
     return any(
-        folder.name in _STATE_FOLDER_NAMES
+        folder.name in StateFolders
         and (folder.parent in places.homes or folder.parent.parent == places.projects)
         for folder in (resolved, *resolved.parents)
     )

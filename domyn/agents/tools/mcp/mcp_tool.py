@@ -550,10 +550,7 @@ class MCPTool(FunctionTool):
                         probe_client: Client | None = None  # type: ignore[type-arg]
                         while True:
                             # Woken by the call finishing, not by a sleep the TaskGroup
-                            # would otherwise sit out in full. Not asyncio.wait_for: on
-                            # Python 3.11 it drops a cancellation that arrives as the wait
-                            # completes, and this loop then ran on forever with the
-                            # TaskGroup waiting for it.
+                            # would otherwise sit out in full.
                             try:
                                 async with asyncio.timeout(self._timeout_ping):
                                     await call_done.wait()

@@ -1558,9 +1558,8 @@ async def test_mcp_tool_health_check_stops_when_its_cancellation_is_lost(make_mo
     """The health check stops once the call is over, even when its own cancellation
     never reaches it.
 
-    Python 3.11's asyncio.wait_for drops a cancellation that arrives as the awaited
-    ping completes; the loop then pinged forever and the cancelled step never ended.
-    Here the ping swallows the cancellation itself, which loses it on every version.
+    Here the ping swallows the cancellation itself: a loop that waited for it would
+    ping forever and the cancelled step would never end.
     """
     tool = MCPTool(tool_name="progress_then_stall_tool", server_url="https://api.example.com/mcp")
     tool._tool_schema = {"properties": {}}
