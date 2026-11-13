@@ -796,10 +796,11 @@ class BrowserSessions:
             if label and key in refs and not refs[key][1]:
                 try:
                     refs[key] = (refs[key][0], str(json.loads(label)))
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as e:
                     get_logger().warning(
-                        "Failed to decode JSON label: %s, while visiting %s", label, url
+                        f"Could not decode the snapshot label of @{key}: {type(e).__name__}"
                     )
+                    get_logger().debug(f"Label {label} on {url}, detail: {e}")
         return url, text, refs
 
     async def take_snapshot(self, conversation_id: str, full: bool, title: str = "") -> str:
