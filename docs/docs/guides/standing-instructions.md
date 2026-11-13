@@ -120,7 +120,7 @@ When such an agent is run with `domyn run`, its source is used as it is declared
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `paths` | list of paths | `[]` | Directories, from which `SOUL.md` and `AGENTS.md` (or `AGENT.md`) are read, and files, read whatever their name. Only the files directly in a directory are read, except those also in `walk`. `~` is expanded. |
-| `walk` | list of paths | `[]` | Entries of `paths` searched with their subfolders, domyn's own state folders skipped. |
+| `walk` | list of paths | `[]` | Entries of `paths` searched with their subfolders, hidden and dependency folders skipped and no link followed. |
 
 `resource` source, in a YAML file that declares [`resources`](../reference/yaml-schema.md#resources):
 
