@@ -46,7 +46,12 @@ from domyn.agents.planner_strategy.context_management.compaction import Compacti
 from domyn.agents.skills import LocalDirSkillSource
 from domyn.agents.skills.catalog import BUILTIN_SKILLS_ROOT
 from domyn.agents.skills.layout import listed_path_is_linked
-from domyn.agents.tools.builtin import BUNDLE_TOOL_NAMES, DEFAULT_BUNDLES, BrowserOptions
+from domyn.agents.tools.builtin import (
+    BUNDLE_TOOL_NAMES,
+    DEFAULT_BUNDLES,
+    BrowserOptions,
+    DockerBackendOptions,
+)
 
 # `DOMYN_PROJECT_DIR`, defined with the tools, which read it: always set by `use_project`, to
 # the folder that plays ~/.domyn for the session (the selected project's, else ~/.domyn
@@ -252,10 +257,11 @@ class AgentConfig(BaseModel):
     the answer can be remembered for the conversation. See
     ``domyn.agents.tools.builtin``."""
 
-    sandbox: str = "local"
-    """Where `run_command` runs. Only ``local`` exists today — on this machine,
-    with no isolation. Named now so an isolated backend can be selected later
-    without a config migration, and so what you are running under is visible in
+    backend: str = "auto"
+    """Where `run_command` runs: ``auto`` (a Docker container when Docker can be
+    used, else this machine, with a warning), ``docker`` (a container per
+    conversation that can write only the workspace, or the session does not start;
+    see ``docker`` below) or ``local`` (this machine, no isolation). Visible in
     `/config` rather than implied."""
 
     isolate_environment: bool = True
@@ -285,6 +291,10 @@ class AgentConfig(BaseModel):
     """How the ``browser`` bundle launches and fences its browser. Only read
     when ``browser`` is in ``tools``, and kept when it is not, so turning
     browsing off and on again does not lose an allowlist."""
+
+    docker: DockerBackendOptions = Field(default_factory=DockerBackendOptions)
+    """How the Docker backend runs. Only read when ``backend`` is not ``local``, and
+    kept when it is, so switching back and forth does not lose an allowlist."""
 
     stream: bool = True
     """Print the answer as it is generated rather than when it is finished.
@@ -877,7 +887,7 @@ def configuration_v1_dict_from(
                 "name": CLI_DEFAULT_TOOL_BUNDLE_NAME,
                 "bundles": list(agent.tools),
                 "workspace": agent.workspace,
-                "sandbox": agent.sandbox,
+                "backend": agent.backend,
                 "isolate_environment": agent.isolate_environment,
                 "allowed_env": list(agent.allowed_env),
             }
@@ -886,6 +896,9 @@ def configuration_v1_dict_from(
         browser = agent.browser.model_dump(exclude_defaults=True)
         if browser:
             config["tool_bundles"][0]["browser"] = browser
+        docker = agent.docker.model_dump(exclude_defaults=True)
+        if docker:
+            config["tool_bundles"][0]["docker"] = docker
         agent_dict["tool_bundles"] = [CLI_DEFAULT_TOOL_BUNDLE_NAME]
 
     kept = _keep_unowned(config, existing)
@@ -1014,6 +1027,21 @@ def _entrypoint_agent_and_provider(raw: dict[str, Any]) -> tuple[dict[str, Any],
     return agent_dict, provider_dict
 
 
+def _docker_options(raw: Any) -> DockerBackendOptions:
+    """The bundle's ``docker`` block, or the defaults when it cannot be read.
+    Lenient for the same reason as ``_browser_options``."""
+    if not raw:
+        return DockerBackendOptions()
+    try:
+        return DockerBackendOptions.model_validate(raw)
+    except ValidationError as exc:
+        get_logger().warning(
+            f"ignoring an invalid docker block in the config: {type(exc).__name__}"
+        )
+        get_logger().debug(f"docker block detail: {exc}")
+        return DockerBackendOptions()
+
+
 def _browser_options(raw: Any) -> BrowserOptions:
     """The bundle's ``browser`` block, or the defaults when it cannot be read.
 
@@ -1072,7 +1100,7 @@ def current_settings_from(
         description=agent_dict.get("description", default_agent.description),
         instruction=agent_dict.get("instruction", default_agent.instruction),
         tools=tools,
-        sandbox=bundle.get("sandbox", default_agent.sandbox) if bundle else default_agent.sandbox,
+        backend=bundle.get("backend", default_agent.backend) if bundle else default_agent.backend,
         isolate_environment=bundle.get("isolate_environment", default_agent.isolate_environment)
         if bundle
         else default_agent.isolate_environment,
@@ -1083,6 +1111,7 @@ def current_settings_from(
         # here is a field every `domyn setup` and `/model` silently dropped.
         allowed_env=list(bundle.get("allowed_env") or []) if bundle else default_agent.allowed_env,
         browser=_browser_options(bundle.get("browser") if bundle else None),
+        docker=_docker_options(bundle.get("docker") if bundle else None),
         stream=agent_dict.get("stream", default_agent.stream),
         skills=agent_dict.get("skills", default_agent.skills),
         standing_instructions=agent_dict.get(
@@ -1417,6 +1446,19 @@ def _oauth_provider_items(raw: dict[str, Any]) -> list[ConfigItem]:
     return items
 
 
+def _docker_fields(options: DockerBackendOptions) -> list[tuple[str, str]]:
+    return [
+        ("docker image", options.image),
+        (
+            "docker allowed_network",
+            ", ".join(options.allowed_network) + " (and the package registries)"
+            if isinstance(options.allowed_network, list)
+            else options.allowed_network,
+        ),
+        ("docker memory / cpus", f"{options.memory} / {options.cpus:g}"),
+    ]
+
+
 def _browser_fields(options: BrowserOptions) -> list[tuple[str, str]]:
     return [
         ("browser engine", options.engine),
@@ -1480,11 +1522,13 @@ def _tool_bundle_items(raw: dict[str, Any]) -> list[ConfigItem]:
             continue
         fields = [
             ("bundles", ", ".join(b.get("bundles") or []) or "(none)"),
-            ("sandbox", str(b.get("sandbox", "local"))),
+            ("backend", str(b.get("backend", "auto"))),
             ("workspace", b.get("workspace") or "(cwd)"),
             ("isolate_environment", str(b.get("isolate_environment", True))),
             ("allowed_env", ", ".join(b.get("allowed_env") or []) or "(none)"),
         ]
+        if str(b.get("backend", "auto")) != "local":
+            fields += _docker_fields(_docker_options(b.get("docker")))
         if "browser" in (b.get("bundles") or []):
             fields += _browser_fields(_browser_options(b.get("browser")))
         items.append(ConfigItem(name=str(b.get("name", "?")), fields=fields))

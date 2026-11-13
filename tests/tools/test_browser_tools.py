@@ -303,7 +303,7 @@ class TestTheCommandLine:
     async def test_a_caller_can_put_the_browsers_files_elsewhere(
         self, fake: ScriptedBrowser
     ) -> None:
-        """A sandbox whose commands run outside the workspace passes an absolute
+        """A backend whose commands run outside the workspace passes an absolute
         directory; the saved page text follows it."""
         sessions = BrowserSessions(fake, BrowserOptions(), browser_dir="/tmp/browser-work")
         sid = session_name(CID)
@@ -1147,6 +1147,7 @@ class TestOptions:
             name="x",
             bundles=["browser"],
             workspace=str(tmp_path),
+            backend="local",
             browser={"engine": "lightpanda", "allowed_domains": ["a.com"]},
         )
         built = entry.build()

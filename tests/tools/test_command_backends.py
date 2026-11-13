@@ -133,10 +133,10 @@ class TestResolvingABackend:
 
     def test_an_unknown_name_refuses(self, workspace: Workspace) -> None:
         """Unlike an unknown tool bundle, which degrades with a warning. Handing
-        a local backend to someone who asked to be sandboxed gives them the
+        a local backend to someone who asked for a container gives them the
         illusion of a boundary, which is worse than having none."""
         with pytest.raises(BackendUnavailableError, match="Refusing to fall back"):
-            build_backend("docker", workspace)
+            build_backend("firecracker", workspace)
 
     def test_the_bundle_refuses_too(self, tmp_path: Path) -> None:
         with pytest.raises(BackendUnavailableError):
@@ -146,7 +146,7 @@ class TestResolvingABackend:
         from domyn.agents.tools.builtin import BuiltinBundleConfig
 
         config = BuiltinBundleConfig(
-            name="cli_tools", bundles=["shell"], workspace=str(tmp_path), sandbox="docker"
+            name="cli_tools", bundles=["shell"], workspace=str(tmp_path), backend="firecracker"
         )
         with pytest.raises(BackendUnavailableError):
             config.build()
@@ -158,7 +158,7 @@ class TestBackendFailuresAreDistinguishable:
     @pytest.mark.asyncio
     async def test_a_backend_error_is_reported_as_such(self) -> None:
         result = CommandResult(
-            exit_code=None, stdout="", stderr="", backend_error="the sandbox is gone"
+            exit_code=None, stdout="", stderr="", backend_error="the container is gone"
         )
         rendered = render(result, timeout=10)
         assert "could not be run" in rendered
@@ -315,7 +315,7 @@ class TestTheSessionReleasesIt:
     @pytest.mark.asyncio
     async def test_a_sub_agents_bundle_is_also_released(self, tmp_path: Path) -> None:
         """`Repl.close()` only ever held the root agent's own bundle — a
-        sub-agent's sandboxed shell never got torn down."""
+        sub-agent's containerised shell never got torn down."""
         from tests.cli.test_repl_session import _agent
 
         root_backend, sub_backend = self._Recording(), self._Recording()

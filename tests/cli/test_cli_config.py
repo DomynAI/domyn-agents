@@ -353,7 +353,7 @@ class TestOnlyBundlesTheAgentHasAreDescribed:
         assert "read_file(files)" in tools
         assert "run_command(shell)" in tools
         bundle = dict(sections["Tool Bundles"].items[0].fields)
-        assert bundle["sandbox"] == "local"
+        assert bundle["backend"] == "auto"
         assert bundle["isolate_environment"] == "True"
 
 

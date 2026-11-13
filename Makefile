@@ -1,4 +1,4 @@
-.PHONY: help install dev-install test test-no-cov lint format mypy standalone check-all clean context-windows release-patch release-minor release-major release version-patch version-minor version-major build-wheel
+.PHONY: help install dev-install test test-no-cov lint format mypy standalone check-all clean context-windows release-patch release-minor release-major release version-patch version-minor version-major build-wheel docker-backend-image
 
 # Default target
 help:
@@ -93,6 +93,12 @@ clean:
 	rm -rf htmlcov/
 	find . -type d -name __pycache__ -delete
 	find . -type f -name "*.pyc" -delete
+
+# The image `backend: docker` runs in, built here for the real-container tests
+# (CI publishes the released ones: .github/workflows/docker-backend-image.yml).
+docker-backend-image:
+	uv build --wheel
+	docker build -f docker/docker-backend.Dockerfile -t domyn-docker-backend:dev .
 
 # Development workflow
 dev-setup: dev-install

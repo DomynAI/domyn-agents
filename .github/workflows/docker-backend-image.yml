@@ -1,0 +1,140 @@
+name: Docker backend image
+
+# The image `backend: docker` runs a conversation's tools in (docker/docker-backend.Dockerfile):
+# built here, pushed to the repository `IMAGE_REPOSITORY` names (images.py) and only pulled by the CLI, so
+# nobody builds it on their machine.
+#
+# - A version tag, called by release.yml: tagged with the version (`0.1.1`, `0.1.2a1`),
+#   which is what a `domyn` of that version pulls. It holds that very release's wheel,
+#   because the file and browser tools run in it. A stable release also moves `latest`
+#   (`LATEST_TAG`), what a dev or editable install (a version no image has) pulls; the
+#   nightly alpha gets its own version tag and nothing else.
+# - A pull request that touches the image itself: built for both architectures, not
+#   pushed, to catch a broken Dockerfile. Merges to main build nothing.
+# - By hand (below), to try an image before a release.
+#
+# The package must be public (Packages > domyn-docker-backend > Package settings), once, after
+# its first push: a user who installed from PyPI has no GitHub login to pull with.
+on:
+  workflow_call:
+  # By hand, to try an image before a release: Actions > Backend image > Run workflow,
+  # on the branch to test. It builds, and pushes only when `push` is ticked, under `tag`
+  # (never `latest` or a version, which are what installs pull).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to push, e.g. rc-test (used when "push" is ticked)
+        required: false
+        default: manual
+      push:
+        description: Push the image to ghcr.io (otherwise only build it)
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - docker/**
+      - scripts/agent_browser.lock
+      - pyproject.toml
+      - .github/workflows/docker-backend-image.yml
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write  # the image
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # hatch-vcs reads the version from the tag.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The image and tag names are defined in the code the CLI pulls them by, and read
+      # from there: IMAGE_REPOSITORY and LATEST_TAG.
+      - name: Image names
+        run: python3 scripts/backend_image.py >> "$GITHUB_ENV"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+
+      # The wheel the image installs: the version in it is the tag's on a release.
+      - name: Build the wheel
+        run: uv build --wheel
+
+      # `0.1.1` for the tag v0.1.1 (a stable release is also `latest`); the input of a
+      # manual run; `pr` for a pull request, which is not pushed.
+      - name: Tags
+        id: tag
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then
+            name="${REF_NAME#v}"
+          else
+            name="${INPUT_TAG:-pr}"
+            # Not a name people pull: a manual run must not replace those.
+            if [ "$name" = "$LATEST_TAG" ] || echo "$name" | grep -Eq '^[0-9]+\.[0-9]+'; then
+              echo "::error::tag '$name' is reserved for releases"
+              exit 1
+            fi
+          fi
+          {
+            echo "tags<<EOF"
+            echo "${IMAGE_REPOSITORY}:${name}"
+            if [ "$REF_TYPE" = tag ] && echo "$name" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "${IMAGE_REPOSITORY}:${LATEST_TAG}"
+            fi
+            echo "EOF"
+            echo "name=${name}"
+          } >> "$GITHUB_OUTPUT"
+
+      # A release pushes, a pull request never does, a manual run only when asked: so trying an image cannot replace one people pull.
+      - name: Push or only build
+        id: push
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          INPUT_PUSH: ${{ inputs.push }}
+        run: |
+          if [ "$REF_TYPE" = tag ] || [ "$INPUT_PUSH" = true ]; then
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "push=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to ghcr.io
+        if: steps.push.outputs.push == 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/docker-backend.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ steps.push.outputs.push == 'true' }}
+          tags: ${{ steps.tag.outputs.tags }}
+          # Links the package to this repository, so its visibility and access follow it.
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.tag.outputs.name }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

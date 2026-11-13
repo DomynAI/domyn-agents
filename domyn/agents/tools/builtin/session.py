@@ -178,7 +178,7 @@ class SessionEnvironment:
             if (link := linked_below(start, paths.home)) is not None:
                 raise OSError(f"{link} is a link")
             paths.output.mkdir(parents=True, exist_ok=True)
-            _ignore_from_version_control(paths.home.parent)
+            ignore_from_version_control(paths.home.parent)
             if not paths.python.exists():
                 get_logger().info(f"preparing the environment for conversation {conversation_id}")
                 _create_venv(paths.venv)
@@ -194,7 +194,7 @@ class SessionEnvironment:
         return paths
 
 
-def _ignore_from_version_control(conversations: Path) -> None:
+def ignore_from_version_control(conversations: Path) -> None:
     """Keep conversation directories out of the user's commits.
 
     They live inside the project, like ``.git`` does, which is what makes
