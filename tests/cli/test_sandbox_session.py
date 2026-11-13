@@ -237,9 +237,7 @@ class TestStartingWithoutDocker:
     async def test_a_session_without_a_sandbox_is_not_asked(self) -> None:
         from domyn.agents.cli.commands.run import command as run_command
 
-        assert await run_command._sandbox_is_usable(
-            _agent(), Theme.build(allow_animation=False), None
-        )
+        assert await run_command._unusable_sandbox(_agent()) is None
 
 
 class TestStartingWithAutoSandbox:

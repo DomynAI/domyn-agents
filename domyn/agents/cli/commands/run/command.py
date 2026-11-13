@@ -249,15 +249,19 @@ async def start_session(
     wizard has to run first — branding then belongs to the app, not to the happy
     path only.
     """
-    # Read once, for the status line and for the warning below: each listed skill file
-    # is parsed here once and not once per use.
     # Before anything is said or asked: a configuration that runs commands in a
     # sandbox cannot do its job without one, and finding that out at the first
     # command, after the user has typed a request, is the worse moment.
-    if not await _sandbox_is_usable(agent, theme, config_file):
+    warning = theme.style("warning")
+    if (refusal := await _unusable_sandbox(agent)) is not None:
+        console.print(_refusal_text(refusal, config_file), style=warning, highlight=False)
         await agent.close()
         return 1
+    for fallback in _fallbacks(agent):
+        console.print(_fallback_text(fallback, config_file), style=warning, highlight=False)
 
+    # Read once, for the status line and for the warning below: each listed skill file
+    # is parsed here once and not once per use.
     index = await _startup_index(agent)
     if show_status:
         details = [agent.name]
@@ -355,46 +359,43 @@ def _sandbox_backends(agent: Any) -> list[SandboxBackend]:
     return [b for b in _command_backends(agent) if isinstance(b, SandboxBackend)]
 
 
-async def _sandbox_is_usable(agent: Any, theme: Theme, config_file: Path | None) -> bool:
-    """Check that the sandbox the configuration asks for can be used; say what to do if not.
+async def _unusable_sandbox(agent: Any) -> BackendUnavailableError | None:
+    """The first sandbox the configuration asks for that cannot be used, if any.
 
-    An explicit ``sandbox: docker`` stops here rather than falling back to running
-    commands on this machine: someone who chose a sandbox and gets none, without
-    being told, has a boundary that is not there. Both ways out are named — start
-    Docker, or switch to running commands locally — and the user runs `domyn run`
-    again. ``sandbox: auto`` (the default) never raises from ``check``: it falls back
-    to this machine, and the warning is printed by ``_say_fallback``.
+    An explicit ``sandbox: docker`` stops the session rather than falling back to
+    running commands on this machine: someone who chose a sandbox and gets none,
+    without being told, has a boundary that is not there. ``sandbox: auto`` (the
+    default) never fails ``check``: it falls back to this machine, which
+    ``_fallbacks`` reports.
     """
     for backend in _sandbox_backends(agent):
         try:
             await backend.check()
         except BackendUnavailableError as exc:
-            style = theme.style("warning")
-            console.print(f"\n  {exc.problem}", style=style, highlight=False, markup=False)
-            console.print(
-                "  Shell commands in this configuration run in a Docker sandbox, so it cannot start.",
-                style=style,
-                highlight=False,
-            )
-            if exc.fix:
-                console.print(
-                    f"\n  To use the sandbox: {exc.fix} Then run `domyn run` again.",
-                    style=style,
-                    highlight=False,
-                    markup=False,
-                )
-            where = f" in {config_file}" if config_file is not None else ""
-            console.print(
-                "\n  To run commands on this machine instead (no sandbox), "
-                f"set `sandbox: local` in the cli tools bundle{where} (or `sandbox: auto` for an adaptive choice).\n"
-                f"  Then, run `domyn run` again.",
-                style=style,
-                highlight=False,
-                markup=False,
-            )
-            return False
-    _say_fallback(agent, theme, config_file)
-    return True
+            return exc
+    return None
+
+
+def _where(config_file: Path | None) -> str:
+    return f" in {config_file}" if config_file is not None else ""
+
+
+def _refusal_text(problem: BackendUnavailableError, config_file: Path | None) -> str:
+    """What to tell someone whose sandbox cannot start: both ways out are named, start
+    Docker or run commands locally, and `domyn run` is run again."""
+    lines = [
+        f"\n  {problem.problem}",
+        "  Shell commands in this configuration run in a Docker sandbox, so it cannot start.",
+    ]
+    if problem.fix:
+        lines.append(f"\n  To use the sandbox: {problem.fix} Then run `domyn run` again.")
+    lines.append(
+        "\n  To run commands on this machine instead (no sandbox), "
+        f"set `sandbox: local` in the cli tools bundle{_where(config_file)} "
+        "(or `sandbox: auto` for an adaptive choice).\n"
+        "  Then, run `domyn run` again."
+    )
+    return "\n".join(lines)
 
 
 def _commands_status(agent: Any) -> str | None:
@@ -411,36 +412,25 @@ def _commands_status(agent: Any) -> str | None:
     return "commands: this machine (no sandbox)"
 
 
-def _say_fallback(agent: Any, theme: Theme, config_file: Path | None) -> None:
-    """Say, as a warning, that commands run on this machine because Docker could not
-    be used and the configuration did not insist on it (``sandbox: auto``)."""
-    for backend in _command_backends(agent):
-        if not isinstance(backend, AutoBackend) or backend.fallback is None:
-            continue
-        problem = backend.fallback
-        style = theme.style("warning")
-        console.print(
-            f"\n  {problem.problem} Commands run on this machine, with no sandbox.",
-            style=style,
-            highlight=False,
-            markup=False,
-        )
-        if problem.fix:
-            console.print(
-                f"  To sandbox them: {problem.fix} Then run `domyn run` again.",
-                style=style,
-                highlight=False,
-                markup=False,
-            )
-        where = f" in {config_file}" if config_file is not None else ""
-        console.print(
-            f"  To always run on this machine (and not see this): set `sandbox: local` "
-            f"in the cli tools bundle{where}.\n",
-            style=style,
-            highlight=False,
-            markup=False,
-        )
-        return
+def _fallbacks(agent: Any) -> list[BackendUnavailableError]:
+    """Why each ``sandbox: auto`` backend that could not use Docker runs commands on this
+    machine instead."""
+    return [
+        backend.fallback
+        for backend in _command_backends(agent)
+        if isinstance(backend, AutoBackend) and backend.fallback is not None
+    ]
+
+
+def _fallback_text(problem: BackendUnavailableError, config_file: Path | None) -> str:
+    lines = [f"\n  {problem.problem} Commands run on this machine, with no sandbox."]
+    if problem.fix:
+        lines.append(f"  To sandbox them: {problem.fix} Then run `domyn run` again.")
+    lines.append(
+        "  To always run on this machine (and not see this): set `sandbox: local` "
+        f"in the cli tools bundle{_where(config_file)}.\n"
+    )
+    return "\n".join(lines)
 
 
 def _lacks_chosen_skills(config: dict[str, Any] | None, config_file: Path | None) -> bool:

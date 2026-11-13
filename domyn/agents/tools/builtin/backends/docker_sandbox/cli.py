@@ -8,7 +8,7 @@ import signal
 import time
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from pathlib import Path
-from typing import NamedTuple, TypeVar
+from typing import NamedTuple
 
 from domyn.agents.logger import get_logger
 from domyn.agents.tools.builtin.backends.base import BackendUnavailableError, CommandResult
@@ -45,8 +45,6 @@ _TIMED_OUT = (124, 137)
 # `pip install --user` and `npm install -g` write to.
 _PATH_PREFIX = 'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"\n'
 
-_T = TypeVar("_T")
-
 
 class DockerOutput(NamedTuple):
     """What a ``docker`` command printed and returned."""
@@ -78,7 +76,7 @@ def container_is_gone(text: str) -> bool:
     return "no such container" in lowered or "is not running" in lowered
 
 
-async def retry_once(operation: Callable[[], Awaitable[_T]], *, describe: str) -> _T:
+async def retry_once[T](operation: Callable[[], Awaitable[T]], *, describe: str) -> T:
     """Run ``operation`` again, once, when it fails with a ``TransientDockerError``."""
     try:
         return await operation()
