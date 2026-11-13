@@ -507,8 +507,13 @@ def _run_command_for(file: Path | None, agent_name: str | None) -> str:
 
 def _looks_like_agent_file(value: Path) -> bool:
     """Whether a positional argument is meant as an agent file rather than a prompt."""
-    if value.exists():
-        return True
+    try:
+        if value.exists():
+            return True
+    except OSError:
+        # A prompt longer than the system's limit on a file name (255 bytes on
+        # macOS and Linux) raises ENAMETOOLONG instead of answering False.
+        return False
     return value.suffix.lower() in (".py", ".yaml", ".yml")
 
 
