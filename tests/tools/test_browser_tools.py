@@ -9,6 +9,7 @@ shows — and not a browser. ``test_browser_real.py`` drives the real one.
 # No `from __future__ import annotations`: builds real tools.
 import ipaddress
 import json
+import logging
 import re
 import shlex
 from typing import Any
@@ -695,6 +696,30 @@ class TestVerification:
         tools = await _opened(fake, tmp_path)
         reply = await _call(tools, "browser_click", url=f"{SITE}/", ref="e1", name="More")
         assert reply.startswith('Clicked generic "More" [@e1]')
+
+    @pytest.mark.asyncio
+    async def test_a_label_that_is_not_json_leaves_the_name_empty(
+        self, fake: ScriptedBrowser, tmp_path: Any, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        r"""``\x`` passes the snapshot pattern but is no JSON escape: the name
+        stays the one the browser gave, and the warning names the ref, not the
+        page's text."""
+        label = r"a\x"
+        fake.pages[f"{SITE}/"] = {
+            **HOME,
+            "refs": {"e1": ("generic", "")},
+            "snapshot": f'- generic "{label}" [ref=e1] clickable [onclick]',
+        }
+        fake.clicks.clear()
+        tools = await _opened(fake, tmp_path)
+        fake.calls.clear()
+        with caplog.at_level(logging.WARNING):
+            reply = await _fail(tools, "browser_click", url=f"{SITE}/", ref="e1", name=label)
+        assert reply.startswith('@e1 is generic "", not')
+        assert "click" not in fake.verbs()
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert "Could not decode the snapshot label of @e1: JSONDecodeError" in warnings
+        assert not any(label in warning for warning in warnings)
 
     @pytest.mark.asyncio
     async def test_a_name_the_browser_gives_is_kept_over_the_label(
