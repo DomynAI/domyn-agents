@@ -6,6 +6,7 @@ working state on the way to `configuration_v1_dict_from`. These tests exercise
 that projection, the credentials store, and the small pure helpers around them.
 """
 
+import os
 from pathlib import Path
 from typing import ClassVar
 from unittest.mock import patch
@@ -120,6 +121,74 @@ class TestSecrets:
         """Reading credentials from an unreadable location must not raise."""
         monkeypatch.setattr(cfg, "GLOBAL_DIR", Path("/proc/nonexistent-domyn"))
         assert cfg.read_credentials() == {}
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "OPENAI_API_KEY",
+            "GITHUB_TOKEN",
+            "APP_SECRET",
+            "DB_PASSWORD",
+            # The word as a whole segment, not only at the end: the names a suffix
+            # refused.
+            "AWS_ACCESS_KEY_ID",
+            "KEY_ID",
+            "MY_TOKEN_ENDPOINT",
+            "KEY",
+        ],
+    )
+    def test_a_name_carrying_a_secret_word_is_loaded(self, name: str) -> None:
+        assert cfg.is_credential_name(name)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "PYTHONPATH",
+            "LD_PRELOAD",
+            "BASH_ENV",
+            "MY_CRED_VAR",
+            "PATH",
+            # The letters of a word, but not the word: matching anywhere would load
+            # these, which is what the boundary is for.
+            "KEYBOARD_LAYOUT",
+            "TOKENIZER_PATH",
+            "SECRETIVE_MODE",
+            "PASSWORDLESS_AUTH",
+            "SECRETS_DIR",
+        ],
+    )
+    def test_a_name_without_one_is_refused(self, name: str) -> None:
+        """The credentials file can set any name, and those entries reach every
+        program domyn starts: a name with no secret word in it is not loaded."""
+        assert not cfg.is_credential_name(name)
+
+    def test_a_refused_name_is_not_put_in_the_environment(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(cfg, "_credentials_in_environment", {})
+        monkeypatch.setattr(cfg, "_warned", set())
+        monkeypatch.delenv("PYTHONPATH", raising=False)
+        cfg.write_credential("OPENAI_API_KEY", "sk-x")
+        cfg.write_credential("PYTHONPATH", "/tmp/evil")
+
+        cfg.load_credentials_into_environment()
+
+        assert os.environ["OPENAI_API_KEY"] == "sk-x"
+        assert "PYTHONPATH" not in os.environ
+        assert "PYTHONPATH in the credentials file was not loaded" in capsys.readouterr().err
+
+    def test_the_warning_is_given_once_per_process(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The loader runs at startup and again once ``--project`` is known."""
+        monkeypatch.setattr(cfg, "_credentials_in_environment", {})
+        monkeypatch.setattr(cfg, "_warned", set())
+        cfg.write_credential("PYTHONPATH", "/tmp/evil")
+
+        cfg.load_credentials_into_environment()
+        cfg.load_credentials_into_environment()
+
+        assert capsys.readouterr().err.count("PYTHONPATH") == 1
 
     @pytest.mark.parametrize(
         ("provider_type", "expected_env"),

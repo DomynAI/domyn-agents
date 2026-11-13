@@ -47,14 +47,14 @@ def test_finds_a_dotenv_file_in_a_parent_directory(tmp_path: Path, monkeypatch) 
 def test_credentials_file_entries_become_env_vars(tmp_path: Path, monkeypatch) -> None:
     from domyn.agents.interfaces.cli import config as cli_config
 
-    monkeypatch.delenv("MY_CRED_VAR", raising=False)
+    monkeypatch.delenv("MY_CRED_KEY", raising=False)
     creds = tmp_path / "credentials"
-    creds.write_text("MY_CRED_VAR=from_credentials_file\n")
+    creds.write_text("MY_CRED_KEY=from_credentials_file\n")
     monkeypatch.setattr(cli_config, "credentials_path", lambda: creds)
 
     _load_credentials()
 
-    assert os.environ["MY_CRED_VAR"] == "from_credentials_file"
+    assert os.environ["MY_CRED_KEY"] == "from_credentials_file"
 
 
 def test_a_real_env_var_is_not_overridden_by_the_credentials_file(
@@ -62,14 +62,14 @@ def test_a_real_env_var_is_not_overridden_by_the_credentials_file(
 ) -> None:
     from domyn.agents.interfaces.cli import config as cli_config
 
-    monkeypatch.setenv("MY_CRED_VAR", "from_shell")
+    monkeypatch.setenv("MY_CRED_KEY", "from_shell")
     creds = tmp_path / "credentials"
-    creds.write_text("MY_CRED_VAR=from_credentials_file\n")
+    creds.write_text("MY_CRED_KEY=from_credentials_file\n")
     monkeypatch.setattr(cli_config, "credentials_path", lambda: creds)
 
     _load_credentials()
 
-    assert os.environ["MY_CRED_VAR"] == "from_shell"
+    assert os.environ["MY_CRED_KEY"] == "from_shell"
 
 
 def test_is_a_silent_noop_when_no_credentials_file_exists(tmp_path: Path, monkeypatch) -> None:

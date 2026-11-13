@@ -267,12 +267,12 @@ class TestWhatIsTheProjectsAlone:
     def test_the_project_credentials_go_over_the_home_ones(
         self, home: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        for name in ("SHARED_KEY", "HOME_ONLY", "SHELL_KEY"):
+        for name in ("SHARED_KEY", "HOME_ONLY_KEY", "SHELL_KEY"):
             monkeypatch.delenv(name, raising=False)
         monkeypatch.setattr(cfg, "_credentials_in_environment", {})
         home.mkdir(parents=True)
         (home / "credentials").write_text(
-            "SHARED_KEY=home\nHOME_ONLY=home\nSHELL_KEY=home\n", encoding="utf-8"
+            "SHARED_KEY=home\nHOME_ONLY_KEY=home\nSHELL_KEY=home\n", encoding="utf-8"
         )
         folder = _write_project("p", _config())
         (folder / "credentials").write_text("SHARED_KEY=project\n", encoding="utf-8")
@@ -284,10 +284,10 @@ class TestWhatIsTheProjectsAlone:
         cfg.load_credentials_into_environment()  # `select_project`
 
         assert os.environ["SHARED_KEY"] == "project"
-        assert os.environ["HOME_ONLY"] == "home"
+        assert os.environ["HOME_ONLY_KEY"] == "home"
         assert os.environ["SHELL_KEY"] == "shell"
         monkeypatch.delenv("SHARED_KEY")
-        monkeypatch.delenv("HOME_ONLY")
+        monkeypatch.delenv("HOME_ONLY_KEY")
 
     def test_export_never_carries_them_out(self, tmp_path: Path) -> None:
         # Not even when a skill declares them: an `external_files` entry walking up
