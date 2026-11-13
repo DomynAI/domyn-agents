@@ -98,7 +98,7 @@ Places files live, each with an id the rest of the file refers to. A resource do
 |---|---|---|---|
 | `id` | `str` | required | Unique in the file, and different from every agent's name. |
 | `type` | `local_dir` | required | The kind of place. Applications register types of their own. |
-| `paths` | `str` or list of `str` | required | `local_dir`: folders on this machine, in order. The first is the primary one: a tool bundle's workspace, where writes go. The others are read too, and the earlier one wins when two hold the same file. A folder that does not exist is a warning when the file loads. |
+| `paths` | `str` or list of `str` | required | `local_dir`: folders on this machine, in order. The first is the primary one: a tool bundle's workspace, where writes go. The others are read too, and the earlier one wins when two hold the same file. An absolute path to a folder that does not exist is a warning when the file loads. |
 | `read_only` | `bool` | `false` | Enforced by the resource: the `files` tools refuse to write to it, and a resource type that is mounted (on a platform) is mounted read-only. A `local_dir` cannot keep commands from writing: a `shell` bound to it still runs them, each asking for approval. |
 
 The load stops with an error naming what to change for: two resources with one id, a resource id equal to an agent's name, an id no resource declares, a bundle bound to no resource or to one that is not a folder on this machine, and a skills or instructions source of `type: local_dir` (what an agent reads is always a resource). A folder that does not exist is a warning when it is an absolute path; a relative one names a folder of wherever the process runs, which may well lack it.
@@ -182,7 +182,7 @@ See [Hooks](../guides/hooks.md).
 | `handoff_scope` | `explicit` \| `direct_peers` \| `global` | `explicit` | Which agents it may hand off to. See [Orchestration](../guides/orchestration.md). |
 | `hooks` | list of `str` | `[]` | Names of `pre_agent_call`, `post_agent_call` and `on_agent_event` hooks. |
 | `skills` | mapping | none | `source: {type: resource, resource: <id or list>, path: skills}` reads the `path` folder (default `skills`) under every folder of the resources named, earlier first. An entry of the list may be `{id, path}` to read another folder in that resource. `type: memory` holds the skills in the file. See [Skills](../guides/skills.md). |
-| `standing_instructions` | mapping | none | `source: {type: resource, resource: <id or list>}` reads `SOUL.md` and `AGENTS.md` under every folder of the resources named (`path` for a subfolder); an entry `{id, walk: true}` reads its subfolders too, domyn's own state folders skipped. See [Standing instructions](../guides/standing-instructions.md). |
+| `standing_instructions` | mapping | none | `source: {type: resource, resource: <id or list>}` reads `SOUL.md` and `AGENTS.md` under every folder of the resources named (`path` for a subfolder); an entry `{id, walk: true}` reads its subfolders too, hidden and dependency folders skipped and no link followed. See [Standing instructions](../guides/standing-instructions.md). |
 | `type` | `agent` \| `delegate` | `agent` | `delegate` for an agent that runs in another process. See [Remote agents](../guides/remote-agents.md). |
 
 Keys that are not recognized are ignored without an error.
