@@ -3,7 +3,7 @@
 A resource is a **declaration, not behaviour**. Loading a configuration does nothing
 with one beyond checking it can be used: it says "this place exists, here is its id,
 here is how to reach it". Whatever needs a place — a tool bundle, a skills or
-instructions source, a platform's sandbox — names the resource by id, and that is
+instructions source, an application's sandbox — names the resource by id, and that is
 the only thing that makes it do anything.
 
 Two views, because consumers need two different things:
@@ -16,8 +16,8 @@ Two views, because consumers need two different things:
   an execution bundle bound to a resource without one is refused when the
   configuration loads.
 
-Types self-register by their ``type`` tag, as skill and instruction sources do, so a
-platform adds its own (``platform_fs``) by subclassing, with no change here.
+Types self-register by their ``type`` tag, as skill and instruction sources do, so an
+application adds its own by subclassing, with no change here.
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ class MountSpec:
     """Absolute folders, the primary one first."""
     read_only: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
-    """Whatever a platform type needs to describe its mount; empty for ``local_dir``."""
+    """Whatever another type needs to describe its mount; empty for ``local_dir``."""
 
 
 def relative_path(path: str) -> str:

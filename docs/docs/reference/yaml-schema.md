@@ -99,7 +99,7 @@ Places files live, each with an id the rest of the file refers to. A resource do
 | `id` | `str` | required | Unique in the file, and different from every agent's name. |
 | `type` | `local_dir` | required | The kind of place. Applications register types of their own. |
 | `paths` | `str` or list of `str` | required | `local_dir`: folders on this machine, in order. The first is the primary one: a tool bundle's workspace, where writes go. The others are read too, and the earlier one wins when two hold the same file. An absolute path to a folder that does not exist is a warning when the file loads. |
-| `read_only` | `bool` | `false` | Enforced by the resource: the `files` tools refuse to write to it, and a resource type that is mounted (on a platform) is mounted read-only. A `local_dir` cannot keep commands from writing: a `shell` bound to it still runs them, each asking for approval. |
+| `read_only` | `bool` | `false` | Enforced by the resource: the `files` tools refuse to write to it, and a resource type that is mounted is mounted read-only. A `local_dir` cannot keep commands from writing: a `shell` bound to it still runs them, each asking for approval. |
 
 The load stops with an error naming what to change for: two resources with one id, a resource id equal to an agent's name, an id no resource declares, a bundle bound to no resource or to one that is not a folder on this machine, and a skills or instructions source of `type: local_dir` (what an agent reads is always a resource). A folder that does not exist is a warning when it is an absolute path; a relative one names a folder of wherever the process runs, which may well lack it.
 

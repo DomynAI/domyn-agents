@@ -174,8 +174,8 @@ class Agent(BaseAgent):
         description=(
             "The resources this agent may use: the ones its `resources:` list names, "
             "plus every one its tool bundles and skills and instructions sources are "
-            "bound to (a reference grants access), first appearance first. What a "
-            "platform reads for access no consumer names, such as a sandbox mount. "
+            "bound to (a reference grants access), first appearance first. What an "
+            "application reads for access no consumer names, such as a sandbox mount. "
             "Excluded from serialization: the configuration names them by id."
         ),
     )
