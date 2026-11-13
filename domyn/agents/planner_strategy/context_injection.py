@@ -56,26 +56,9 @@ async def turn_context_messages(
 
     memory_manager = getattr(agent, "memory_manager", None)
     if memory_manager is not None:
-        agent_input = getattr(context, "agent_input", None)
-        question = ""
-        if agent_input is not None and getattr(agent_input, "content", None):
-            first = agent_input.content[0]
-            question = first.text or ""
-
-        recalled = await memory_manager.recall_memories(
-            user_id=context.user_id,
-            agent=agent,
-            recency_limit=memory_manager.recency_limit,
-            question=question,
-            run_config=context.run_config,
-        )
-        if recalled:
-            injected.append(
-                LLMMessage(
-                    role="assistant",
-                    content="\n".join(memory.memory for memory in recalled),
-                )
-            )
+        block = await memory_manager.recall_block(agent, context)
+        if block:
+            injected.append(LLMMessage(role="assistant", content=block, part="memory"))
     return injected
 
 

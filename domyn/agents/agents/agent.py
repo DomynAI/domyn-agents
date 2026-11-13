@@ -21,7 +21,11 @@ from domyn.agents.hooks import FunctionHook, HookFactory, HookPhase, HookType
 from domyn.agents.instructions import AgentInstructions, InstructionRuntime
 from domyn.agents.llm import BaseLLMProvider, LLMProviderFactory
 from domyn.agents.logger import get_logger
-from domyn.agents.memory.managers import BaseMemoryManager, MemoryExecutionMode
+from domyn.agents.memory.managers import (
+    BaseMemoryManager,
+    MemoryAsset,
+    MemoryExecutionMode,
+)
 from domyn.agents.planner_strategy import BasePlannerStrategy, PlannerStrategyFactory
 from domyn.agents.skills import LoadedSkills, SkillRequiredError, SkillsRuntime
 from domyn.agents.skills.integration import skill_tools
@@ -174,7 +178,7 @@ class Agent(BaseAgent):
         if self.memory_manager:
             if self.memory_manager.execution_mode == MemoryExecutionMode.AGENTIC:
                 memory_tool = FunctionTool(
-                    name="remember",
+                    name=MemoryAsset.REMEMBER_TOOL,
                     description="Store relevant information to the agent's memory for future use. Use this proactively whenever the user reveals information about themselves, their preferences, interests, or opinions — even if mentioned in passing.",
                     func=self.memory_manager.remember,  # type: ignore
                     config_params=[
@@ -182,14 +186,45 @@ class Agent(BaseAgent):
                     ],
                 )
                 self.tools.append(memory_tool)
+                self.tools.extend(self._memory_reading_tools())
             elif self.memory_manager.execution_mode == MemoryExecutionMode.AUTOMATIC:
+                # Starts the update in the background and returns: the turn ends
+                # without waiting for the model calls that decide and write it.
                 memory_post_hook = FunctionHook(
-                    name="update_memory",
-                    fun=self.memory_manager.update_memory,  # type: ignore
+                    name=MemoryAsset.UPDATE_HOOK,
+                    fun=self.memory_manager.start_memory_update,  # type: ignore
                     trigger=HookPhase.POST_AGENT_CALL,
                     type=HookType.LISTENER,
                 )
                 self.hooks.append(memory_post_hook)
+
+    def _memory_reading_tools(self) -> list[FunctionTool]:
+        """``recall`` and ``forget``, beside ``remember``: an agent that decides what to
+        keep also reads it back page by page, and drops what stopped being true."""
+        manager = self.memory_manager
+        if manager is None:  # pragma: no cover - guarded by the caller
+            return []
+        return [
+            FunctionTool(
+                name=MemoryAsset.RECALL_TOOL,
+                description=(
+                    "Read what is remembered about the user. Without arguments it returns the "
+                    "most recent facts; with a query, the ones that match it; with the cursor "
+                    "from a previous answer, the next page."
+                ),
+                func=manager.recall,  # type: ignore
+                config_params=[ConfigParam(name="agent", value=self)],
+            ),
+            FunctionTool(
+                name=MemoryAsset.FORGET_TOOL,
+                description=(
+                    "Remove one remembered fact, by the id shown with it. Use it when the user "
+                    "asks you to forget something or says a fact is no longer true."
+                ),
+                func=manager.forget,  # type: ignore
+                config_params=[ConfigParam(name="agent", value=self)],
+            ),
+        ]
 
     def _attach_skills(self) -> None:
         """Wire the lookup tools, ``skill_view`` and ``skill_search``.
@@ -215,7 +250,8 @@ class Agent(BaseAgent):
         self.tools.extend(t for t in skill_tools(self.skills) if t.name not in present)
 
     async def close(self, *, _visited: set[int] | None = None) -> None:
-        """Release what this agent's built-in tool bundles hold, and recurse into
+        """Release what this agent's built-in tool bundles hold, after waiting for the
+        memory updates its ``AUTOMATIC`` hook left running, and recurse into
         sub-agents that carry their own. Best-effort and idempotent — a single
         bundle failing to close must not stop the rest of the tree from being
         torn down, and nothing upstream can act on the failure anyway.
@@ -228,6 +264,15 @@ class Agent(BaseAgent):
         if id(self) in visited:
             return
         visited.add(id(self))
+
+        if self.memory_manager is not None:
+            # Before the tools: the updates the AUTOMATIC hook left running would
+            # otherwise be cancelled by the process exiting.
+            try:
+                await self.memory_manager.wait_for_updates()
+            except Exception as exc:
+                get_logger().warning(f"could not finish memory updates: {type(exc).__name__}")
+                get_logger().debug(f"memory update teardown detail: {exc}")
 
         for built in self.builtin_tools:
             try:

@@ -589,6 +589,21 @@ class TestWhatIsLeftOut:
         assert "id_rsa" not in exported and ".env" not in exported
         assert any("never exported" in d for d in report.dropped)
 
+    def test_a_skill_file_named_like_the_memory_is_dropped_saying_why(
+        self, machine: dict[str, Path], tmp_path: Path
+    ) -> None:
+        # Matched by name, so no skill can carry the real memory out; the note has to
+        # say memories, or a skill left unavailable without its file is a mystery.
+        skill = _skill(tmp_path / "repo" / "s", "s", external=["references/memory.md"])
+        (skill / "references").mkdir()
+        (skill / "references" / "memory.md").write_text("notes\n", encoding="utf-8")
+
+        report = _export(_config(str(skill)), machine, tmp_path / "out")
+
+        assert not list(report.dest.rglob("memory.md"))
+        (note,) = [d for d in report.dropped if "memory.md" in d]
+        assert "memories are never exported" in note
+
     def test_a_hidden_file_whose_entry_would_lead_out_refuses_the_export(
         self, machine: dict[str, Path], tmp_path: Path
     ) -> None:

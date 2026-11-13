@@ -29,17 +29,17 @@ An agent with no decision model behaves exactly as it does today — nothing is 
 
 The approval gate is a level of its own on purpose. Everywhere else a wrong answer changes what the model is *shown* and the turn carries on; at the gate, allowing removes a human confirmation.
 
-The wizard asks for the endpoint and the model name, then sends a real request to check both. A failure warns and saves anyway — the endpoint may come up later.
+The wizard asks for the endpoint and the model name, then sends a real request to check both. A failure warns and saves anyway — the endpoint may come up later. There is no default endpoint: when the main model is on vLLM, its server (`http://gpu:8000` for `http://gpu:8000/v1/chat/completions`) is offered, to be changed if the decision model lives elsewhere; with any other provider you type it. The model name has no default either: it is the name the server exposes, and a wrong one is what the check reports.
 
 ```
   decision model:
      1) no                     — no decision model
      2) shadow                 — ask and record, change nothing
-   * 3) active                 — pick skills and instructions; the approval gate only records
+   * 3) active                 — pick skills and instructions, decide what to remember; the approval gate only records
      4) active, approvals too  — also let it allow or deny a tool call
 
-  decision endpoint [http://localhost:28080]:
-  decision model name [Cloudflare/clef]:
+  decision endpoint (empty = http://gpu:8000): http://gpu:8000
+  decision model name: Cloudflare/clef
   endpoint: answering
 ```
 
@@ -62,6 +62,7 @@ agents:
       approvals: {mode: active, min_confidence: 0.8}
       skills: {mode: active}
       instructions: {mode: active}
+      memory: {mode: active}
       tools: {mode: off}
       context_ladder: {mode: off}
       sensitivity: {mode: active, on_unknown: block}
@@ -75,7 +76,7 @@ A server that serves `Cloudflare/clef` rejects `clef` with a 404 naming the one 
 
 ## Where it is allowed to matter
 
-Six places, each with one direction it may move in. A name that is not in this list is refused when the config loads, so a typo cannot quietly switch on something nobody reviewed.
+Seven places, each with one direction it may move in. A name that is not in this list is refused when the config loads, so a typo cannot quietly switch on something nobody reviewed.
 
 | use case | what it decides | it may only |
 |---|---|---|
@@ -85,6 +86,7 @@ Six places, each with one direction it may move in. A name that is not in this l
 | `tools` | which tools the turn is shown | hide |
 | `context_ladder` | which old outputs compaction drops first | mark for dropping |
 | `sensitivity` | how sensitive this turn's data is | refuse the turn |
+| `memory` | whether a turn holds something worth remembering (automatic memory) | skip the LLM on a no; on a yes the LLM only writes the fact |
 
 ### Modes
 

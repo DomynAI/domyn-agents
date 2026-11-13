@@ -311,6 +311,8 @@ class TestSlashCommandsTypedMidTurn:
             "/skills-autodiscover": False,
             "/auto": True,
             "/approvals": False,
+            # Writes the memory file, and `clear` reads the terminal to confirm.
+            "/memory": False,
             "/verbose": False,
             "/voice": False,
             "/model": False,

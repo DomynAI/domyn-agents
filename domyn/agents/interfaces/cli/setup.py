@@ -4,9 +4,9 @@ Reachable as ``domyn setup`` and as ``/model`` / ``/config`` inside a session, s
 settings can be changed without leaving the conversation — the thing that makes a
 CLI feel usable rather than merely functional.
 
-On a re-run each section — model, instructions, tools, skills, and the decision model
-when the config declares one — first shows what the config holds and asks whether to
-keep it (`_keep`); a yes skips its questions, so
+On a re-run each section — model, instructions, tools, skills, the decision model
+when the config declares one, memory — first shows what the config holds and asks
+whether to keep it (`_keep`); a yes skips its questions, so
 changing one section costs an Enter for each of the others. Every prompt shows the
 current value and accepts empty input to keep it. The one exception is
 the instructions path, where empty removes it (`_choose_instructions`); the question
@@ -30,6 +30,7 @@ from typing import IO, TYPE_CHECKING, Any, cast
 import yaml
 
 from domyn.agents.agents.agent import MAX_AGENT_NAME_LENGTH
+from domyn.agents.decisions.runtime import DecisionMode
 from domyn.agents.instructions.discovery import AUTODISCOVERY_DIRS, find_instruction_files
 from domyn.agents.integrations.domyn_platform_sdk import (
     SDK_REQUIREMENT,
@@ -44,13 +45,15 @@ from domyn.agents.interfaces.cli.config import (
     DECISION_LEVEL_BLURB,
     DECISION_LEVELS,
     DEFAULT_DECISION_KEY_ENV,
-    DEFAULT_DECISION_MODEL,
-    DEFAULT_DECISION_URL,
     LOCAL_SKILLS_DIRS,
+    MEMORY_DECIDER_BLURB,
+    MEMORY_SCOPE_BLURB,
     PROVIDER_HINTS,
     REQUIRES_URL,
     AgentConfig,
     DecisionsChoice,
+    MemoryChoice,
+    MemoryDecider,
     ProviderConfig,
     _scrub_url,
     active_project,
@@ -58,8 +61,11 @@ from domyn.agents.interfaces.cli.config import (
     configuration_v1_dict_from,
     credentials_path,
     current_decisions_from,
+    current_memory_from,
     current_settings_from,
+    decision_url_default,
     describe_configuration_v1,
+    describe_memory,
     describe_project,
     expand_project_dir,
     find_api_key,
@@ -68,6 +74,7 @@ from domyn.agents.interfaces.cli.config import (
     is_instruction_autodiscovery,
     is_skill_autodiscovery,
     load_credentials_into_environment,
+    memory_loses_its_decider,
     print_config_description,
     read_credentials,
     resolve_api_key,
@@ -209,6 +216,7 @@ class _Draft:
     keep_tools: bool = False
     keep_skills: bool = False
     keep_decisions: bool = False
+    keep_memory: bool = False
     provider_type: str = ""
     model_name: str = ""
     url: str = ""
@@ -217,6 +225,7 @@ class _Draft:
     max_tokens: int = 0
     context_window: int | None = None
     decisions: DecisionsChoice | None = None
+    memory: MemoryChoice | None = None
     discard: list[Path] = field(default_factory=list)
     """Instruction files an import brought and the user did not keep, deleted once saved."""
 
@@ -371,13 +380,103 @@ def _ask_decision_key(
     return name, secret
 
 
-def _ask_decisions(console: Console, theme: Theme, current: DecisionsChoice) -> DecisionsChoice:
+def _ask_memory(console: Console, theme: Theme, current: MemoryChoice) -> MemoryChoice:
+    """Offer long-term memory, and say where it is kept.
+
+    Off unless chosen: what the agent writes down about the user stays on this
+    machine, in a file you can read and edit, but it is still something to opt into.
+    The project's own memory is offered only inside a project. The answer is the
+    configuration's one memory: a project that picks its own does not also read the
+    global one, and one that picks none has none (`MEMORY_SCOPE_BLURB`).
+    """
+    scopes = ["no", "global"] + (["project"] if active_project() is not None else [])
+    chosen = _select(
+        console,
+        theme,
+        "long-term memory",
+        scopes,
+        current=current.scope if current.scope in scopes else "no",
+        descriptions=MEMORY_SCOPE_BLURB,
+    )
+    if chosen is None:
+        raise KeyboardInterrupt
+    return MemoryChoice(scope=chosen)
+
+
+def _ask_memory_decider(
+    console: Console, theme: Theme, current: MemoryDecider | None, decisions: DecisionsChoice
+) -> MemoryDecider:
+    """Ask who decides what the memory keeps: the agent, or the decision model.
+
+    Asked only when a memory and a decision model were both chosen. The answer's
+    `MemoryDecider.mode` is the memory manager's ``execution_mode``. Opens on what
+    the file says, and on the decision model for a memory that is new.
+    """
+    options: list[str] = list(MemoryDecider)
+    descriptions: dict[str, str] = dict(MEMORY_DECIDER_BLURB)
+    level = DECISION_LEVELS.get(decisions.level, {}).get("memory", {}).get("mode")
+    if level == DecisionMode.SHADOW:
+        descriptions[MemoryDecider.MODEL] = (
+            "after each reply the decision model is asked and its answer recorded, but "
+            "at the shadow level the agent's model still decides what is kept"
+        )
+    chosen = _select(
+        console,
+        theme,
+        "who decides what to remember",
+        options,
+        current=current if current in options else MemoryDecider.MODEL,
+        descriptions=descriptions,
+    )
+    if chosen is None:
+        raise KeyboardInterrupt
+    return MemoryDecider(chosen)
+
+
+def _ask_decision_url(console: Console, theme: Theme, current: str, suggested: str | None) -> str:
+    """The decision endpoint: what the file says, else ``suggested``; never invented."""
+    label = f"decision endpoint (empty = {suggested})" if suggested else "decision endpoint"
+    while True:
+        url = _ask(console, theme, label, current or suggested or "", default=suggested or "")
+        if url:
+            return url
+        console.print(
+            "  a decision model needs an endpoint (Ctrl-B goes back to choose no)",
+            style=theme.style("warning"),
+            highlight=False,
+        )
+
+
+def _ask_decision_model(console: Console, theme: Theme, current: str) -> str:
+    """The decision model's name, as the server exposes it: what the file says, never invented."""
+    while True:
+        model = _ask(console, theme, "decision model name", current, default="")
+        if model:
+            return model
+        console.print(
+            "  a decision model needs a model name (Ctrl-B goes back to choose no)",
+            style=theme.style("warning"),
+            highlight=False,
+        )
+
+
+def _ask_decisions(
+    console: Console,
+    theme: Theme,
+    current: DecisionsChoice,
+    suggested_url: str | None = None,
+) -> DecisionsChoice:
     """Offer a decision model, and say on screen what each level hands over.
 
     Four levels rather than yes/no because the interesting question is not
     whether a model is configured but where it is allowed to matter, and the
     step that lets it answer at the approval gate is the one worth choosing
     deliberately. See ``DECISION_LEVELS``.
+
+    The endpoint has no default: only ``suggested_url`` (the main model's vLLM
+    server, `decision_url_default`) is offered, pre-filled when the file names none
+    and taken back by an erased field. Without one an endpoint must be typed. The
+    model name has none at all: an erased one is asked again.
 
     Ctrl-B on the endpoint, the model name or the key goes back to the level.
     """
@@ -402,25 +501,13 @@ def _ask_decisions(console: Console, theme: Theme, current: DecisionsChoice) -> 
             highlight=False,
         )
         try:
-            base_url = _ask(
-                console,
-                theme,
-                f"decision endpoint (empty = {DEFAULT_DECISION_URL})",
-                current.base_url,
-                default=DEFAULT_DECISION_URL,
-            )
+            base_url = _ask_decision_url(console, theme, current.base_url, suggested_url)
             console.print(
                 "  the model name the SERVER exposes, which is not always the short one",
                 style=theme.style("meta"),
                 highlight=False,
             )
-            model = _ask(
-                console,
-                theme,
-                f"decision model name (empty = {DEFAULT_DECISION_MODEL})",
-                current.model,
-                default=DEFAULT_DECISION_MODEL,
-            )
+            model = _ask_decision_model(console, theme, current.model)
             key_env, api_key = _ask_decision_key(console, theme, current.api_key_env)
         except GoBack:
             _back_to(mark)
@@ -1490,8 +1577,9 @@ def run_setup(
     Returns the saved config (the dict actually written), or ``None`` if the
     user aborted.
 
-    On a re-run each section (model, instructions, tools, skills, and a declared decision model) first shows what
-    the config holds and asks whether to keep it; a yes skips its questions. Not on
+    On a re-run each section (model, instructions, tools, skills, a declared decision
+    model, memory) first shows what the config holds and asks whether to keep it; a
+    yes skips its questions. Not on
     a ``provider_only`` run, whose point is changing the model, and not for a model
     the config leaves incomplete. Keeping the skills does not reinstall
     ``~/.domyn/builtin-skills``, so built-in skills changed by an upgrade arrive only on a
@@ -1767,7 +1855,53 @@ def run_setup(
         )
 
     def ask_decisions(d: _Draft) -> None:
-        d.decisions = _ask_decisions(console, theme, current_decisions)
+        main_type, main_url = (
+            (d.provider.type, d.provider.url) if d.keep_model else (d.provider_type, d.url)
+        )
+        d.decisions = _ask_decisions(
+            console,
+            theme,
+            current_decisions,
+            decision_url_default(main_type, main_url),
+        )
+
+    def say_if_memory_loses_its_decider(d: _Draft) -> None:
+        if memory_loses_its_decider(existing, d.decisions, d.memory):
+            console.print(
+                "  without a decision model the agent saves memories itself, "
+                "with its remember tool",
+                style=theme.style("meta"),
+                highlight=False,
+            )
+
+    def keep_memory(d: _Draft) -> None:
+        d.keep_memory = _keep(console, theme, "memory settings", describe_memory(existing))
+        if d.keep_memory:
+            # The scope the file has and no decider: the memory manager is kept as
+            # written (`_apply_memory`), unless this run removed the decision model
+            # deciding for it, which makes it the agent's (`memory_loses_its_decider`).
+            d.memory = MemoryChoice(scope=current_memory_from(existing).scope)
+            say_if_memory_loses_its_decider(d)
+
+    def ask_memory(d: _Draft) -> None:
+        d.memory = _ask_memory(console, theme, current_memory_from(existing))
+        say_if_memory_loses_its_decider(d)
+
+    def decisions_after(d: _Draft) -> DecisionsChoice | None:
+        # A kept decision model leaves `d.decisions` as `None`: the file's is in force.
+        return current_decisions if d.keep_decisions else d.decisions
+
+    def ask_memory_decider(d: _Draft) -> None:
+        decisions = decisions_after(d)
+        assert d.memory is not None and decisions is not None
+        decided_by = _ask_memory_decider(
+            console, theme, current_memory_from(existing).decided_by, decisions
+        )
+        d.memory = d.memory.model_copy(update={"decided_by": decided_by})
+
+    def asks_memory_decider(d: _Draft) -> bool:
+        decisions = decisions_after(d)
+        return bool(d.memory and d.memory.enabled and decisions and decisions.enabled)
 
     def asks_model(d: _Draft) -> bool:
         return not d.keep_model
@@ -1824,6 +1958,13 @@ def run_setup(
         # Kept, `draft.decisions` stays `None`, which leaves the file's decision model
         # exactly as written, hand-tuned thresholds included (`_apply_decisions`).
         _Step("decisions", ask_decisions, lambda d: not d.keep_decisions),
+        _Step("keep memory", keep_memory, lambda d: ask_keep),
+        _Step("memory", ask_memory, lambda d: not d.keep_memory),
+        _Step(
+            "memory decider",
+            ask_memory_decider,
+            lambda d: not d.keep_memory and asks_memory_decider(d),
+        ),
     ]
     steps = model_steps if provider_only else [*model_steps, *section_steps]
 
@@ -1897,9 +2038,9 @@ def run_setup(
             update={"max_tokens": draft.max_tokens, "context_window": draft.context_window}
         )
     # `None` unless the wizard actually asked, so a `provider_only` run leaves
-    # whatever the file says about decisions exactly where it found it.
+    # whatever the file says about decisions and memory exactly where it found it.
     config_dict = configuration_v1_dict_from(
-        new_provider, agent, compaction, existing, draft.decisions
+        new_provider, agent, compaction, existing, draft.decisions, draft.memory
     )
 
     target = path or config_path()

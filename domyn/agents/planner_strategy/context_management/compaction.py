@@ -1119,8 +1119,13 @@ class Compactor(BaseModel):
         tool_defs: list[dict[str, Any]] | None,
         agent: Any,
         state: dict[str, Any] | None = None,
+        turn_context: list[LLMMessage] | None = None,
     ) -> dict[str, Any]:
         """The context measurement, ready for ``LLM_START`` metadata.
+
+        ``turn_context`` is what the turn injected into ``messages``; the recalled
+        memories in it are counted apart, so a front-end can say how much of the
+        request they are. The total is the same.
 
         Computed like ``assess`` computes its total, so the usage a front-end
         shows and the number the threshold is checked against are one number.
@@ -1128,9 +1133,17 @@ class Compactor(BaseModel):
         a threshold announced and never reached is misinformation.
         """
         window = _context_window(agent)
+        memory = [m for m in (turn_context or []) if getattr(m, "part", None) == "memory"]
         usage = measure(
             messages,
             tool_defs,
+            memory_tokens=self.estimator.estimate_messages(memory) if memory else 0,
+            memory_entries=sum(
+                1
+                for m in memory
+                for line in str(m.content or "").splitlines()
+                if line.startswith("- ")
+            ),
             estimator=self.estimator,
             context_window=window,
             threshold_tokens=(

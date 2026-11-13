@@ -42,6 +42,7 @@ from domyn.agents.llm import BaseLLMProvider
 from domyn.agents.llm.context_window import resolve_context_window
 from domyn.agents.loader import interpolate_env_vars
 from domyn.agents.logger import get_logger
+from domyn.agents.memory.managers.base import MemoryExecutionMode
 from domyn.agents.planner_strategy.context_management.compaction import CompactionConfig
 from domyn.agents.skills import LocalDirSkillSource
 from domyn.agents.skills.catalog import BUILTIN_SKILLS_ROOT
@@ -699,16 +700,19 @@ DECISION_LEVELS: dict[str, dict[str, Any]] = {
         "approvals": {"mode": "shadow"},
         "skills": {"mode": "shadow"},
         "instructions": {"mode": "shadow"},
+        "memory": {"mode": "shadow"},
     },
     "active": {
         "approvals": {"mode": "shadow"},
         "skills": {"mode": "active"},
         "instructions": {"mode": "active"},
+        "memory": {"mode": "active"},
     },
     "active, approvals too": {
         "approvals": {"mode": "active"},
         "skills": {"mode": "active"},
         "instructions": {"mode": "active"},
+        "memory": {"mode": "active"},
     },
 }
 
@@ -716,12 +720,10 @@ DECISION_LEVELS: dict[str, dict[str, Any]] = {
 DECISION_LEVEL_BLURB: dict[str, str] = {
     "no": "no decision model",
     "shadow": "ask and record, change nothing",
-    "active": "pick skills and instructions; the approval gate only records",
+    "active": "pick skills and instructions, decide what to remember; the approval gate only records",
     "active, approvals too": "also let it allow or deny a tool call",
 }
 
-DEFAULT_DECISION_URL = "http://localhost:28080"
-DEFAULT_DECISION_MODEL = "Cloudflare/clef"
 DEFAULT_DECISION_KEY_ENV = "DECISIONS_API_KEY"
 
 
@@ -733,8 +735,12 @@ class DecisionsChoice(BaseModel):
     """
 
     level: str = "no"
-    base_url: str = DEFAULT_DECISION_URL
-    model: str = DEFAULT_DECISION_MODEL
+    #: No default: a decision endpoint is somewhere only the user knows, except
+    #: that a vLLM deployment of the main model is offered (`decision_url_default`).
+    base_url: str = ""
+    #: No default either: it is the name the server exposes, which only the user
+    #: (or the server's refusal, which the wizard's probe prints) can tell.
+    model: str = ""
     #: Name of the variable holding the endpoint's key; the key itself is never
     #: in the choice, nor in the YAML (which gets ``${NAME}``).
     api_key_env: str | None = None
@@ -742,6 +748,24 @@ class DecisionsChoice(BaseModel):
     @property
     def enabled(self) -> bool:
         return self.level != "no" and bool(self.base_url) and bool(self.model)
+
+
+def decision_url_default(provider_type: str, url: str | None) -> str | None:
+    """The decision endpoint the wizard offers: the main model's vLLM server, else none.
+
+    A decision model is often served beside the chat model, so for ``vllm`` the
+    server's base URL (``http://host:8000`` for ``http://host:8000/v1/chat/completions``)
+    is offered, to be changed when it lives elsewhere; any other provider's endpoint
+    says nothing about where a decision model is.
+    """
+    if provider_type != "vllm" or not url or not url.strip():
+        return None
+    parts = urlsplit(url.strip())
+    path = parts.path.rstrip("/")
+    for suffix in (_CHAT_COMPLETIONS, "/v1"):
+        if path.endswith(suffix):
+            path = path[: -len(suffix)]
+    return urlunsplit(parts._replace(path=path, query="", fragment="")).rstrip("/") or None
 
 
 def current_decisions_from(raw: dict[str, Any] | None) -> DecisionsChoice:
@@ -778,8 +802,8 @@ def current_decisions_from(raw: dict[str, Any] | None) -> DecisionsChoice:
 
     return DecisionsChoice(
         level=level,
-        base_url=str(entry.get("base_url") or DEFAULT_DECISION_URL),
-        model=str(entry.get("model") or DEFAULT_DECISION_MODEL),
+        base_url=str(entry.get("base_url") or ""),
+        model=str(entry.get("model") or ""),
         api_key_env=_env_reference(entry.get("api_key")),
     )
 
@@ -790,12 +814,181 @@ def _env_reference(value: Any) -> str | None:
     return match.group(1) if match else None
 
 
+MEMORY_FILENAME = "memory.md"
+
+#: Shown beside each choice of the wizard's memory question. A configuration has one
+#: memory or none: nothing falls back from a project to the global one, or is merged.
+MEMORY_SCOPE_BLURB: dict[str, str] = {
+    "no": "the agent remembers nothing between conversations",
+    "global": "~/.domyn/memory.md, shared with every configuration that picks global",
+    "project": "a memory.md in this project's folder, for this project alone",
+}
+
+
+class MemoryDecider(StrEnum):
+    """Who decides what goes into the memory, asked only when a decision model is set up.
+
+    The value is the answer as the wizard shows it; `mode` is the memory manager's
+    ``execution_mode`` it stands for.
+    """
+
+    AGENT = "the agent"
+    MODEL = "the decision model"
+
+    @property
+    def mode(self) -> MemoryExecutionMode:
+        if self is MemoryDecider.MODEL:
+            return MemoryExecutionMode.AUTOMATIC
+        return MemoryExecutionMode.AGENTIC
+
+    @classmethod
+    def of(cls, mode: Any) -> "MemoryDecider":
+        """Who decides for an ``execution_mode`` as a config writes it; none is the default."""
+        written = str(mode or DEFAULT_MEMORY_MODE).lower()
+        return cls.MODEL if written == MemoryExecutionMode.AUTOMATIC else cls.AGENT
+
+
+#: The ``execution_mode`` a memory manager runs with when its config names none:
+#: ``BaseMemoryManager``'s default, so a hand-written entry reads as what it does.
+DEFAULT_MEMORY_MODE = MemoryExecutionMode.AUTOMATIC
+
+MEMORY_DECIDER_BLURB: dict[str, str] = {
+    MemoryDecider.AGENT: (
+        "the agent's model saves facts itself with a remember tool, while it answers"
+    ),
+    MemoryDecider.MODEL: (
+        "after each reply the decision model judges whether it said something worth "
+        "keeping; the agent's model only writes it down, and decides when it is unsure"
+    ),
+}
+
+
+class MemoryChoice(BaseModel):
+    """The wizard's working state for long-term memory.
+
+    `scope` is ``"no"``, ``"global"`` or ``"project"``. There is nothing else to
+    choose for now: the memory is always a file you can read and edit.
+
+    A configuration has one memory or none. ``global`` is ``~/.domyn/memory.md``,
+    shared by every configuration that chose it (the default one, and any project
+    that chose it); ``project`` is the project's own file, which nothing else reads;
+    ``no`` is no memory, never a fallback to the global one.
+    """
+
+    scope: str = "no"
+    decided_by: MemoryDecider | None = None
+    """Who decides what to remember; ``None`` when the wizard did
+    not ask (no decision model), which keeps the mode the file has, or ``agentic``
+    for a memory it writes anew."""
+
+    @property
+    def enabled(self) -> bool:
+        return self.scope != "no"
+
+
+def _memory_manager_of(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    agent_dict, _ = _entrypoint_agent_and_provider(raw)
+    declared = agent_dict.get("memory_manager")
+    return declared if isinstance(declared, dict) else None
+
+
+def current_memory_from(raw: dict[str, Any] | None) -> MemoryChoice:
+    """What the file already says about memory, as the wizard's own state.
+
+    A memory manager written by hand is read back as the closest choice: the
+    project's own folder is ``project``, anything else is ``global``. One that names
+    no ``execution_mode`` runs as ``automatic`` (`DEFAULT_MEMORY_MODE`), so it is read
+    as decided by the decision model, and the question opens there.
+    """
+    declared = _memory_manager_of(raw)
+    if declared is None:
+        return MemoryChoice()
+    decided_by = MemoryDecider.of(declared.get("execution_mode"))
+    if str(declared.get("file_path", "")).startswith(f"${{{PROJECT_DIR_VAR}}}"):
+        return MemoryChoice(scope="project", decided_by=decided_by)
+    return MemoryChoice(scope="global", decided_by=decided_by)
+
+
+def describe_memory(raw: dict[str, Any] | None) -> list[str]:
+    """The memory the file declares, one line per setting, as setup shows it before
+    asking whether to keep it; empty for none."""
+    declared = _memory_manager_of(raw)
+    if declared is None:
+        return []
+    choice = current_memory_from(raw)
+    return [
+        f"memory: {choice.scope}",
+        f"file: {declared.get('file_path') or '(default)'}",
+        f"decided by: {choice.decided_by}",
+    ]
+
+
+#: The global memory as an export writes it: whoever runs the project, in their home.
+GLOBAL_MEMORY_REF = f"~/.domyn/{MEMORY_FILENAME}"
+
+
+def is_global_memory(file_path: Any) -> bool:
+    """Whether ``file_path`` names the global memory: ``~/.domyn/memory.md`` as written
+    by an export, or the path setup writes for ``global`` on this machine.
+
+    It is the user's own file, not a place an export's author chose, so it is not
+    one of the paths outside a project (`export.config_paths`)."""
+    if not isinstance(file_path, str) or not file_path:
+        return False
+    if file_path == GLOBAL_MEMORY_REF:
+        return True
+    return Path(os.path.expandvars(file_path)).expanduser() == GLOBAL_DIR / MEMORY_FILENAME
+
+
+def memory_file_path(scope: str) -> str:
+    """Where a memory of ``scope`` is kept: the project's own folder, written the way
+    a project names its own files, or ``~/.domyn``."""
+    if scope == "project":
+        return f"${{{PROJECT_DIR_VAR}}}/{MEMORY_FILENAME}"
+    return str(GLOBAL_DIR / MEMORY_FILENAME)
+
+
+def _apply_memory(
+    config: dict[str, Any], memory: MemoryChoice | None, existing: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Write the memory the wizard was told about, or leave it alone.
+
+    ``None`` means the wizard never asked (a ``provider_only`` run, which is what
+    ``/model`` is), and nothing is touched. When it did ask, the answer is
+    authoritative in both directions, except that a memory manager that already
+    says the same thing is kept as written, so tuning done by hand (a page size, a
+    longer recall) survives a re-run of the wizard. Who decides what to remember,
+    when the wizard asked it, sets ``execution_mode`` either way.
+    """
+    if memory is None:
+        return config
+    agent_dict = config["agents"][0]
+    if not memory.enabled:
+        agent_dict.pop("memory_manager", None)
+        return config
+    # The value, not the member: the config is written with yaml.safe_dump.
+    mode = memory.decided_by.mode.value if memory.decided_by else None
+    if current_memory_from(existing).scope == memory.scope and "memory_manager" in agent_dict:
+        if mode is not None:
+            agent_dict["memory_manager"] = {**agent_dict["memory_manager"], "execution_mode": mode}
+        return config
+    agent_dict["memory_manager"] = {
+        "type": "filesystem",
+        "file_path": memory_file_path(memory.scope),
+        "execution_mode": mode or MemoryExecutionMode.AGENTIC.value,
+    }
+    return config
+
+
 def configuration_v1_dict_from(
     provider: ProviderConfig,
     agent: AgentConfig,
     compaction: CompactionConfig,
     existing: dict[str, Any] | None = None,
     decisions: DecisionsChoice | None = None,
+    memory: MemoryChoice | None = None,
 ) -> dict[str, Any]:
     """Project the CLI's prompted fields onto a ConfigurationV1-shaped dict.
 
@@ -889,7 +1082,33 @@ def configuration_v1_dict_from(
         agent_dict["tool_bundles"] = [CLI_DEFAULT_TOOL_BUNDLE_NAME]
 
     kept = _keep_unowned(config, existing)
-    return _apply_decisions(kept, decisions)
+    if memory_loses_its_decider(existing, decisions, memory):
+        assert memory is not None
+        memory = memory.model_copy(update={"decided_by": MemoryDecider.AGENT})
+    return _apply_memory(_apply_decisions(kept, decisions), memory, existing)
+
+
+def memory_loses_its_decider(
+    existing: dict[str, Any] | None,
+    decisions: DecisionsChoice | None,
+    memory: MemoryChoice | None,
+) -> bool:
+    """Whether this run removes the decision model that decides what to remember.
+
+    ``automatic`` memory without a decision model falls back to the agent's model
+    deciding after every turn: an extra call each turn, and a setting the wizard
+    cannot offer. So when the run that removes the decision model keeps a memory the
+    decision model decided for, the memory becomes ``agentic`` (the agent's
+    ``remember`` tool), as a memory set up without a decision model is. An
+    ``automatic`` written by hand into a file with no decision model is left alone:
+    nothing is being removed there.
+    """
+    if decisions is None or decisions.enabled or memory is None or not memory.enabled:
+        return False
+    if not (existing or {}).get("decision_providers"):
+        return False
+    decided_by = memory.decided_by or current_memory_from(existing).decided_by
+    return decided_by is MemoryDecider.MODEL
 
 
 def _apply_decisions(config: dict[str, Any], decisions: DecisionsChoice | None) -> dict[str, Any]:
@@ -1473,6 +1692,24 @@ def _decision_items(raw: dict[str, Any]) -> list[ConfigItem]:
     return items
 
 
+def _memory_items(raw: dict[str, Any]) -> list[ConfigItem]:
+    """The agents that remember between conversations, and where."""
+    items: list[ConfigItem] = []
+    for agent in raw.get("agents") or []:
+        declared = agent.get("memory_manager") if isinstance(agent, dict) else None
+        if not isinstance(declared, dict):
+            continue
+        scope = current_memory_from({"entrypoint": agent.get("name"), "agents": [agent]}).scope
+        fields = [
+            ("type", str(declared.get("type", "?"))),
+            ("mode", str(declared.get("execution_mode") or DEFAULT_MEMORY_MODE.value)),
+            ("scope", scope),
+            ("file", str(declared.get("file_path", "(default)"))),
+        ]
+        items.append(ConfigItem(name=str(agent.get("name", "?")), fields=fields))
+    return items
+
+
 def _tool_bundle_items(raw: dict[str, Any]) -> list[ConfigItem]:
     items: list[ConfigItem] = []
     for b in raw.get("tool_bundles") or []:
@@ -1563,6 +1800,7 @@ def describe_configuration_v1(
         ConfigSection("Tool Bundles", _tool_bundle_items(raw)),
         ConfigSection("Context Managers", _context_manager_items(raw)),
         ConfigSection("Decision Models", _decision_items(raw)),
+        ConfigSection("Memory", _memory_items(raw)),
         ConfigSection("Metadata", _metadata_items(raw)),
     ]
     return ConfigDescription(path=path or config_path(), sections=[s for s in sections if s.items])

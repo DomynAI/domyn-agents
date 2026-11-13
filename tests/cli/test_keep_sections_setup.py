@@ -1,6 +1,6 @@
 """`domyn setup` asking, on a re-run, whether to keep each section as the config has it.
 
-Four sections — model, instructions, tools, skills — each shown first and kept on a yes
+Five sections — model, instructions, tools, skills, memory — each shown first and kept on a yes
 (the default, so Enter keeps), which skips its questions. Not asked on a first setup, on
 a ``provider_only`` run (``/model``), or for a model the config leaves incomplete.
 """
@@ -120,11 +120,11 @@ class TestNotAsked:
         self, console: MagicMock, theme: Theme, tmp_path: Path, keep: MagicMock
     ) -> None:
         result = _run(
-            console, theme, [*FIELDS, "", "", ""], _existing(model_name=""), tmp_path / "c.yaml"
+            console, theme, [*FIELDS, "", "", "", ""], _existing(model_name=""), tmp_path / "c.yaml"
         )
 
         assert result is not None
-        assert _asked(keep) == ["instructions", "tools", "skills"]
+        assert _asked(keep) == ["instructions", "tools", "skills", "memory settings"]
         assert result["llm_providers"][0]["model_name"] == "m2"
 
 
@@ -138,10 +138,10 @@ class TestARerun:
         steps: dict[str, MagicMock],
     ) -> None:
         existing = _existing()
-        result = _run(console, theme, ["", "", "", ""], existing, tmp_path / "config.yaml")
+        result = _run(console, theme, ["", "", "", "", ""], existing, tmp_path / "config.yaml")
 
         assert result == existing
-        assert _asked(keep) == ["model", "instructions", "tools", "skills"]
+        assert _asked(keep) == ["model", "instructions", "tools", "skills", "memory settings"]
         assert all(step.call_count == 0 for step in steps.values())
 
     def test_no_on_the_model_asks_only_for_the_model(
@@ -152,7 +152,7 @@ class TestARerun:
         steps: dict[str, MagicMock],
     ) -> None:
         existing = _existing()
-        result = _run(console, theme, ["n", *FIELDS, "", "", ""], existing, tmp_path / "c.yaml")
+        result = _run(console, theme, ["n", *FIELDS, "", "", "", ""], existing, tmp_path / "c.yaml")
 
         assert result is not None
         assert result["llm_providers"][0]["model_name"] == "m2"
@@ -167,7 +167,7 @@ class TestARerun:
         tmp_path: Path,
         steps: dict[str, MagicMock],
     ) -> None:
-        result = _run(console, theme, ["", "", "n", ""], _existing(), tmp_path / "config.yaml")
+        result = _run(console, theme, ["", "", "n", "", ""], _existing(), tmp_path / "config.yaml")
 
         assert result is not None
         assert steps["_choose_tools"].call_count == 1
@@ -177,7 +177,7 @@ class TestARerun:
     def test_shows_what_each_section_holds(
         self, console: MagicMock, theme: Theme, tmp_path: Path
     ) -> None:
-        _run(console, theme, ["", "", "", ""], _existing(), tmp_path / "config.yaml")
+        _run(console, theme, ["", "", "", "", ""], _existing(), tmp_path / "config.yaml")
 
         printed = [str(c.args[0]) for c in console.print.call_args_list if c.args]
         for line in (
@@ -199,6 +199,97 @@ class TestARerun:
 
         assert _run(console, theme, [EOFError], _existing(), target) is None
         assert not target.exists()
+
+
+def _with_memory(mode: str, *, decision_model: bool = False) -> dict[str, Any]:
+    """`_existing` with a global memory tuned by hand, optionally decided for by a model."""
+    existing = _existing()
+    existing["agents"][0]["memory_manager"] = {
+        "type": "filesystem",
+        "file_path": cfg.memory_file_path("global"),
+        "execution_mode": mode,
+        "recency_limit": 7,
+    }
+    if decision_model:
+        existing["decision_providers"] = [{"name": "d", "type": "system_one"}]
+    return existing
+
+
+class TestTheMemory:
+    def test_kept_as_written_without_asking_its_questions(
+        self,
+        console: MagicMock,
+        theme: Theme,
+        tmp_path: Path,
+        keep: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        ask_memory = MagicMock()
+        monkeypatch.setattr(setup, "_ask_memory", ask_memory)
+        existing = _with_memory("agentic")
+
+        result = _run(console, theme, [""] * 5, existing, tmp_path / "config.yaml")
+
+        assert result is not None
+        assert _asked(keep)[-1] == "memory settings"
+        assert ask_memory.call_count == 0
+        assert result["agents"][0]["memory_manager"] == existing["agents"][0]["memory_manager"]
+
+    def test_no_asks_the_memory_question(
+        self,
+        console: MagicMock,
+        theme: Theme,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        ask_memory = MagicMock(return_value=cfg.MemoryChoice())
+        monkeypatch.setattr(setup, "_ask_memory", ask_memory)
+
+        result = _run(
+            console, theme, ["", "", "", "", "n"], _with_memory("agentic"), tmp_path / "c.yaml"
+        )
+
+        assert result is not None
+        assert ask_memory.call_count == 1
+        assert ask_memory.call_args.args[2].scope == "global"
+        assert "memory_manager" not in result["agents"][0]
+
+    def test_shows_the_memory(self, console: MagicMock, theme: Theme, tmp_path: Path) -> None:
+        _run(console, theme, [""] * 5, _with_memory("agentic"), tmp_path / "config.yaml")
+
+        printed = [str(c.args[0]) for c in console.print.call_args_list if c.args]
+        assert "    memory: global" in printed
+        assert f"    file: {cfg.memory_file_path('global')}" in printed
+        assert "    decided by: the agent" in printed
+
+    def test_shows_none_when_there_is_none(
+        self, console: MagicMock, theme: Theme, tmp_path: Path
+    ) -> None:
+        result = _run(console, theme, [""] * 5, _existing(), tmp_path / "config.yaml")
+
+        printed = [str(c.args[0]) for c in console.print.call_args_list if c.args]
+        assert printed[printed.index("  Current memory settings:") + 1] == "    none"
+        assert result is not None and "memory_manager" not in result["agents"][0]
+
+    def test_kept_without_the_decision_model_deciding_for_it_becomes_the_agents(
+        self, console: MagicMock, theme: Theme, tmp_path: Path
+    ) -> None:
+        # Not kept, the CLI conftest answers the decision-model question "no": this run
+        # removes it.
+        result = _run(
+            console,
+            theme,
+            ["", "", "", "", "n", ""],
+            _with_memory("automatic", decision_model=True),
+            tmp_path / "config.yaml",
+        )
+
+        assert result is not None
+        memory = result["agents"][0]["memory_manager"]
+        assert memory["execution_mode"] == "agentic"
+        assert memory["recency_limit"] == 7
+        printed = " ".join(str(c.args[0]) for c in console.print.call_args_list if c.args)
+        assert "without a decision model the agent saves memories itself" in printed
 
 
 def _with_decisions() -> dict[str, Any]:
@@ -225,7 +316,7 @@ class TestTheDecisionModel:
     def test_is_not_offered_for_keeping_when_the_config_has_none(
         self, console: MagicMock, theme: Theme, tmp_path: Path, keep: MagicMock
     ) -> None:
-        _run(console, theme, ["", "", "", ""], _existing(), tmp_path / "config.yaml")
+        _run(console, theme, ["", "", "", "", ""], _existing(), tmp_path / "config.yaml")
 
         assert "decision model" not in _asked(keep)
 
@@ -238,10 +329,17 @@ class TestTheDecisionModel:
         ask_decisions: MagicMock,
     ) -> None:
         existing = _with_decisions()
-        result = _run(console, theme, ["", "", "", "", ""], existing, tmp_path / "config.yaml")
+        result = _run(console, theme, ["", "", "", "", "", ""], existing, tmp_path / "config.yaml")
 
         assert result is not None
-        assert _asked(keep) == ["model", "instructions", "tools", "skills", "decision model"]
+        assert _asked(keep) == [
+            "model",
+            "instructions",
+            "tools",
+            "skills",
+            "decision model",
+            "memory settings",
+        ]
         assert ask_decisions.call_count == 0
         assert result["decision_providers"] == existing["decision_providers"]
         assert result["agents"][0]["decisions"] == existing["agents"][0]["decisions"]
@@ -249,7 +347,7 @@ class TestTheDecisionModel:
     def test_shows_what_it_holds(
         self, console: MagicMock, theme: Theme, tmp_path: Path, ask_decisions: MagicMock
     ) -> None:
-        _run(console, theme, ["", "", "", "", ""], _with_decisions(), tmp_path / "config.yaml")
+        _run(console, theme, ["", "", "", "", "", ""], _with_decisions(), tmp_path / "config.yaml")
 
         printed = [str(c.args[0]) for c in console.print.call_args_list if c.args]
         for line in ("level: active", "endpoint: http://clef:28080", "model: Cloudflare/clef"):
@@ -263,10 +361,36 @@ class TestTheDecisionModel:
         ask_decisions: MagicMock,
     ) -> None:
         result = _run(
-            console, theme, ["", "", "", "", "n"], _with_decisions(), tmp_path / "config.yaml"
+            console, theme, ["", "", "", "", "n", ""], _with_decisions(), tmp_path / "config.yaml"
         )
 
         assert result is not None
         assert ask_decisions.call_count == 1
         assert ask_decisions.call_args.args[2].level == "active"
         assert "decision_providers" not in result
+
+    def test_kept_it_still_asks_who_decides_for_a_memory_not_kept(
+        self,
+        console: MagicMock,
+        theme: Theme,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        ask_decisions: MagicMock,
+    ) -> None:
+        # A kept decision model leaves the draft's choice empty: the file's is in force,
+        # so a memory set up again is still asked who decides what to remember.
+        monkeypatch.setattr(
+            setup, "_ask_memory", lambda console, theme, current: cfg.MemoryChoice(scope="global")
+        )
+        ask_decider = MagicMock(return_value=cfg.MemoryDecider.MODEL)
+        monkeypatch.setattr(setup, "_ask_memory_decider", ask_decider)
+
+        result = _run(
+            console, theme, ["", "", "", "", "", "n"], _with_decisions(), tmp_path / "c.yaml"
+        )
+
+        assert result is not None
+        assert ask_decisions.call_count == 0
+        assert ask_decider.call_count == 1
+        assert ask_decider.call_args.args[3].level == "active"
+        assert result["agents"][0]["memory_manager"]["execution_mode"] == "automatic"

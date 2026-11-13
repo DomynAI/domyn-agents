@@ -39,7 +39,13 @@ from domyn.agents.instructions import (
     InstructionRuntime,
 )
 from domyn.agents.interfaces.cli import commands as slash
-from domyn.agents.interfaces.cli import context_view, conversations, grants, processes_view
+from domyn.agents.interfaces.cli import (
+    context_view,
+    conversations,
+    grants,
+    memory_view,
+    processes_view,
+)
 from domyn.agents.interfaces.cli.approval import (
     begin_approval,
     prompt_for_approval,
@@ -67,6 +73,7 @@ from domyn.agents.interfaces.cli.export import (
 from domyn.agents.interfaces.cli.inventory import Inventory, describe_change, take_inventory
 from domyn.agents.interfaces.cli.prompt import InputSession
 from domyn.agents.interfaces.cli.renderer import EventRenderer
+from domyn.agents.interfaces.cli.select import select
 from domyn.agents.interfaces.cli.setup import (
     run_setup,
     skill_autodiscovery,
@@ -97,6 +104,12 @@ if TYPE_CHECKING:
     from domyn.agents.conversation_manager import ConversationInfo
 
 _T = TypeVar("_T")
+
+#: Said after every /memory clear: the memories are removed, the conversation is not,
+#: so what was said in it (and the memories recalled into it) still reaches the model.
+_CONVERSATION_STILL_HOLDS = (
+    " This conversation still holds what was said in it: /clear starts a new one."
+)
 
 APPLICATION_NAME = "domyn-cli"
 USER_ID = "local-user"
@@ -662,6 +675,8 @@ class Repl:
                     user_input=pending_event,
                     root=self._agent,
                     conversation_id=self._state.conversation_id,
+                    # `remember`, `recall` and `forget` read the user from here.
+                    run_config={"user_id": USER_ID},
                 )
             )
 
@@ -1058,6 +1073,8 @@ class Repl:
                 self._say("Auto-approve off.")
         elif name == "/approvals":
             await self._handle_approvals(argument)
+        elif name == "/memory":
+            await self._handle_memory(argument)
         elif name == "/voice":
             await self.toggle_voice()
         elif name == "/verbose":
@@ -1339,6 +1356,100 @@ class Repl:
             self._console.print(
                 f"  removed  {label}", style=self._theme.style("meta"), highlight=False
             )
+
+    async def _handle_memory(self, argument: str) -> None:
+        """``/memory``: list, add to, forget from, or clear what the agent remembers."""
+        manager = getattr(self._agent, "memory_manager", None)
+        if manager is None:
+            self._say("Memory is off. Turn it on with `domyn setup`.")
+            return
+        verb, _, rest = argument.strip().partition(" ")
+        verb = verb.lower()
+        rest = rest.strip()
+        run_config = {"user_id": USER_ID}
+
+        if verb in ("", "list"):
+            number = int(rest) if rest.isdigit() else 1
+            try:
+                page, shown, last = await memory_view.fetch_page(
+                    manager, self._agent, USER_ID, number
+                )
+            except Exception as exc:
+                get_logger().warning(f"memory: could not list: {type(exc).__name__}")
+                get_logger().debug(f"memory list detail: {exc}")
+                self._say("Memory is not available right now.")
+                return
+            memory_view.render(
+                self._console,
+                self._theme,
+                page,
+                number=shown,
+                last=last,
+                path=getattr(manager, "file_path", None),
+            )
+        elif verb == "add":
+            if not rest:
+                self._say("Usage: /memory add <text>")
+                return
+            self._say(await manager.remember(self._agent, rest, run_config))
+        elif verb == "forget":
+            if not rest:
+                self._say("Usage: /memory forget <id>  (the id is the first column of /memory)")
+                return
+            self._say(await manager.forget(self._agent, rest, run_config))
+        elif verb == "clear":
+            everything = rest.lower() == "all"
+            if rest and not everything:
+                self._say("Usage: /memory clear [all]")
+                return
+            path = getattr(manager, "file_path", None)
+            if everything and path is None:
+                # complete_reset on a shared store would remove every user's memories.
+                self._say("/memory clear all is for a memory kept in a file, and this is not one.")
+                return
+            question = (
+                f"Remove every memory in {path}, those written by hand or by other users included?"
+                if everything
+                else "Forget everything the agent remembers about you?"
+            )
+            answer = select(
+                self._console,
+                self._theme,
+                question,
+                ["no", "yes"],
+                current="no",
+                aliases={"n": "no", "y": "yes"},
+                max_tries=3,
+            )
+            if answer != "yes":
+                self._say("Nothing was removed.")
+                return
+            if everything:
+                await manager.complete_reset()
+                self._say("Memory cleared, every entry in the file." + _CONVERSATION_STILL_HOLDS)
+                return
+            await manager.reset_memory(USER_ID)
+            self._say(await self._after_clearing(manager))
+        else:
+            self._say(
+                f"Unknown: /memory {verb}. Try /memory, list [n], add <text>, forget <id>, clear or clear all."
+            )
+
+    async def _after_clearing(self, manager: Any) -> str:
+        """What ``/memory clear`` says: entries that belong to no one survive it."""
+        try:
+            kept = (await manager.recall_page(USER_ID, self._agent)).total or 0
+        except Exception as exc:
+            get_logger().warning(f"memory: could not count what is left: {type(exc).__name__}")
+            get_logger().debug(f"memory count detail: {exc}")
+            kept = 0
+        if not kept:
+            return "Memory cleared." + _CONVERSATION_STILL_HOLDS
+        entries, belong = ("entry", "belongs") if kept == 1 else ("entries", "belong")
+        return (
+            f"Memory cleared, except {kept} {entries} written by hand, which {belong} to no one: "
+            "`/memory clear all` removes them too." + _CONVERSATION_STILL_HOLDS
+        )
 
     async def _show_config_file(self) -> None:
         """Show the config file backing this session as a redacted summary —

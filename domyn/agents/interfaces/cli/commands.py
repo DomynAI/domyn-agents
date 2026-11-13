@@ -48,6 +48,11 @@ COMMANDS: tuple[SlashCommand, ...] = (
         "Review and remove standing approvals",
         usage="/approvals [revoke <n> | clear]",
     ),
+    SlashCommand(
+        "/memory",
+        "See and manage what the agent remembers about you",
+        usage="/memory [list [n] | add <text> | forget <id> | clear [all]]",
+    ),
     SlashCommand("/verbose", "Toggle internal events and library logs"),
     SlashCommand("/voice", "Talk instead of typing: hold space to speak, let go to send"),
     SlashCommand("/model", "Change provider and model"),
@@ -85,6 +90,8 @@ COMMANDS: tuple[SlashCommand, ...] = (
 #   /verbose   replaces the renderer mid-stream, handing the next finish() one whose
 #              "a stream is open" flag is False while the old one still has tokens
 #              arriving.
+#   /memory    writes the memory file the agent may be reading, and `clear` reads the
+#              terminal to ask.
 # /approvals stays non-mid_turn even in its read-only bare form, so the answer is a
 # per-command property rather than a per-argument special case.
 

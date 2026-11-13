@@ -1304,8 +1304,8 @@ class Runner:
     async def _load_turn_resources(
         self, state: RunnerState, context: InteractionContext
     ) -> tuple[RunnerState, list[BaseEvent]]:
-        """Load the turn's skills and standing instructions, and learn the models'
-        context windows, concurrently.
+        """Load the turn's skills and standing instructions, learn the models'
+        context windows and recall the starting agent's memories, concurrently.
 
         Independent sources with independent failure modes, so neither waits on
         the other. Both are waited for even when one fails — a refused turn must
@@ -1327,18 +1327,41 @@ class Runner:
             # would otherwise be ready.
             self._decide_tool_visibility(state, context),
             self._decide_context_relevance(state, context),
+            self._prefetch_memory(state, context),
             return_exceptions=True,
         )
         for result in results:
             if isinstance(result, BaseException):
                 raise result
-        _, instructions, _context_windows, visibility, relevance = results
+        _, instructions, _context_windows, visibility, relevance, _memory = results
         decision_events = [
             *(instructions[1] if isinstance(instructions, tuple) else []),
             *(visibility if isinstance(visibility, list) else []),
             *(relevance if isinstance(relevance, list) else []),
         ]
         return state, decision_events
+
+    async def _prefetch_memory(self, state: RunnerState, context: InteractionContext) -> None:
+        """Recall the starting agent's memories while the rest of the turn loads.
+
+        The planner asks for them before its first request
+        (:func:`~domyn.agents.planner_strategy.context_injection.turn_context_messages`);
+        :meth:`BaseMemoryManager.recall_block` keeps its answer for the turn, so asked
+        here first it overlaps the other loads, most of them waiting on files or the
+        network, and the planner's call returns at once. Only the agent the turn
+        starts with: a sub-agent's task is not known until the handoff. Never fails
+        the turn: a recall that fails is a turn without memories, as it would be later.
+        """
+        agent = state.current_agent
+        manager = getattr(agent, "memory_manager", None)
+        if manager is None or not (context.turn_id or context.interaction_id):
+            # Without a turn the answer is not kept, and would be computed twice.
+            return
+        try:
+            await manager.recall_block(agent, context)
+        except Exception as exc:
+            get_logger().warning(f"memory: early recall failed: {type(exc).__name__}")
+            get_logger().debug(f"memory: early recall failure detail: {exc}")
 
     async def _load_turn_skills(
         self, state: RunnerState, context: InteractionContext
