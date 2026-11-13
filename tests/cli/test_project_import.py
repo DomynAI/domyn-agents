@@ -13,6 +13,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from domyn.agents.cli.cli import app
+from domyn.agents.cli.commands.setup import command as setup_command
 from domyn.agents.interfaces.cli import Theme
 from domyn.agents.interfaces.cli import config as cfg
 from domyn.agents.interfaces.cli import export as export_mod
@@ -530,6 +531,54 @@ class TestTheImportedInstructions:
         assert (project / "SOUL.md").is_file()
 
 
+def _carry_code(exported: Path) -> None:
+    """Give the export code of every kind the loader runs, and things that run none:
+    a tool's ``path`` in ``code/``, a ``func.path`` in ``skills/`` (copied with the
+    skills), a hook's ``path``, a hook written in an MCP tool's ``hooks``, and a REST
+    hook and the MCP tool itself, which run no file."""
+    (exported / "code").mkdir(exist_ok=True)
+    (exported / "code" / "run.py").write_text("def run() -> str:\n    return 'ran'\n")
+    (exported / "code" / "log.py").write_text("def log(context, agent) -> None:\n    pass\n")
+    (exported / "code" / "check.py").write_text("def check(tool, tool_args):\n    pass\n")
+    (exported / "skills").mkdir(exist_ok=True)
+    (exported / "skills" / "helper.py").write_text("def helper() -> str:\n    return 'h'\n")
+    config = yaml.safe_load((exported / cfg.CONFIG_FILENAME).read_text())
+    config["tools"] = [
+        {"name": "run", "type": "function", "path": f"{P}/code/run.py"},
+        {
+            "name": "helper",
+            "type": "function",
+            "func": {"name": "helper", "path": f"{P}/skills/helper.py"},
+        },
+        {
+            "name": "remote",
+            "type": "mcp",
+            "server_url": "http://mcp.example",
+            "hooks": [
+                "audit",
+                {
+                    "name": "check",
+                    "type": "updater",
+                    "trigger": "pre_tool_call",
+                    "path": f"{P}/code/check.py",
+                },
+            ],
+        },
+    ]
+    config["hooks"] = [
+        {
+            "name": "log",
+            "type": "listener",
+            "trigger": "pre_agent_call",
+            "path": f"{P}/code/log.py",
+        },
+        {"name": "audit", "type": "listener", "trigger": "pre_tool_call", "url": "http://h"},
+    ]
+    config["agents"][0]["tools"] = ["run", "helper", "remote"]
+    config["agents"][0]["hooks"] = ["log"]
+    (exported / cfg.CONFIG_FILENAME).write_text(yaml.safe_dump(config))
+
+
 # Captured before the CLI conftest replaces it for every wizard test.
 _REAL_KEEP = cli_setup._keep
 
@@ -579,25 +628,77 @@ class TestTheCommand:
         assert f"Created project {exported.name}" in said
         assert f"domyn run --project {exported.name}" in said
 
-    def test_the_export_s_code_is_left_behind(
+    @pytest.mark.parametrize("terminal", [False, True], ids=["no-terminal", "declined"])
+    def test_code_not_accepted_aborts_the_import(
+        self,
+        exported: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        answers: list[str],
+        terminal: bool,
+    ) -> None:
+        _carry_code(exported)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(setup_command, "interactive_terminal", lambda: terminal)
+
+        def no_wizard(*_: Any, **__: Any) -> None:
+            raise AssertionError("the wizard ran after the code was refused")
+
+        monkeypatch.setattr(setup_command, "run_setup", no_wizard)
+        answers.append("n")
+
+        result = CliRunner().invoke(app, ["setup", "--import", str(exported)])
+
+        assert result.exit_code == 1, result.output
+        project = cfg.project_dir(exported.name)
+        # Listed as the project's own copies, the ones that would run. Long paths
+        # wrap, so they are looked for with every space taken out.
+        unwrapped = "".join(result.output.split())
+        assert f"{project.resolve()}/code/run.py" in unwrapped
+        assert f"{project.resolve()}/skills/helper.py" in unwrapped
+        assert "Checkthemcarefully" in unwrapped
+        assert ("Importthiscode?" in unwrapped) is terminal
+        assert "Importaborted" in unwrapped
+        # Never their content.
+        assert "return'ran'" not in unwrapped
+        # Nothing of the project is left.
+        assert not project.exists()
+
+    def test_accepted_the_export_s_code_is_imported_whole(
         self, exported: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answers: list[str]
     ) -> None:
-        # A tool the export carries: setup keeps no tools, so its code is not copied
-        # in, and the import says so.
-        (exported / "code").mkdir()
-        (exported / "code" / "tool.py").write_text("import os\n", encoding="utf-8")
-        config = yaml.safe_load((exported / cfg.CONFIG_FILENAME).read_text())
-        config["tools"] = [{"name": "t", "type": "function", "path": f"{P}/code/tool.py"}]
-        (exported / cfg.CONFIG_FILENAME).write_text(yaml.safe_dump(config))
+        _carry_code(exported)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(cli_setup, "_keep", _keep_but())
+        monkeypatch.setattr(setup_command, "interactive_terminal", lambda: True)
+        answers.append("y")
 
         result = CliRunner().invoke(app, ["setup", "--import", str(exported)])
 
         assert result.exit_code == 0, result.output
         project = cfg.project_dir(exported.name)
-        assert not (project / "code").exists()
-        assert "Not imported: tool t" in " ".join(result.output.split())
+        assert (project / "code" / "run.py").is_file()
+        assert "return'ran'" not in "".join(result.output.split())
+        saved = yaml.safe_load((project / cfg.CONFIG_FILENAME).read_text())
+        exported_config = yaml.safe_load((exported / cfg.CONFIG_FILENAME).read_text())
+        assert saved["tools"] == exported_config["tools"]
+        assert saved["hooks"] == exported_config["hooks"]
+        assert saved["agents"][0]["tools"] == ["run", "helper", "remote"]
+        assert saved["agents"][0]["hooks"] == ["log"]
+
+    def test_an_aborted_wizard_after_accepting_leaves_no_project(
+        self, exported: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answers: list[str]
+    ) -> None:
+        _carry_code(exported)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(setup_command, "interactive_terminal", lambda: True)
+        monkeypatch.setattr(setup_command, "run_setup", lambda *a, **k: None)
+        answers.append("y")
+
+        result = CliRunner().invoke(app, ["setup", "--import", str(exported)])
+
+        assert result.exit_code == 1
+        assert not cfg.project_dir(exported.name).exists()
 
     def test_skills_not_kept_offer_the_project_s_own(
         self, exported: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answers: list[str]

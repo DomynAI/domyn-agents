@@ -136,7 +136,7 @@ A project is a separate configuration, kept side by side with the default one: i
 | `domyn setup --project work` | Creates the project `work` in `~/.domyn/projects/work` with the setup wizard, or changes it if it exists. |
 | `domyn run --project work` | Starts a session with it. The banner shows the project's name. |
 | `domyn export <folder>` | Saves the configuration, with the skills and instruction files it uses, into a new folder: a project that works on any machine. With `--project work`, it exports that project. `/export <folder>` does the same from inside a session. |
-| `domyn setup --import <folder>` | Creates a new project from an exported folder, named after the folder unless `--project` gives another name. The wizard shows each exported setting and asks whether to keep it. |
+| `domyn setup --import <folder>` | Creates a new project from an exported folder, named after the folder unless `--project` gives another name. The wizard shows each exported setting and asks whether to keep it. When the export has tools or hooks that run Python code, setup first lists those files and asks whether to import them: imported, they run every time you use the project, without asking again, so check them carefully. If you say no, or there is no terminal to ask on, the import is aborted and nothing is created. |
 
 `--project` also takes the path of a project folder anywhere on disk: anything containing `/` or starting with `.` or `~`, such as `--project ./shared`.
 

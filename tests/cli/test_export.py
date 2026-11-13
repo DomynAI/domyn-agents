@@ -1008,6 +1008,32 @@ class TestNothingOutsideTheExportIsNamed:
         assert exported["hooks"][0]["path"] == P + "code/tools-2.py"
         assert (report.dest / "code/tools-2.py").read_text(encoding="utf-8") == "# b\n"
 
+    def test_a_func_path_and_a_hook_in_a_tool_are_copied_in_too(
+        self, machine: dict[str, Path], tmp_path: Path
+    ) -> None:
+        # Every key the loader runs a file from, not only a top-level `path`.
+        for name in ("func", "hook"):
+            (tmp_path / f"{name}.py").write_text(f"# {name}\n", encoding="utf-8")
+        hook = {"name": "h", "trigger": "pre_tool_call", "path": str(tmp_path / "hook.py")}
+        raw = {
+            **_config(),
+            "tools": [
+                {
+                    "name": "f",
+                    "type": "function",
+                    "func": {"name": "f", "path": str(tmp_path / "func.py")},
+                    "hooks": [hook],
+                }
+            ],
+        }
+
+        report = _export(raw, machine, tmp_path / "out")
+
+        tool = _exported(report.dest)["tools"][0]
+        assert tool["func"]["path"] == P + "code/func.py"
+        assert tool["hooks"][0]["path"] == P + "code/hook.py"
+        assert (report.dest / "code/func.py").read_text(encoding="utf-8") == "# func\n"
+
     @pytest.mark.parametrize(
         ("extra", "named"),
         [
