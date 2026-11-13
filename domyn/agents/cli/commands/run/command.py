@@ -507,12 +507,17 @@ def _run_command_for(file: Path | None, agent_name: str | None) -> str:
 
 def _looks_like_agent_file(value: Path) -> bool:
     """Whether a positional argument is meant as an agent file rather than a prompt."""
+    # A part longer than the system's limit on a file name (255 bytes on macOS
+    # and Linux) cannot be a file, so the value is a prompt. Checked here rather
+    # than left to `exists()`: up to Python 3.13 it raises ENAMETOOLONG, from
+    # 3.14 it answers False, and the suffix check below would then take a long
+    # prompt ending in "main.py" for a file.
+    if any(len(part.encode()) > 255 for part in value.parts):
+        return False
     try:
         if value.exists():
             return True
     except OSError:
-        # A prompt longer than the system's limit on a file name (255 bytes on
-        # macOS and Linux) raises ENAMETOOLONG instead of answering False.
         return False
     return value.suffix.lower() in (".py", ".yaml", ".yml")
 
