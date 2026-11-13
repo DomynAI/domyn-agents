@@ -71,9 +71,7 @@ class StateFolders(StrEnum):
     or a caller names, else ``HOME_DIRNAME`` in the workspace).
 
     Every member is a session's working state, kept for its owner: ``domyn export``
-    copies nothing below them and ``domyn setup --import`` brings none in. Membership
-    of a plain string: ``name in set(StateFolders)``
-    (``in StateFolders`` raises for one on Python 3.11)."""
+    copies nothing below them and ``domyn setup --import`` brings none in."""
 
     CONVERSATIONS = "conversations"
     """``<id>/venv`` and ``<id>/output`` of each conversation (`SessionPaths`)."""
