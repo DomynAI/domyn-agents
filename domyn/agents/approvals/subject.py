@@ -16,12 +16,15 @@ willing to be approved *for*, and having to say it out loud is a feature.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
+from domyn.agents.core import METADATA_INITIAL_PARAMETERS, ExecutionEventType
 from domyn.agents.logger import get_logger
 
 if TYPE_CHECKING:
     from domyn.agents.approvals.models import ApprovalRequest
+    from domyn.agents.core import BaseEvent
 
 # Parameters the planner adds to a tool's schema for its own purposes, which are
 # no part of what the user is approving. They must never reach a subject, for two
@@ -44,6 +47,47 @@ INJECTED_PARAMS: frozenset[str] = frozenset({"reasoning"})
 def visible_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
     """The parameters a subject may be built from: the call minus planner noise."""
     return {key: value for key, value in parameters.items() if key not in INJECTED_PARAMS}
+
+
+def append_user_edit_note(tool_result: Any, tool_result_event: BaseEvent) -> Any:
+    """*tool_result*, followed by a note for the model when *tool_result_event* is the result of a
+    call the user edited before approving it; unchanged for any other event.
+
+    Added where the result is rendered for a model, never to the stored result: the
+    note is an instruction to the model, and the stored result is what users see.
+    """
+    initial_parameters = tool_result_event.metadata.get(METADATA_INITIAL_PARAMETERS)
+    final_action: Any = tool_result_event.action  # mypy reads `BaseEvent.action` as `None`
+    if initial_parameters is None or final_action is None:
+        return tool_result
+
+    def format_call(parameters: dict[str, Any]) -> str:
+        arguments = json.dumps(visible_parameters(parameters), ensure_ascii=False, default=str)
+        return f"{final_action.name}({arguments})"
+
+    final_call = format_call(final_action.parameters or {})
+    failed = tool_result_event.event_type == ExecutionEventType.TOOL_ERROR
+    # Says whose arguments were rejected, and that they outrank the task: told only "the user's
+    # values", models retried with the rejected ones, or went back to what their task named.
+    user_edit_note = (
+        f"Note: before approving, the user rejected the arguments you proposed, "
+        f"{format_call(initial_parameters)}, and replaced them: this call ran as {final_call}, "
+        f"and the {'error' if failed else 'result'} above is for the user's arguments."
+    )
+    if not failed:
+        user_edit_note += " The call is done: do not make it again."
+    user_edit_note += (
+        " The user's arguments override your task and the request: use them from now on, in "
+        "related calls too, and never the rejected values."
+    )
+    if failed:
+        user_edit_note += f" To retry, call exactly {final_call}."
+    if isinstance(tool_result, dict | list):
+        tool_result = json.dumps(tool_result, ensure_ascii=False, default=str)
+    # Only a missing result gives way to the note: a 0 or False is the result.
+    if tool_result is None or tool_result == "":
+        return user_edit_note
+    return f"{tool_result}\n\n{user_edit_note}"
 
 
 def compute_subject(tool: Any, parameters: dict[str, Any]) -> str:
