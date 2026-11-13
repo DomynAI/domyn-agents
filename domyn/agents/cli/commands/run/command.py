@@ -252,13 +252,16 @@ async def start_session(
     # Before anything is said or asked: a configuration that runs commands in a
     # sandbox cannot do its job without one, and finding that out at the first
     # command, after the user has typed a request, is the worse moment.
-    warning = theme.style("warning")
     if (refusal := await _unusable_sandbox(agent)) is not None:
-        console.print(_refusal_text(refusal, config_file), style=warning, highlight=False)
+        console.print(
+            _refusal_text(refusal, config_file), style=theme.style("warning"), highlight=False
+        )
         await agent.close()
         return 1
     for fallback in _fallbacks(agent):
-        console.print(_fallback_text(fallback, config_file), style=warning, highlight=False)
+        console.print(
+            _fallback_text(fallback, config_file), style=theme.style("warning"), highlight=False
+        )
 
     # Read once, for the status line and for the warning below: each listed skill file
     # is parsed here once and not once per use.
