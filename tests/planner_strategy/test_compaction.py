@@ -29,8 +29,12 @@ from domyn.agents.core import (
 )
 from domyn.agents.llm import LLMMessage, LLMToolCall, ToolCallFunction, VLLMProvider
 from domyn.agents.llm.context_window import resolve_context_window
+from domyn.agents.llm.custom import CustomLLMProvider
+from domyn.agents.llm.openai import OpenAIProvider
 from domyn.agents.planner_strategy import HeuristicEstimator, ToolUseContextManager
 from domyn.agents.planner_strategy.context_management.compaction import (
+    CONTEXT_USAGE_METADATA_KEY,
+    DEFAULT_RESERVE_TOKENS,
     Budget,
     CompactionOutcome,
     CompactionPolicy,
@@ -840,3 +844,85 @@ class TestLearningTheWindowFromARejection:
         _active().overflow_plan(_conversation(2), agent, error=error)
 
         assert await resolve_context_window(served()) == 40_960
+
+
+class TestTheReserveFollowsTheReplyCeiling:
+    """A reserve smaller than the `max_tokens` the provider sends let a request
+    just under the threshold ask for more than the window holds: rejected by a
+    server that checks prompt plus output (vLLM before 0.32, Anthropic), or
+    answered cut short by one that clamps the output (vLLM from 0.32)."""
+
+    @staticmethod
+    def _agent(window: int, **generation_params: Any) -> Any:
+        provider = VLLMProvider(
+            url="http://vllm.test/v1/chat/completions",
+            model_name="m",
+            context_window=window,
+            generation_params=generation_params,
+        )
+        return SimpleNamespace(llm_provider=provider, name="Assistant")
+
+    def test_an_unset_reserve_is_the_providers_max_tokens(self) -> None:
+        messages = [_msg("user", _long(300))]
+        exact = HeuristicEstimator().estimate_messages(messages)
+        agent = self._agent(exact + 32_000, max_tokens=32_000)
+        plan = _active().assess(messages, agent)
+        assert plan.threshold_tokens == exact
+        assert plan.needed is False
+        agent.llm_provider.context_window -= 1
+        assert _active().assess(messages, agent).needed is True
+
+    def test_a_smaller_max_tokens_is_reserved_as_it_is(self) -> None:
+        plan = _active().assess([_msg("user", "hi")], self._agent(100_000, max_tokens=2_000))
+        assert plan.threshold_tokens == 98_000
+
+    def test_a_declared_reserve_wins(self) -> None:
+        plan = _active(reserve_tokens=1_000).assess(
+            [_msg("user", "hi")], self._agent(100_000, max_tokens=32_000)
+        )
+        assert plan.threshold_tokens == 99_000
+
+    def test_no_ceiling_is_the_default_reserve(self) -> None:
+        provider = VLLMProvider(url="http://vllm.test", model_name="m", context_window=100_000)
+        provider.generation_params.pop("max_tokens")
+        agent = SimpleNamespace(llm_provider=provider, name="Assistant")
+        plan = _active().assess([_msg("user", "hi")], agent)
+        assert plan.threshold_tokens == 100_000 - DEFAULT_RESERVE_TOKENS
+
+    def test_a_mocked_provider_does_not_become_a_reserve(self) -> None:
+        """`int(MagicMock())` is 1: read as a count, every request would fit."""
+        provider = MagicMock()
+        provider.context_window = 100_000
+        agent = SimpleNamespace(llm_provider=provider, name="Assistant")
+        plan = _active().assess([_msg("user", "hi")], agent)
+        assert plan.threshold_tokens == 100_000 - DEFAULT_RESERVE_TOKENS
+
+    def test_the_threshold_shown_is_the_one_checked(self) -> None:
+        agent = self._agent(100_000, max_tokens=32_000)
+        usage = _active().usage_metadata([_msg("user", "hi")], None, agent)
+        assert usage[CONTEXT_USAGE_METADATA_KEY]["threshold_tokens"] == 68_000
+
+
+class TestTheReplyCeiling:
+    def test_read_from_generation_params(self) -> None:
+        provider = VLLMProvider(
+            url="http://vllm.test", model_name="m", generation_params={"max_tokens": 24_000}
+        )
+        assert provider.max_reply_tokens == 24_000
+
+    def test_body_wins_as_it_does_on_the_wire(self) -> None:
+        provider = CustomLLMProvider(
+            url="http://custom.test", model_name="m", body={"max_tokens": 12_000}
+        )
+        assert provider.max_reply_tokens == 12_000
+
+    def test_the_responses_api_spelling(self) -> None:
+        provider = OpenAIProvider(model_name="gpt-5", api_key="k")
+        assert provider.max_reply_tokens == provider.generation_params["max_output_tokens"]
+
+    @pytest.mark.parametrize("value", [True, 0, -5, "32000", None])
+    def test_only_a_positive_integer_counts(self, value: Any) -> None:
+        provider = CustomLLMProvider(
+            url="http://custom.test", model_name="m", body={"max_tokens": value}
+        )
+        assert provider.max_reply_tokens is None

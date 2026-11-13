@@ -14,7 +14,7 @@ Compaction runs in the `tool_use` and `tool_use_thought` [planner strategies](pl
 
 Compaction needs to know the window. Set `context_window` on the [LLM provider](llm-providers.md) to declare it. Without it, the agent asks the provider before each turn: vLLM, OpenRouter, Anthropic and a gateway that publishes it report it, and for OpenAI and Cerebras, which do not, a catalogue shipped with the package has it. When nothing answers, nothing is compacted automatically until the provider rejects a request as too long (see below). The [interactive CLI](../cli/configuration.md) assumes 150,000 tokens when it cannot find out.
 
-Before each model call, the agent measures the size of the whole request: the conversation, the tool definitions, and the [skills](skills.md) and memories added for this turn. When it exceeds the **threshold**, the window minus `reserve_tokens` (16,384 by default), the conversation is compacted first, and the shorter version is sent. The reserve leaves room for the reply.
+Before each model call, the agent measures the size of the whole request: the conversation, the tool definitions, and the [skills](skills.md) and memories added for this turn. When it exceeds the **threshold**, the window minus `reserve_tokens`, the conversation is compacted first, and the shorter version is sent. The reserve leaves room for the reply: unless it is set, it is the `max_tokens` of the provider's `generation_params` (or `body`; `max_completion_tokens` counts too, and `max_output_tokens` for OpenAI), so a request always leaves the reply the room it asks for, and 16,384 when the provider sets none.
 
 Only the conversation is compacted. The tool definitions and the turn's skills and memories count towards the threshold but are never shortened, so an agent whose tools alone take most of the window cannot get under it: the `tool_definition_tokens` in the `llm_start` event's `metadata["context_usage"]` says how much they take.
 
@@ -102,7 +102,7 @@ An unknown `strategy` name falls back to `two_phase`, with a warning in the log.
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `strategy` | `str` | `two_phase` | See [Strategies](#strategies). In Python, the `strategy` of the `Compactor`. |
-| `reserve_tokens` | `int` | `16384` | Room kept free below the window, for the reply. |
+| `reserve_tokens` | `int` | the provider's `max_tokens`, else `16384` | Room kept free below the window, for the reply. |
 | `keep_recent_tokens` | `int` | `20000` | Size of the recent part of the conversation that is never compacted. |
 
 `CompactionPolicy` has a few more, in Python only:
