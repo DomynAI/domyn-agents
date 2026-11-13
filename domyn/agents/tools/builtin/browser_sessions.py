@@ -480,13 +480,20 @@ class BrowserSessions:
         self.browser_dir = browser_dir
         self.policy = UrlPolicy(allow_private=options.allow_private_urls)
         self._used: set[str] = set()
-        # The copy that ships with the standalone build, when it is not on PATH.
-        self._binary = browser_install.resolve_binary(options.binary)
         self._chrome: str | None = None
         self._chrome_checked = False
         self._chrome_lock = asyncio.Lock()
         self.on_notice: Callable[[str], None] | None = None
         """Told, in a line, what is being downloaded on first use. The CLI prints it."""
+
+    @property
+    def _binary(self) -> str:
+        """The agent-browser to run. On this machine the copy that ships with the
+        standalone build when it is not on ``PATH``; anywhere else (a container image)
+        the one on that machine's ``PATH``, which this machine's paths say nothing about."""
+        if self.backend.name == "local":
+            return browser_install.resolve_binary(self.options.binary)
+        return self.options.binary
 
     def command(self, conversation_id: str, verb: str, *args: str, as_json: bool = True) -> str:
         """The shell line for one agent-browser command. Every value is quoted."""

@@ -12,18 +12,16 @@ from collections.abc import Callable
 from pathlib import Path
 
 from domyn.agents.tools.builtin.backends.base import BackendUnavailableError
-from domyn.agents.tools.builtin.backends.docker_sandbox import egress_proxy
-from domyn.agents.tools.builtin.backends.docker_sandbox.cli import (
+from domyn.agents.tools.builtin.backends.docker import egress_proxy
+from domyn.agents.tools.builtin.backends.docker.cli import (
     ACTION_SECONDS,
     INSPECT_SECONDS,
-    PULL_SECONDS,
     SLOW_ACTION_SECONDS,
     DockerCli,
     TransientDockerError,
     retry_once,
 )
-from domyn.agents.tools.builtin.backends.docker_sandbox.images import BASE_IMAGE
-from domyn.agents.tools.builtin.backends.docker_sandbox.scope import SandboxScope
+from domyn.agents.tools.builtin.backends.docker.scope import BackendScope
 
 PROXY_PORT = 3128
 
@@ -40,7 +38,7 @@ class EgressNetwork:
     def __init__(
         self,
         cli: DockerCli,
-        scope: SandboxScope,
+        scope: BackendScope,
         allowed_hosts: list[str],
         notify: Callable[[str], None],
     ) -> None:
@@ -60,14 +58,16 @@ class EgressNetwork:
     def proxy_url(self) -> str:
         return f"http://{self._scope.proxy_name}:{PROXY_PORT}"
 
-    async def ensure(self) -> None:
+    async def ensure(self, image: str) -> None:
         """The network and the proxy exist and the proxy answers. Safe to call often."""
         async with self._lock:
             if self._ready:
                 return
             await self._ensure_network()
             if not await self._proxy_is_running():
-                await retry_once(self._start_proxy, describe="starting the network proxy")
+                await retry_once(
+                    lambda: self._start_proxy(image), describe="starting the network proxy"
+                )
             self._ready = True
 
     async def remove(self) -> None:
@@ -114,7 +114,7 @@ class EgressNetwork:
         )
         if not created.ok and "already exists" not in created.stderr:
             raise BackendUnavailableError(
-                f"could not create the sandbox network: {created.error(200)}"
+                f"could not create the container network: {created.error(200)}"
             )
 
     async def _proxy_is_running(self) -> bool:
@@ -123,11 +123,10 @@ class EgressNetwork:
         )
         return state.ok and state.stdout.strip() == "true"
 
-    async def _start_proxy(self) -> None:
+    async def _start_proxy(self, image: str) -> None:
         name = self._scope.proxy_name
         await self._cli("rm", "-f", name, timeout=ACTION_SECONDS)
-        await self._pull_base_image_if_missing()
-        started = await self._cli(*self._run_arguments(), timeout=SLOW_ACTION_SECONDS)
+        started = await self._cli(*self._run_arguments(image), timeout=SLOW_ACTION_SECONDS)
         if not started.ok:
             raise TransientDockerError(f"could not start the network proxy: {started.error(200)}")
         # Its way out: the default bridge. The command containers never get this.
@@ -136,19 +135,14 @@ class EgressNetwork:
             raise TransientDockerError(f"could not connect the proxy: {connected.error(200)}")
         await self._wait_until_ready()
 
-    async def _pull_base_image_if_missing(self) -> None:
-        if not (await self._cli("image", "inspect", BASE_IMAGE, timeout=INSPECT_SECONDS)).ok:
-            self._notify(f"Pulling {BASE_IMAGE} for the network proxy…")
-            await self._cli("pull", BASE_IMAGE, timeout=PULL_SECONDS)
-
-    def _run_arguments(self) -> list[str]:
+    def _run_arguments(self, image: str) -> list[str]:
         return [
             "run", "-d", "--name", self._scope.proxy_name, *self._scope.label_arguments,
             "--network", self.name,
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--read-only", "--pids-limit", "128", "--memory", "128m",
             "--user", _UNPRIVILEGED_USER,
-            BASE_IMAGE, "python", "-c", _proxy_source(),
+            image, "python", "-c", _proxy_source(),
             "--port", str(PROXY_PORT), "--allow", ",".join(self._allowed_hosts),
         ]  # fmt: skip
 
@@ -180,4 +174,4 @@ def _proxy_source() -> str:
     try:
         return path.read_text(encoding="utf-8")
     except OSError as exc:
-        raise BackendUnavailableError(f"the sandbox proxy script is missing: {path}") from exc
+        raise BackendUnavailableError(f"the proxy script is missing: {path}") from exc

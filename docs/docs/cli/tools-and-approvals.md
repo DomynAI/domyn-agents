@@ -44,11 +44,11 @@ A command that is still running after its timeout (two minutes unless the agent 
 
 A command detached by the shell itself, with `&`, `disown` or `setsid -f`, gets no handle: it does not appear in `/ps` and cannot be stopped with `/stop`. The agent is told so when it runs one. They keep running after the session ends, and the session tells you which ones are still running when you leave.
 
-### Running commands in a Docker sandbox
+### Running the tools in a Docker container
 
-By default (`sandbox: auto`), the agent still runs in your terminal, and so do its file tools and its approvals. Only the commands it runs move into a Docker container that can write nothing of yours except the workspace. This needs Docker (or Podman, with `docker_binary`) running on your machine.
+By default (`backend: auto`), the agent still runs in your terminal, and so do its approvals. What the agent's tools do moves into a Docker container that can write nothing of yours except the workspace: the commands it runs, its file tools and its browser. A file a command downloads is a file `read_file` reads, and a path a skill names means the same thing to all of them. This needs Docker (or Podman, with `docker_binary`) running on your machine.
 
-If Docker is not installed or not running, `domyn run` still starts, warns you, and runs commands on your machine instead. The line under the banner says which one you got (`commands: docker sandbox` or `commands: this machine (no sandbox)`). Start Docker and run `domyn run` again to be sandboxed. Three values of `sandbox` say what you want:
+If Docker is not installed or not running, or its image cannot be pulled, `domyn run` still starts, warns you, and runs everything on your machine instead. The line under the banner says which one you got (`tools: docker` or `tools: this machine`). Start Docker and run `domyn run` again to use the container. Three values of `backend` say what you want:
 
 | Value | Meaning |
 |---|---|
@@ -64,19 +64,36 @@ tool_bundles:
   bundles:
   - files
   - shell
-  sandbox: auto
+  - browser
+  backend: auto
   docker:
     allowed_network: public   # the default: any public site over HTTPS
 ```
 
+:::warning The container is not your machine
+Everything the agent's tools do happens in the container, and it differs from running on your machine in ways that matter. If something works for the agent on `backend: local` and not on `backend: docker`, check this list first:
+
+- **`config.yaml` is read-only.** The agent can read it and cannot change it. It names code your machine runs (tools, hooks, MCP servers) and which backend to use, so a command in the container must not be able to rewrite it. To change it, edit it yourself, or run `domyn setup` or `/model`. This also means the agent cannot configure itself from the container, as it can with `backend: local`.
+- **Credentials, approvals and history are not there.** Your API keys, the permissions you granted and past conversations are not visible, so a command cannot read them.
+- **Only what is mounted exists.** Files outside your workspace, the skill folders and the session's state (`~/Downloads`, `~/.ssh`, other repositories) are not in the container. Copy a file into the workspace for the agent to use it.
+- **`.git/hooks` and `.git/config` are read-only.** A hook a command planted would run on your machine at your next `git commit`, and so would a `core.fsmonitor` or `core.hooksPath` entry in the config.
+- **Your machine's programs and servers are out of reach.** `localhost` is the container, and addresses on your machine or network are refused. A dev server you started yourself cannot be browsed or called by the agent; have the agent start it with its own commands. To let the browser open a server the agent started in the container, set `browser.allow_private_urls: true`: there `localhost` is the container's, not yours.
+- **No `domyn` commands**, no `apt`, and no root. `pip` and `npm install -g` work, and what is installed comes back when the container is recreated.
+- **Environment variables** are only the ones you list under `allowed_env`, as on `local`.
+- **Background commands stop** when the session ends or the conversation changes.
+- **The network** is `allowed_network`: public HTTPS sites by default.
+
+What stays the same: the agent can read and write the workspace, its skills, and `AGENTS.md`, `SOUL.md`, `.agents` and `.domyn` in your project, and every action still asks for your approval first. The built-in `domyn-cli` skill knows these differences and tells the agent about them.
+:::
+
 What the container can see:
 
-- **The workspace**, readable and writable, at the same path as on your machine. A file a command writes is a file in your project, owned by you.
-- **The skill folders**, read-only, because built-in skills run their scripts through `run_command`.
-- **Nothing else.** Not your home folder, your credentials, the Docker socket or your environment variables, except the names you list under `allowed_env`.
-- **Some workspace paths read-only**, because a command that could write them would reach your machine afterwards: `.git/hooks` and `.git/config` (a planted hook runs at your next `git commit`, and `git remote add` fails for the same reason), and `.domyn`, `.agents`, `AGENTS.md` and `SOUL.md`, which are read into the next prompt. A path is masked only if it exists when the container starts.
+- **The workspace**, readable and writable, at the same path as on your machine. A file a command or a tool writes is a file in your project, owned by you.
+- **The skill folders**, readable and writable, so built-in skills run their scripts there and the agent can edit its own.
+- **Nothing else.** Not your home folder, your credentials, your approvals, the Docker socket or your environment variables, except the names you list under `allowed_env`.
+- **Two things read-only**, because a write there would reach your machine afterwards: `.git/hooks` and `.git/config` (a planted hook runs at your next `git commit`, and `git remote add` fails for the same reason), and your `config.yaml`, which the container can read. A path is masked only if it exists when the container starts. `AGENTS.md`, `SOUL.md`, `.agents` and `.domyn` in your project are writable, as they are on your machine.
 
-What is in the container: Python with `pip`, Node with `npm`, `git` and `curl`. There is no root, so no `apt`; the agent can install packages with `pip` and `npm`.
+What is in the container: Python with `pip`, Node with `npm`, `git` and `curl`, the same `domyn` as the one you run (the file tools run from it), and agent-browser with Chrome. There is no root, so no `apt`; the agent can install packages with `pip` and `npm`. The file tools reach the workspace, the skill folders and the container's own `/tmp`, where downloads land.
 
 ### What commands can reach on the network
 
@@ -98,24 +115,24 @@ docker:
 - **A list of hosts**: only those, **plus the package registries** (`pypi.org`, `files.pythonhosted.org`, `registry.npmjs.org`), so `pip` and `npm` keep working. A list replaces `public`; they are not combined. An entry is a host (`github.com`) or `*.example.com` for its subdomains, HTTPS on port 443 only.
 - **`none`**: no network at all.
 
-A command that fails because the sandbox refused a connection says which host. With a list, the fix is to add that host to it; the next command recreates the container, or waits if a background command is running.
+A command that fails because the container refused a connection says which host. With a list, the fix is to add that host to it; the next command recreates the container, or waits if a background command is running.
 
 What this protects: your machine and your network, always. With `public`, it does not stop a command from sending what it can read (files in the workspace, the variables you listed under `allowed_env`) to a public site, which is what a prompt injection would try. If that matters to you, use a list.
 
 How it behaves:
 
-- **One container per conversation.** It starts the first time a command needs it, and `domyn run` prepares it while you type. The first run downloads Python and Node and builds a small image, which takes a moment and happens once; the session says so while it does.
+- **One container per conversation.** It starts the first time a tool needs it, and `domyn run` prepares it while you type. The first run pulls the image, published for each release at `ghcr.io/domynai/domyn-docker-backend` (a few hundred MB, once; the session says so while it does). A build between releases (a checkout, an editable install) pulls the `latest` image, the newest release, which is what a pip or curl install gives.
 - **It ends with the conversation.** `/clear`, `/resume` to another conversation and exiting stop and remove the container, and every command still running in it stops too. The session tells you when that is the case.
 - **Packages come back.** What the agent installs with `pip`, and globally with `npm install -g`, is recorded in `conversations/<conversation_id>/` (`requirements.txt` and `npm-global.txt`) next to your conversation history, like the virtual environment of a conversation that runs on this machine, and installed again when the container is recreated or the conversation is resumed. A local `npm install` writes `node_modules` in your project, which stays.
 - **Changed skills reach it.** Edits to files in a skill folder are seen at once. A skill folder added in the configuration, or replaced by `domyn setup`, makes the session recreate the container, unless a background command is running, in which case it waits.
 - **A container that goes away is replaced.** If Docker restarts or someone removes the container while a session is running, the next command starts a new one and the session says so. Files in the workspace and the packages the agent installed come back; anything it wrote elsewhere inside the container is gone. Docker occasionally fails a start when the machine is busy: the session tries once more before reporting an error.
 - **Approvals are unchanged.** They run in your terminal before the command is sent, so `/auto` and the deny rules work as before.
-- **The browser is not in the sandbox.** The `browser` set still runs on your machine.
-- **Your own image.** Set `docker.image` to use one; it needs `bash`, `timeout` and `ps`.
+- **The browser is in the container too**, with its own Chrome, so pages render there and not on your machine. Its network is the same `allowed_network`.
+- **Another image.** To try an image a maintainer pushed under a tag, without editing your configuration, set the environment variable `DOMYN_BACKEND_IMAGE_TAG` to that tag (`my-test`); it replaces the image of your release, and is pulled on every start so a tag pushed again is not served from an old copy. It works from a `.env` file too. **Your own image**: set `docker.image`, which wins over the variable. It needs `bash`, `timeout` and `ps`, and for the file and browser tools a `domyn` at `/opt/domyn` and agent-browser: start from `docker/backend.Dockerfile` in the repository.
 
 ### Browsing
 
-The `browser` set drives a real browser through [agent-browser](https://github.com/vercel-labs/agent-browser). The standalone build of domyn includes it. Otherwise install it yourself, with `npm install -g agent-browser` or `brew install agent-browser`; the setup wizard warns you when it is not on your `PATH`.
+The `browser` set drives a real browser through [agent-browser](https://github.com/vercel-labs/agent-browser). In the container backend it and Chrome are in the image and need nothing from you. On your machine, the standalone build of domyn includes it. Otherwise install it yourself, with `npm install -g agent-browser` or `brew install agent-browser`; the setup wizard warns you when it is not on your `PATH`.
 
 The first time the agent uses a browser tool and no Chrome or Chromium is found, domyn downloads Chrome for Testing (about 200 MB) into `~/.domyn/browsers/`, once, and says so. A Chrome you already have is used as it is. To use another browser, set `browser.executable_path`. On Linux, Chrome also needs system libraries (`libnss3` and a few others, or `agent-browser install --with-deps`).
 

@@ -10,10 +10,10 @@ from domyn.agents.tools.builtin.backends.base import (
     BackendUnavailableError,
     CommandBackend,
     CommandResult,
+    ToolHost,
 )
-from domyn.agents.tools.builtin.backends.docker_sandbox import DockerBackend, DockerBackendOptions
+from domyn.agents.tools.builtin.backends.docker import DockerBackend, DockerBackendOptions
 from domyn.agents.tools.builtin.backends.local import LocalBackend
-from domyn.agents.tools.builtin.backends.sandbox import SandboxBackend
 
 __all__ = [
     "BACKEND_NAMES",
@@ -24,6 +24,6 @@ __all__ = [
     "DockerBackend",
     "DockerBackendOptions",
     "LocalBackend",
-    "SandboxBackend",
+    "ToolHost",
     "build_backend",
 ]

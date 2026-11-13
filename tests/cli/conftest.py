@@ -204,6 +204,26 @@ def _approvals_off_the_real_home(
 
 
 @pytest.fixture(autouse=True)
+def _no_docker_for_the_default_backend(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session built from the default configuration (`backend: auto`) runs its tools
+    on this machine, whether or not the developer's has Docker. The file and browser
+    tools follow the backend, so a test that opens a file would otherwise run in a
+    container. tests/tools/test_docker_backend.py and test_auto_backend.py cover Docker,
+    and test_backend_session.py checks the real answer of a machine without it."""
+    if request.module.__name__.endswith("test_backend_session"):
+        return
+    from domyn.agents.tools.builtin import BackendUnavailableError
+    from domyn.agents.tools.builtin.backends.docker import DockerBackend
+
+    async def unavailable(self: DockerBackend) -> None:
+        raise BackendUnavailableError("Docker is not used in these tests.")
+
+    monkeypatch.setattr(DockerBackend, "check", unavailable)
+
+
+@pytest.fixture(autouse=True)
 def no_decision_prompt(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """The wizard's decision-model step keeps its default, so the scripted answers of
     the other setup tests stay about what they test. test_setup_decisions.py covers it."""

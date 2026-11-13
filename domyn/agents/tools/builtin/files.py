@@ -36,17 +36,24 @@ be windows away.
 # of each tool at construction time and cannot resolve string annotations. The
 # tools are defined in this module, so the import has to stay off.
 
+import asyncio
+import inspect
 import io
+import json
 import re
-from collections.abc import Callable, Iterable, Iterator
+import sys
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import anydoc
 
 from domyn.agents.core import ApprovalType, documents
 from domyn.agents.tools.builtin.workspace import Workspace, WorkspaceError, is_ignored
+
+if TYPE_CHECKING:
+    from domyn.agents.tools.builtin.backends import CommandBackend, CommandResult
 
 # The most one read returns. It has to fit inside what the model is actually
 # shown: the tool-use context manager keeps the start and the end of a longer
@@ -708,8 +715,60 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
     }
 
 
-def file_tools(workspace: Workspace) -> list[Any]:
-    """Every file tool, gated according to what it can damage."""
+def _hosted(
+    name: str, func: Callable[..., str], workspace: Workspace, host: "CommandBackend"
+) -> Callable[..., Awaitable[str]]:
+    """``func``, with its body run by ``host`` (see the end of this module) and the same signature.
+
+    ``conversation_id`` is added for the runner to fill in: it is how the backend
+    finds the conversation's container, and never reaches the model.
+    """
+
+    async def hosted(**arguments: Any) -> str:
+        conversation_id = arguments.pop("conversation_id", "")
+        # Idempotent, and where an `auto` backend decides: what it decides is what it
+        # says to do next.
+        await host.start()
+        where = host.tool_host
+        if where is None:
+            return await asyncio.to_thread(
+                run_file_operation,
+                name,
+                arguments,
+                root=workspace.root,
+                extra_roots=workspace.extra_roots,
+            )
+        result = await host.run(
+            where.command,
+            timeout=TOOL_BODY_SECONDS,
+            conversation_id=conversation_id,
+            stdin=request_text(
+                name,
+                arguments,
+                root=workspace.root,
+                extra_roots=(*workspace.extra_roots, *where.roots),
+            ),
+        )
+        return answer_of(result, name)
+
+    signature = inspect.signature(func)
+    conversation = inspect.Parameter(
+        "conversation_id", inspect.Parameter.KEYWORD_ONLY, default="", annotation=str
+    )
+    hosted.__signature__ = signature.replace(  # type: ignore[attr-defined]
+        parameters=[*signature.parameters.values(), conversation]
+    )
+    hosted.__name__ = func.__name__
+    hosted.__doc__ = func.__doc__
+    hosted.__annotations__ = {**func.__annotations__, "conversation_id": str}
+    return hosted
+
+
+def file_tools(workspace: Workspace, host: "CommandBackend | None" = None) -> list[Any]:
+    """Every file tool, gated according to what it can damage.
+
+    With a ``host``, the bodies run where it runs commands; without one, here.
+    """
     from domyn.agents.tools.function_tool import FunctionTool
 
     built = build_tools(workspace)
@@ -719,7 +778,7 @@ def file_tools(workspace: Workspace) -> list[Any]:
     for name, func in built.items():
         tools.append(
             FunctionTool(
-                func=func,
+                func=func if host is None else _hosted(name, func, workspace, host),
                 approval_type=ApprovalType.USER_CONFIRM if name in gated else None,
                 # The path, so "keep editing this file" is expressible and
                 # "write anywhere" is not.
@@ -727,3 +786,110 @@ def file_tools(workspace: Workspace) -> list[Any]:
             )
         )
     return tools
+
+
+# --- running a tool body where the backend runs it --------------------------------------
+#
+# A tool is its declaration (schema, approval, what the model reads), which stays in the
+# process that runs the agent, and its body, which is one of the functions above and runs
+# wherever the backend puts it. On this machine that is this process. In a container it is
+# one `main()` per call, so a file written by a command is the file `read_file` reads and a
+# path a skill names means the same thing to both. The request and the answer are one JSON
+# document each, on stdin and stdout, so a backend needs nothing but a way to run a command
+# and pipe text to it. Only the file tools need this: the browser goes through the
+# backend's shell, which already runs in the container.
+#
+# The request: {"operation": "read_file", "arguments": {...}, "root": "/work",
+# "extra_roots": [...]}. The answer: {"ok": true, "result": "..."}, or {"ok": false,
+# "error": "...", "workspace": true} when the tool refused (a path outside the workspace,
+# a missing file) rather than broke.
+
+
+TOOL_BODY_SECONDS = 120.0
+"""How long a tool body may run in a container before the backend gives up on it."""
+
+
+class OperationError(RuntimeError):
+    """A tool body failed in the container for a reason that is not a refusal."""
+
+
+def run_file_operation(
+    operation: str,
+    arguments: Mapping[str, Any],
+    *,
+    root: str | Path,
+    extra_roots: Sequence[str | Path] = (),
+) -> str:
+    """Run one file tool against a workspace, in this process."""
+    tools = build_tools(Workspace.at(root, also=extra_roots))
+    if operation not in tools:
+        raise OperationError(f"unknown file operation: {operation}")
+    return tools[operation](**arguments)
+
+
+def serve(request: Mapping[str, Any]) -> dict[str, Any]:
+    """The answer to one request: never raises, so the caller always has JSON to read."""
+    try:
+        result = run_file_operation(
+            request["operation"],
+            request["arguments"],
+            root=request["root"],
+            extra_roots=request.get("extra_roots", ()),
+        )
+    except WorkspaceError as exc:
+        return {"ok": False, "error": str(exc), "workspace": True}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "workspace": False}
+    return {"ok": True, "result": result}
+
+
+def parse_answer(text: str) -> str:
+    """The result in an answer, or the exception it stands for.
+
+    The answer is the last line: anything a library printed first is not part of it.
+    """
+    lines = text.strip().splitlines()
+    try:
+        answer = json.loads(lines[-1])
+    except (IndexError, json.JSONDecodeError) as exc:
+        raise OperationError("the container returned no answer") from exc
+    if answer.get("ok"):
+        return str(answer["result"])
+    message = str(answer.get("error", "the operation failed"))
+    raise WorkspaceError(message) if answer.get("workspace") else OperationError(message)
+
+
+def answer_of(result: "CommandResult", operation: str) -> str:
+    """What a tool body run through a backend returned, or the exception it stands for."""
+    if result.backend_error:
+        raise OperationError(result.backend_error)
+    if result.timed_out:
+        raise OperationError(f"{operation} took longer than {TOOL_BODY_SECONDS:.0f}s")
+    if result.exit_code not in (0, None) and not result.stdout.strip():
+        raise OperationError(f"{operation} failed: {result.stderr.strip()[-300:]}")
+    return parse_answer(result.stdout)
+
+
+def request_text(
+    operation: str,
+    arguments: Mapping[str, Any],
+    *,
+    root: Path,
+    extra_roots: Sequence[Path],
+) -> str:
+    return json.dumps(
+        {
+            "operation": operation,
+            "arguments": dict(arguments),
+            "root": str(root),
+            "extra_roots": [str(one) for one in extra_roots],
+        }
+    )
+
+
+def main() -> int:
+    """One request on stdin, one answer on stdout. A container starts it through
+    ``backends/docker/tool_host.py``, which spares it importing the whole tools package."""
+    answer = serve(json.loads(sys.stdin.read()))
+    sys.stdout.write(json.dumps(answer) + "\n")
+    return 0

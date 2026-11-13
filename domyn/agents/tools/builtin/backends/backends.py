@@ -9,7 +9,7 @@ from collections.abc import Iterable
 
 from domyn.agents.tools.builtin.backends.auto import AutoBackend
 from domyn.agents.tools.builtin.backends.base import BackendUnavailableError, CommandBackend
-from domyn.agents.tools.builtin.backends.docker_sandbox import DockerBackend, DockerBackendOptions
+from domyn.agents.tools.builtin.backends.docker import DockerBackend, DockerBackendOptions
 from domyn.agents.tools.builtin.backends.local import LocalBackend
 from domyn.agents.tools.builtin.workspace import Workspace
 
@@ -29,7 +29,7 @@ def build_backend(
 
     An unknown name raises, unlike every other unknown config value here, which
     degrades with a warning: handing back a local backend to someone who asked
-    to be sandboxed gives the illusion of a boundary, which is worse than none.
+    for a container gives the illusion of a boundary, which is worse than none.
     """
     if name == "local":
         return LocalBackend(

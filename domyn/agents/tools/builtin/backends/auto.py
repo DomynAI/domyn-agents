@@ -1,8 +1,8 @@
-"""``sandbox: auto``: a Docker sandbox when one can be used, this machine when not.
+"""``backend: auto``: a Docker container when one can be used, this machine when not.
 
-Unlike an explicit ``docker``, which refuses to start without a sandbox, this one
+Unlike an explicit ``docker``, which refuses to start without a container, this one
 starts either way and *says* which it got: the reason is ``fallback``, and the
-front-end prints it, so nobody believes they are sandboxed when they are not.
+front-end prints it, so nobody believes they are isolated when they are not.
 """
 
 import asyncio
@@ -13,26 +13,30 @@ from pathlib import Path
 from domyn.agents.logger import get_logger
 from domyn.agents.tools.builtin.backends.base import (
     BackendUnavailableError,
-    CommandBackend,
     CommandResult,
+    ToolHost,
 )
-from domyn.agents.tools.builtin.backends.docker_sandbox import DockerBackend, DockerBackendOptions
+from domyn.agents.tools.builtin.backends.docker import DockerBackend, DockerBackendOptions
+from domyn.agents.tools.builtin.backends.docker.cli import DockerCli
 from domyn.agents.tools.builtin.backends.local import LocalBackend
-from domyn.agents.tools.builtin.backends.sandbox import SandboxBackend
 from domyn.agents.tools.builtin.session import HOME_DIRNAME, state_dir_from_environment
 from domyn.agents.tools.builtin.workspace import Workspace
 
 
-class AutoBackend(SandboxBackend):
-    """Docker when it can be used, this machine when it cannot, decided once.
+class AutoBackend(DockerBackend):
+    """A Docker backend that runs on this machine instead when Docker cannot be used.
 
-    The decision is taken at the front-end's ``check``, and not again for this object:
-    a Docker that goes down mid-session fails the command with a message instead of
-    moving the conversation to the host half way (its files and installs would be in
-    the other place). A rebuilt backend (config reload, ``/model``) decides afresh.
+    The decision is taken at the front-end's ``check`` (or ``prepare``, when the image
+    will not pull), and not again after the first command: a Docker that goes down
+    mid-session fails the command with a message instead of moving the conversation to
+    the host half way (its files and installs would be in the other place). A rebuilt
+    backend (config reload, ``/model``) decides afresh. After a fallback every call goes
+    to a ``LocalBackend``, and ``name``, ``is_isolated`` and ``destroys_on_close`` say so.
     """
 
     name = "auto"
+    is_isolated = False  # until it has decided
+    destroys_on_close = False
 
     def __init__(
         self,
@@ -42,25 +46,26 @@ class AutoBackend(SandboxBackend):
         allowed_env: Iterable[str] = (),
         docker: DockerBackendOptions | None = None,
         state_dir: str | os.PathLike[str] | None = None,
-        sandbox: SandboxBackend | None = None,
+        cli: DockerCli | None = None,
     ) -> None:
-        """``sandbox`` is the one to try; by default a Docker one made from ``docker``."""
-        # Resolved once, here, and handed to whichever backend is chosen: the two must
-        # keep a conversation's state in the same place.
+        # Resolved once, here, and handed to both: whichever is used keeps a
+        # conversation's state in the same place.
         if state_dir is None:
             state_dir = state_dir_from_environment()
         self._state_dir = Path(state_dir).expanduser().absolute() if state_dir is not None else None
-        self._sandbox = sandbox or DockerBackend(
-            workspace, options=docker, allowed_env=allowed_env, state_dir=self._state_dir
+        allowed = list(allowed_env)
+        super().__init__(
+            workspace, options=docker, allowed_env=allowed, state_dir=self._state_dir, cli=cli
         )
         self._local = LocalBackend(
             workspace,
             isolate_environment=isolate_environment,
-            allowed_env=allowed_env,
+            allowed_env=allowed,
             state_dir=self._state_dir,
         )
-        self._chosen: CommandBackend | None = None
         self._deciding = asyncio.Lock()
+        self._decided = False
+        self._on_this_machine = False
         self.fallback: BackendUnavailableError | None = None
         """Why Docker was not used, when it was not."""
 
@@ -68,47 +73,49 @@ class AutoBackend(SandboxBackend):
     def state_dir(self) -> str:
         return str(self._state_dir) if self._state_dir is not None else HOME_DIRNAME
 
-    async def decide(self) -> CommandBackend:
+    async def decide(self) -> None:
         async with self._deciding:
-            if self._chosen is None:
-                self._chosen = await self._choose()
-            return self._chosen
+            if self._decided:
+                return
+            try:
+                await super().check()
+            except BackendUnavailableError as exc:
+                self._fall_back(exc)
+                return
+            self._decided = True
+            self.name, self.is_isolated, self.destroys_on_close = "docker", True, True
 
-    async def _choose(self) -> CommandBackend:
-        try:
-            await self._sandbox.check()
-        except BackendUnavailableError as exc:
-            self.fallback = exc
-            get_logger().info(f"sandbox unavailable, commands run locally: {exc.problem}")
-            self._notify(f"{exc.problem} Commands run on this machine, with no sandbox.")
-            chosen: CommandBackend = self._local
-        else:
-            self._sandbox.on_notice = self._notify
-            chosen = self._sandbox
-        self.name = chosen.name
-        self.is_isolated = chosen.is_isolated
-        self.destroys_on_close = isinstance(chosen, SandboxBackend) and chosen.destroys_on_close
-        return chosen
-
-    def _notify(self, message: str) -> None:
+    def _fall_back(self, problem: BackendUnavailableError) -> None:
+        self.fallback = problem
+        get_logger().info(f"docker unavailable, commands run locally: {problem.problem}")
         if self.on_notice is not None:
-            self.on_notice(message)
+            self.on_notice(f"{problem.problem} Commands run on this machine, not in a container.")
+        self._decided = self._on_this_machine = True
+        self.name, self.is_isolated, self.destroys_on_close = "local", False, False
 
     async def check(self) -> None:
         await self.decide()
 
     async def start(self) -> None:
-        await (await self.decide()).start()
+        await self.decide()
+        await (self._local if self._on_this_machine else super()).start()
 
     async def prepare(self) -> None:
-        chosen = await self.decide()
-        if isinstance(chosen, SandboxBackend):
-            await chosen.prepare()
+        """Get Docker ready; when it cannot be (the image will not pull), run on this
+        machine instead, like when Docker is not there at all. Nothing has run yet: the
+        front-end prepares before the first command."""
+        await self.decide()
+        if self._on_this_machine:
+            return
+        try:
+            await super().prepare()
+        except BackendUnavailableError as exc:
+            self._fall_back(exc)
 
     async def warm_up(self, conversation_id: str) -> None:
-        chosen = await self.decide()
-        if isinstance(chosen, SandboxBackend):
-            await chosen.warm_up(conversation_id)
+        await self.decide()
+        if not self._on_this_machine:
+            await super().warm_up(conversation_id)
 
     async def run(
         self,
@@ -118,20 +125,26 @@ class AutoBackend(SandboxBackend):
         conversation_id: str = "",
         stdin: str | None = None,
     ) -> CommandResult:
-        chosen = await self.decide()
-        return await chosen.run(
+        await self.decide()
+        backend = self._local if self._on_this_machine else super()
+        return await backend.run(
             command, timeout=timeout, conversation_id=conversation_id, stdin=stdin
         )
 
+    @property
+    def tool_host(self) -> ToolHost | None:
+        return None if self._on_this_machine else super().tool_host
+
     async def end_conversation(self, conversation_id: str) -> None:
-        if isinstance(self._chosen, SandboxBackend):
-            await self._chosen.end_conversation(conversation_id)
+        if self._decided and not self._on_this_machine:
+            await super().end_conversation(conversation_id)
 
     async def explain_failure(self, since: float) -> str:
-        if isinstance(self._chosen, SandboxBackend):
-            return await self._chosen.explain_failure(since)
+        if self._decided and not self._on_this_machine:
+            return await super().explain_failure(since)
         return ""
 
     async def close(self) -> None:
-        if self._chosen is not None:
-            await self._chosen.close()
+        if not self._decided:
+            return
+        await (self._local if self._on_this_machine else super()).close()

@@ -17,9 +17,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 from domyn.agents.logger import get_logger
-from domyn.agents.tools.builtin.backends.docker_sandbox.cli import SLOW_ACTION_SECONDS, DockerCli
-from domyn.agents.tools.builtin.backends.docker_sandbox.containers import DockerContainer
-from domyn.agents.tools.builtin.backends.docker_sandbox.state import StateFolder
+from domyn.agents.tools.builtin.backends.docker.cli import SLOW_ACTION_SECONDS, DockerCli
+from domyn.agents.tools.builtin.backends.docker.containers import DockerContainer
+from domyn.agents.tools.builtin.backends.docker.state import StateFolder
 
 REQUIREMENTS_FILE = "requirements.txt"
 NPM_GLOBALS_FILE = "npm-global.txt"
@@ -79,7 +79,7 @@ class InstallLog:
         if not self._can_download:
             self._notify(
                 f"{count} packages were installed in this conversation, but the "
-                "sandbox has no network to restore them."
+                "container has no network to restore them."
             )
             return
         self._notify(f"Restoring {count} package(s) installed earlier in this conversation…")
@@ -158,5 +158,5 @@ def _write(path: Path, text: str, what: str) -> None:
         temporary.write_text(text, encoding="utf-8")
         os.replace(temporary, path)
     except OSError as exc:
-        get_logger().warning(f"sandbox: could not record installed {what}: {type(exc).__name__}")
-        get_logger().debug(f"sandbox install record detail: {exc}")
+        get_logger().warning(f"docker: could not record installed {what}: {type(exc).__name__}")
+        get_logger().debug(f"docker install record detail: {exc}")

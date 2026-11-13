@@ -257,7 +257,7 @@ class AgentConfig(BaseModel):
     the answer can be remembered for the conversation. See
     ``domyn.agents.tools.builtin``."""
 
-    sandbox: str = "auto"
+    backend: str = "auto"
     """Where `run_command` runs: ``auto`` (a Docker container when Docker can be
     used, else this machine, with a warning), ``docker`` (a container per
     conversation that can write only the workspace, or the session does not start;
@@ -293,7 +293,7 @@ class AgentConfig(BaseModel):
     browsing off and on again does not lose an allowlist."""
 
     docker: DockerBackendOptions = Field(default_factory=DockerBackendOptions)
-    """How the Docker sandbox runs. Only read when ``sandbox`` is not ``local``, and
+    """How the Docker backend runs. Only read when ``backend`` is not ``local``, and
     kept when it is, so switching back and forth does not lose an allowlist."""
 
     stream: bool = True
@@ -887,7 +887,7 @@ def configuration_v1_dict_from(
                 "name": CLI_DEFAULT_TOOL_BUNDLE_NAME,
                 "bundles": list(agent.tools),
                 "workspace": agent.workspace,
-                "sandbox": agent.sandbox,
+                "backend": agent.backend,
                 "isolate_environment": agent.isolate_environment,
                 "allowed_env": list(agent.allowed_env),
             }
@@ -1100,7 +1100,7 @@ def current_settings_from(
         description=agent_dict.get("description", default_agent.description),
         instruction=agent_dict.get("instruction", default_agent.instruction),
         tools=tools,
-        sandbox=bundle.get("sandbox", default_agent.sandbox) if bundle else default_agent.sandbox,
+        backend=bundle.get("backend", default_agent.backend) if bundle else default_agent.backend,
         isolate_environment=bundle.get("isolate_environment", default_agent.isolate_environment)
         if bundle
         else default_agent.isolate_environment,
@@ -1522,12 +1522,12 @@ def _tool_bundle_items(raw: dict[str, Any]) -> list[ConfigItem]:
             continue
         fields = [
             ("bundles", ", ".join(b.get("bundles") or []) or "(none)"),
-            ("sandbox", str(b.get("sandbox", "auto"))),
+            ("backend", str(b.get("backend", "auto"))),
             ("workspace", b.get("workspace") or "(cwd)"),
             ("isolate_environment", str(b.get("isolate_environment", True))),
             ("allowed_env", ", ".join(b.get("allowed_env") or []) or "(none)"),
         ]
-        if str(b.get("sandbox", "auto")) != "local":
+        if str(b.get("backend", "auto")) != "local":
             fields += _docker_fields(_docker_options(b.get("docker")))
         if "browser" in (b.get("bundles") or []):
             fields += _browser_fields(_browser_options(b.get("browser")))

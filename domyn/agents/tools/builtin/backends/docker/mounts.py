@@ -1,10 +1,15 @@
 """What a container can see of the host: the workspace, and very little else.
 
-The workspace is the one thing a command may write, so every way a write there
-could reach the host or the next prompt is mounted over, read-only: git hooks and
-config (a planted hook runs on the host at the next ``git commit``), and the
-folders and files whose text is read into the next turn's system prompt. A mask
-exists only for what exists when the container is created.
+A command and a tool may write what is mounted, as they may on this machine: the
+workspace, the skill folders and the session's state. What a write must not do is
+run code on the host or change its policy, so two things differ from this machine:
+
+* git hooks and config are mounted over, read-only: a planted hook runs at the next
+  ``git commit``, a ``core.hooksPath`` or ``core.fsmonitor`` entry the same. A mask
+  exists only for what exists when the container is created.
+* the session's ``config.yaml`` is there to read and not to write: it names the code
+  the host runs (tools, hooks, MCP servers) and which backend to use. Credentials and
+  approvals are not mounted at all.
 """
 
 from collections.abc import Iterator
@@ -12,11 +17,8 @@ from pathlib import Path
 
 from domyn.agents.logger import get_logger
 from domyn.agents.tools.builtin.backends.base import BackendUnavailableError
-from domyn.agents.tools.builtin.backends.docker_sandbox.state import StateFolder
-from domyn.agents.tools.builtin.session import HOME_DIRNAME
+from domyn.agents.tools.builtin.backends.docker.state import StateFolder
 from domyn.agents.tools.builtin.workspace import Workspace
-
-_INSTRUCTION_FILES = ("AGENTS.md", "AGENT.md", "SOUL.md")
 
 
 def refuse_unsafe_workspace(root: Path) -> None:
@@ -25,7 +27,7 @@ def refuse_unsafe_workspace(root: Path) -> None:
     if root == Path(root.anchor) or root == home or root in home.parents:
         raise BackendUnavailableError(
             f"The workspace is {root}: mounting it would hand the container everything in it.",
-            fix="Run domyn from a project folder, or set `sandbox: local`.",
+            fix="Run domyn from a project folder, or set `backend: local`.",
         )
 
 
@@ -38,21 +40,21 @@ def build_mounts(workspace: Workspace, state: StateFolder, conversation: str) ->
     """The ``--mount`` arguments for a conversation's container.
 
     Outermost first: a mount nested under another is applied after it, which is how
-    the places written in again (the state folder's two) sit under a masked folder.
+    the git masks sit under the workspace.
     """
     root = workspace.root
     state.prepare(conversation)
     mounts = _Mounts()
     mounts.add(root, readonly=False)
-    project_folder = root / HOME_DIRNAME
-    if _is_plain_dir(project_folder):  # config, skills and instructions of the project
-        mounts.add(project_folder, readonly=True)
     mounts.add(state.processes, readonly=False)
+    mounts.add(state.browser, readonly=False)
     mounts.add(state.conversation_home(conversation), readonly=False)
+    if state.config is not None and _is_plain_file(state.config):
+        mounts.add(state.config, readonly=True)
     for masked in _masked_in(root):
         mounts.add(masked, readonly=True)
     for skills in skill_roots(workspace):
-        mounts.add(skills, readonly=True)
+        mounts.add(skills, readonly=False)
     return mounts.arguments
 
 
@@ -62,7 +64,7 @@ class _Mounts:
 
     def add(self, path: Path, *, readonly: bool) -> None:
         if "," in str(path):
-            get_logger().warning("sandbox: a path with a comma cannot be mounted; skipped")
+            get_logger().warning("docker: a path with a comma cannot be mounted; skipped")
             return
         spec = f"type=bind,source={path},target={path}" + (",readonly" if readonly else "")
         self.arguments += ["--mount", spec]
@@ -76,11 +78,6 @@ def _masked_in(root: Path) -> Iterator[Path]:
             yield hooks
         if _is_plain_file(config):
             yield config
-    if _is_plain_dir(root / ".agents"):
-        yield root / ".agents"
-    for name in _INSTRUCTION_FILES:
-        if _is_plain_file(root / name):
-            yield root / name
 
 
 def _is_plain_dir(path: Path) -> bool:

@@ -1,8 +1,8 @@
 """An allowlisting HTTPS proxy, run inside a container of its own.
 
-The Docker sandbox puts the command container on an ``--internal`` network, which
+The Docker backend puts the command container on an ``--internal`` network, which
 has no route out. This proxy is the only thing attached to both that network and
-the bridge, so everything a sandboxed command can reach is whatever this lets
+the bridge, so everything a contained command can reach is whatever this lets
 through. It is passed to the proxy container as ``python -c "<this file>"``, which
 is why it is standard library only and one file.
 
@@ -16,7 +16,7 @@ What it does, and deliberately nothing more:
   address (loopback, private ranges, link-local, cloud metadata). An allowlisted
   name that points inward is how a proxy becomes a way into the network it sits on.
 
-Each refusal is one ``DENY host:port reason`` line on stderr, which the sandbox
+Each refusal is one ``DENY host:port reason`` line on stderr, which the container
 backend reads back to tell the user what was blocked and how to allow it.
 """
 
@@ -74,7 +74,7 @@ def _deny(target: str, reason: str) -> None:
 
 
 async def _refuse(writer: asyncio.StreamWriter, message: str) -> None:
-    body = f"domyn sandbox: {message}\n".encode()
+    body = f"domyn egress proxy: {message}\n".encode()
     writer.write(
         b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n"
         + f"Content-Length: {len(body)}\r\n\r\n".encode()
@@ -102,7 +102,7 @@ async def handle(
     parts = request.split()
     if len(parts) != 3 or parts[0].upper() != "CONNECT":
         _deny(parts[1] if len(parts) > 1 else "?", "only HTTPS through CONNECT is allowed")
-        await _refuse(writer, "only HTTPS (CONNECT) is allowed from the sandbox")
+        await _refuse(writer, "only HTTPS (CONNECT) is allowed from the container")
         return
 
     target = parts[1]

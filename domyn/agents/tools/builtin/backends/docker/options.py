@@ -6,19 +6,19 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 REGISTRY_HOSTS: tuple[str, ...] = ("pypi.org", "files.pythonhosted.org", "registry.npmjs.org")
 """The package registries. Always reachable, also when the network is limited to a
-list of hosts: a sandbox that cannot ``pip install`` would be a worse agent, not a
+list of hosts: a container that cannot ``pip install`` would be a worse agent, not a
 safer one."""
 
 _NOT_A_HOST_CHARACTERS = "/: \t"
 
 
 class DockerBackendOptions(BaseModel):
-    """How the Docker sandbox runs. Read when ``sandbox`` is ``docker`` or ``auto``."""
+    """How the Docker backend runs. Read when ``backend`` is ``docker`` or ``auto``."""
 
     model_config = ConfigDict(extra="forbid")
 
     image: str = "auto"
-    """``auto`` builds ``domyn-sandbox`` from ``python:3.12-slim`` on first use. Any
+    """``auto`` builds ``domyn-container`` from ``python:3.12-slim`` on first use. Any
     other value is used as it is and must provide ``bash``, ``timeout`` and ``ps``."""
 
     allowed_network: Literal["public", "none"] | list[str] = "public"
@@ -61,7 +61,7 @@ class DockerBackendOptions(BaseModel):
         return []
 
     def describe_network(self) -> str:
-        """One phrase for the notice that says the sandbox is ready."""
+        """One phrase for the notice that says the container is ready."""
         if self.allowed_network == "public":
             return "network: public HTTPS only"
         if isinstance(self.allowed_network, list):

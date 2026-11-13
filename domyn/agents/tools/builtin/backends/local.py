@@ -37,7 +37,7 @@ class LocalBackend(CommandBackend):
 
     No isolation: the workspace bounds where the *file* tools may look and
     bounds nothing about what a command can reach. Said plainly, because the
-    difference between "contained" and "well-behaved" is why sandboxes exist.
+    difference between "contained" and "well-behaved" is why containers exist.
     """
 
     name = "local"

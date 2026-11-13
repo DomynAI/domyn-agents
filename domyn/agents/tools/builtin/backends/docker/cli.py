@@ -28,7 +28,7 @@ CONTAINER_START_SECONDS = 120
 PULL_SECONDS = 1800
 """Pulling an image, which can be a large download."""
 BUILD_SECONDS = 900
-"""Building the sandbox image."""
+"""Building the image."""
 
 # How much longer than a command's own limit the host waits. The limit is enforced
 # inside the container by `timeout`; this only bounds a `docker exec` that has
@@ -81,7 +81,7 @@ async def retry_once[T](operation: Callable[[], Awaitable[T]], *, describe: str)
     try:
         return await operation()
     except TransientDockerError as exc:
-        get_logger().warning(f"sandbox: {describe} failed, trying again: {exc}")
+        get_logger().warning(f"docker: {describe} failed, trying again: {exc}")
     await asyncio.sleep(RETRY_DELAY_SECONDS)
     return await operation()
 

@@ -1,10 +1,11 @@
 """Run shell commands in a Docker container; everything else stays on this machine.
 
-The agent, its file tools and its approvals run in the terminal process as ever.
-Only what ``run_command`` starts is moved into a container that is locked in: the
-workspace is all it can write, almost nothing of the host is mounted, and the only
-network it has is the proxy's. This is the opposite of running the whole agent in
-a container, and the split the Domyn platform uses.
+The agent, its approvals and the tool declarations run in the terminal process as
+ever. What the tools *do* is moved into a container that is locked in: commands, the
+file tool bodies (run in the image, see ``files``) and the browser. The workspace is all it can
+write, almost nothing of the host is mounted, and the only network it has is the
+proxy's. This is the opposite of running the whole agent in a container, and the
+split the Domyn platform uses.
 
 **The transport is ``docker exec``.** There is no relay and no daemon of ours in
 the container: one long-lived container per conversation, one ``docker exec`` per
@@ -32,13 +33,18 @@ import contextlib
 import json
 import os
 import shlex
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import NamedTuple
 
 from domyn.agents.logger import get_logger
-from domyn.agents.tools.builtin.backends.base import BackendUnavailableError, CommandResult
-from domyn.agents.tools.builtin.backends.docker_sandbox.cli import (
+from domyn.agents.tools.builtin.backends.base import (
+    BackendUnavailableError,
+    CommandBackend,
+    CommandResult,
+    ToolHost,
+)
+from domyn.agents.tools.builtin.backends.docker.cli import (
     ACTION_SECONDS,
     INSPECT_SECONDS,
     SLOW_ACTION_SECONDS,
@@ -46,31 +52,38 @@ from domyn.agents.tools.builtin.backends.docker_sandbox.cli import (
     container_is_gone,
     retry_once,
 )
-from domyn.agents.tools.builtin.backends.docker_sandbox.containers import (
+from domyn.agents.tools.builtin.backends.docker.containers import (
     ContainerLauncher,
     DockerContainer,
 )
-from domyn.agents.tools.builtin.backends.docker_sandbox.images import ensure_image
-from domyn.agents.tools.builtin.backends.docker_sandbox.installs import InstallLog
-from domyn.agents.tools.builtin.backends.docker_sandbox.mounts import (
+from domyn.agents.tools.builtin.backends.docker.images import ensure_image
+from domyn.agents.tools.builtin.backends.docker.installs import InstallLog
+from domyn.agents.tools.builtin.backends.docker.mounts import (
     build_mounts,
     refuse_unsafe_workspace,
     skill_roots,
 )
-from domyn.agents.tools.builtin.backends.docker_sandbox.network import EgressNetwork
-from domyn.agents.tools.builtin.backends.docker_sandbox.options import DockerBackendOptions
-from domyn.agents.tools.builtin.backends.docker_sandbox.scope import (
+from domyn.agents.tools.builtin.backends.docker.network import EgressNetwork
+from domyn.agents.tools.builtin.backends.docker.options import DockerBackendOptions
+from domyn.agents.tools.builtin.backends.docker.scope import (
     FINGERPRINT_LABEL,
-    SandboxScope,
+    BackendScope,
     digest,
     remove_orphans,
 )
-from domyn.agents.tools.builtin.backends.docker_sandbox.state import StateFolder
-from domyn.agents.tools.builtin.backends.sandbox import SandboxBackend
+from domyn.agents.tools.builtin.backends.docker.state import StateFolder
 from domyn.agents.tools.builtin.session import safe_id
 from domyn.agents.tools.builtin.workspace import Workspace
 
 DEFAULT_CONVERSATION = "default"
+OPERATIONS_COMMAND = "/opt/domyn/bin/python -P /opt/domyn/tool_host.py"
+"""How a tool's body is run in the image: its own ``domyn``, apart from the Python the
+agent's commands use."""
+CONTAINER_ROOTS = (Path("/"),)
+"""What the file tools may reach in the container: all of it. On this machine the
+workspace is the boundary because everything else is the user's; here everything else
+is the container's own, which a command can break as it likes, and what of the host is
+reachable is what ``mounts`` puts there."""
 _BACKGROUND_COMMAND_RUNNING = 3  # the exit code `_has_background_command`'s script ends with
 
 
@@ -81,12 +94,20 @@ class _ExistingContainer(NamedTuple):
     fingerprint: str
 
 
-class DockerBackend(SandboxBackend):
+class DockerBackend(CommandBackend):
     """Commands run in a container per conversation. See the module docstring."""
 
     name = "docker"
     is_isolated = True
+
     destroys_on_close = True
+    """Whether what a command started is stopped when its conversation ends or the
+    session closes: unlike on this machine, a command left running in a container does
+    not outlive the session."""
+
+    on_notice: Callable[[str], None] | None = None
+    """Where the backend says what it is doing that takes a while (pulling an image,
+    starting a container). The front-end sets it; ``None`` is silent."""
 
     def __init__(
         self,
@@ -105,7 +126,7 @@ class DockerBackend(SandboxBackend):
         self._options = options or DockerBackendOptions()
         self._allowed_env = [name for name in allowed_env if name]
         self._cli = cli or DockerCli(self._options.docker_binary)
-        self._scope = SandboxScope.of(workspace.root)
+        self._scope = BackendScope.of(workspace.root)
         self._state = StateFolder.resolve(workspace.root, state_dir)
         self._network = (
             EgressNetwork(self._cli, self._scope, self._options.allowed_hosts(), self._say)
@@ -113,7 +134,13 @@ class DockerBackend(SandboxBackend):
             else None
         )
         self._launcher = ContainerLauncher(
-            self._cli, self._options, self._scope, self._network, workspace.root, self._say
+            self._cli,
+            self._options,
+            self._scope,
+            self._network,
+            workspace.root,
+            self._say,
+            project_dir=self._state.project_dir,
         )
         self._installs = InstallLog(
             self._cli,
@@ -163,10 +190,10 @@ class DockerBackend(SandboxBackend):
             await self._prepare()
             await self._ensure_container(conversation_id or DEFAULT_CONVERSATION)
         except BackendUnavailableError as exc:
-            get_logger().warning(f"sandbox warm-up failed: {exc}")
+            get_logger().warning(f"docker warm-up failed: {exc}")
         except Exception as exc:
-            get_logger().warning(f"sandbox warm-up failed: {type(exc).__name__}")
-            get_logger().debug(f"sandbox warm-up detail: {exc}")
+            get_logger().warning(f"docker warm-up failed: {type(exc).__name__}")
+            get_logger().debug(f"docker warm-up detail: {exc}")
 
     async def run(
         self,
@@ -220,19 +247,19 @@ class DockerBackend(SandboxBackend):
         blocked = await self._network.blocked_since(since)
         if not blocked:
             return ""
-        return f"[sandbox] blocked connection(s) to: {', '.join(blocked)}. {self._blocked_hint()}"
+        return f"[docker] blocked connection(s) to: {', '.join(blocked)}. {self._blocked_hint()}"
 
     # --- preparing --------------------------------------------------------
 
     def _say(self, message: str) -> None:
-        get_logger().info(f"sandbox: {message}")
+        get_logger().info(f"docker: {message}")
         if self._announce and self.on_notice is not None:
             self.on_notice(message)
 
     @property
     def _image(self) -> str:
         if self._prepared_image is None:
-            raise RuntimeError("the sandbox image is used before the sandbox is prepared")
+            raise RuntimeError("the image is used before the container is prepared")
         return self._prepared_image
 
     async def _prepare(self) -> None:
@@ -240,7 +267,7 @@ class DockerBackend(SandboxBackend):
             if self._prepared_image is not None:
                 return
             await self.check()
-            image = await retry_once(self._ensure_image, describe="preparing the sandbox image")
+            image = await retry_once(self._ensure_image, describe="preparing the image")
             await remove_orphans(self._cli)
             self._prepared_image = image
 
@@ -249,14 +276,21 @@ class DockerBackend(SandboxBackend):
 
     def _blocked_hint(self) -> str:
         if self._options.allowed_network == "public":
-            return "The sandbox only allows HTTPS (port 443) to public addresses."
+            return "The container only allows HTTPS (port 443) to public addresses."
         return (
-            "The sandbox is limited to the hosts in its `allowed_network` list (and the "
+            "The container is limited to the hosts in its `allowed_network` list (and the "
             "package registries). To allow one, add it to `docker: allowed_network:` in "
             "the cli tools bundle of the config."
         )
 
     # --- running a command -----------------------------------------------
+
+    @property
+    def tool_host(self) -> ToolHost:
+        """A tool's body runs in the conversation's container (``files.main``). The
+        workspace and the skill folders are mounted at their host paths, so a request
+        names the same paths here and there."""
+        return ToolHost(OPERATIONS_COMMAND, CONTAINER_ROOTS)
 
     async def _run_in_container(
         self,
@@ -285,7 +319,7 @@ class DockerBackend(SandboxBackend):
             # Removed from under us: docker restarted, or someone ran `docker rm`.
             self._containers.pop(conversation, None)
             self._say(
-                "The sandbox was lost; starting a new one (files outside the workspace are gone)."
+                "The container was lost; starting a new one (files outside the workspace are gone)."
             )
             return await self._run_in_container(
                 conversation, command, timeout, stdin, retry_if_lost=False
@@ -338,12 +372,12 @@ class DockerBackend(SandboxBackend):
             if self._deferred_for.get(conversation) != fingerprint:
                 self._deferred_for[conversation] = fingerprint
                 self._say(
-                    "The sandbox needs to be recreated (skills or settings changed) "
+                    "The container needs to be recreated (skills or settings changed) "
                     "but a background command is running; it will be after it finishes."
                 )
             return self._remember(conversation, DockerContainer(name, existing.fingerprint))
         if existing.running:
-            self._say("Recreating the sandbox: skills or settings changed…")
+            self._say("Recreating the container: skills or settings changed…")
         await self._cli("rm", "-f", name, timeout=ACTION_SECONDS)
         return None
 
@@ -357,7 +391,7 @@ class DockerBackend(SandboxBackend):
         self._remember(conversation, container)
         self._deferred_for.pop(conversation, None)
         await self._installs.replay(container, conversation)
-        self._say(f"Sandbox ready (docker · {self._options.describe_network()}).")
+        self._say(f"Docker backend ready ({self._options.describe_network()}).")
         return container
 
     def _fingerprint(self) -> str:
@@ -368,6 +402,11 @@ class DockerBackend(SandboxBackend):
             "workspace": str(self._workspace.root),
             "state": str(self._state.root),
             "roots": sorted(_identity(path) for path in skill_roots(self._workspace)),
+            # A file mount pins the inode, so a config the host rewrites (it replaces the
+            # file) is a new mount.
+            "config": _identity(self._state.config)
+            if self._state.config is not None and self._state.config.is_file()
+            else None,
             "network": self._options.allowed_hosts() or "none",
             "memory": self._options.memory,
             "cpus": self._options.cpus,

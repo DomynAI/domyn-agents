@@ -20,6 +20,32 @@ What a command, slash command, option or setting does, and how to build agents, 
 the documentation: the `domyn-docs` skill. Read the page there rather than answering
 from memory.
 
+## First: are your tools running in a Docker container?
+
+Run `echo "$DOMYN_BACKEND"` once, before anything else. **`docker` means every tool you
+have (`run_command`, the file tools and the browser) runs in a Docker container on the
+user's machine, not on the machine itself.** Empty means they run on the user's machine
+and nothing in this section applies. The container exists so that a dangerous command
+breaks it and not the user's computer, and that has a price you must not forget:
+
+| | on the user's machine | in the Docker container |
+|---|---|---|
+| `config.yaml` | you may edit it; it reloads at the next message | **read only. Do not try to edit it and do not look for a way around.** Give the user the exact change and ask them to make it, or to run `domyn setup` or `/model`. The config names code the user's machine runs and which backend to use, which is why a container may not write it |
+| credentials, approvals, history | on disk (never print credentials) | **not there**: you cannot read them |
+| files outside the project (`~/Downloads`, `~/.ssh`, another repository) | reachable by `run_command` | **do not exist.** Only the workspace, the skill folders and the session's state are the user's files. When the user names a file elsewhere, ask them to copy it into the workspace |
+| `.git/hooks`, `.git/config` | writable | **read only**: a hook runs on the user's machine at their next `git commit` |
+| `domyn ...` commands | on `PATH` | **not available**, and they would not change the user's setup: tell the user which command to type |
+| programs and servers on the user's machine (a dev server on `localhost`, installed tools) | reachable | **not reachable**: `localhost` is the container, and private addresses are refused |
+| your skills, `SOUL.md` / `AGENTS.md`, `.agents`, `.domyn` in the project | writable | writable (they are mounted, as on the user's machine) |
+| file tools | confined to the workspace and the skill folders | reach the whole container, `/tmp` included; the user's files are only what is mounted |
+| installing packages | a virtualenv per conversation | `pip` and `npm install -g` work and come back after a restart; no root, so no `apt` |
+| background commands | outlive the session | stop with the session |
+| network | whatever the machine has | `allowed_network`: public HTTPS sites by default, or a list, or none |
+| environment variables | a fixed safe set plus `allowed_env` | the same |
+
+When something fails in the container and works on the user's machine, this table is
+the first place to look. Say which difference you hit instead of retrying.
+
 Ground rules:
 
 - **You cannot run slash commands.** `/config`, `/model`, `/clear` and the rest are
@@ -95,7 +121,7 @@ hand.
 
 | what changed | takes effect | how |
 |---|---|---|
-| `config.yaml` edited (by hand, by you, or by `domyn setup` in another shell) | **next message** | the file is compared with what the agent was built from before every message, and the agent is rebuilt when it changed: model, tools, skills, instructions, MCP servers, anything. The session prints "Reloaded …". A file that no longer loads keeps the previous configuration, and the session says why once |
+| `config.yaml` edited (by hand, by you **when your tools run on the user's machine**, or by `domyn setup` in another shell) | **next message** | the file is compared with what the agent was built from before every message, and the agent is rebuilt when it changed: model, tools, skills, instructions, MCP servers, anything. The session prints "Reloaded …". A file that no longer loads keeps the previous configuration, and the session says why once |
 | provider / model / key, through `/model` | immediately | `/model` rewrites the file and reloads the agent |
 | a skill file **edited** in a folder the config already lists | **next message** | listed skills are read again on every turn. Suggest `/clear` if the old version was already read into this conversation |
 | a **new** skill added to `./.domyn/skills` or `./.agents/skills` | **next message** with autodiscovery on (`.domyn/skills` and `.agents/skills` in the paths); otherwise once it is listed in `config.yaml` | see *Adding a skill* |
@@ -327,7 +353,7 @@ says which variable is missing.
 - `domyn setup` and `/model` **rewrite the whole file** from the fields they know
   about: the provider's type, model, url, `max_tokens` and `context_window`; the
   agent's name, description, instruction, stream, skills and
-  `standing_instructions`; the tool bundle's bundles, workspace, sandbox (and its `docker` options), isolation,
+  `standing_instructions`; the tool bundle's bundles, workspace, backend (and its `docker` options), isolation,
   `allowed_env` and `browser` options; and the compaction settings. Anything else is
   dropped, e.g. `mcp_servers`, `hooks`, `tools`, extra agents, other
   `generation_params` (temperature, …) and provider `headers`. A custom `${MY_VAR}`
@@ -353,6 +379,6 @@ To start over: `domyn setup` (it pre-fills the current values; Enter keeps them)
 | the conversation hits the model's limit and is never compacted | no `context_window` in the provider block (or it is spelled `max_model_len`). Add `context_window`; it applies from the next message |
 | `/model` says it only applies to the default configuration | the session was started from a file. Edit that file; it applies from the next message |
 | a file outside the project is refused | workspace containment. Start the CLI in that directory or set `workspace` |
-| commands do not run in the Docker sandbox | `sandbox` in the tool bundle (the `tool_bundles` entry that lists `shell`) is `local`, or it is `auto` and Docker was not running when the session started (it warns and the line under the banner says `commands: this machine (no sandbox)`). Check the value, start Docker and restart; the check from inside is `test -f /.dockerenv && echo container \|\| echo host`. `sandbox: docker` refuses to start without Docker instead |
-| a command fails with `[sandbox] blocked connection(s) to <host>` | the sandbox's `docker.allowed_network` is a list that does not have the host. Add it to the list in the tool bundle (applies from the next message), or set `allowed_network: public` (any public site over HTTPS, the default). Plain `http://`, other ports and private addresses are refused in every mode |
-| "The sandbox was lost; starting a new one" | Docker restarted or the container was removed during the session. The next command made a new one: workspace files and installed packages come back, anything else written inside the container is gone. If it keeps happening, check that Docker Desktop is not stopping or running out of memory |
+| tools do not run in the Docker container | `backend` in the tool bundle (the `tool_bundles` entry that lists `shell`) is `local`, or it is `auto` and Docker was not running, or its image could not be pulled, when the session started (it warns and the line under the banner says `tools: this machine`). Check the value, start Docker and restart; the check from inside is `test -f /.dockerenv && echo container \|\| echo host`. `backend: docker` refuses to start without Docker instead |
+| a command fails with `[docker] blocked connection(s) to <host>` | the container's `docker.allowed_network` is a list that does not have the host. Add it to the list in the tool bundle (applies from the next message), or set `allowed_network: public` (any public site over HTTPS, the default). Plain `http://`, other ports and private addresses are refused in every mode |
+| "The container was lost; starting a new one" | Docker restarted or the container was removed during the session. The next command made a new one: workspace files and installed packages come back, anything else written inside the container is gone. If it keeps happening, check that Docker Desktop is not stopping or running out of memory |

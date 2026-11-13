@@ -1,7 +1,7 @@
-"""Where the sandbox keeps a session's working state on the host.
+"""Where the container keeps a session's working state on the host.
 
-The background commands' logs and each conversation's folder (its recorded
-installs, its output). In the CLI that is the folder ``DOMYN_PROJECT_DIR`` names,
+The background commands' logs, the browser's saved pages and each conversation's
+folder (its recorded installs, its output). In the CLI that is the folder ``DOMYN_PROJECT_DIR`` names,
 ``~/.domyn`` or a project; without one it is ``.domyn`` in the workspace, as it is
 for the local backend. A command in the container sees these paths at the same
 place the host has them.
@@ -46,15 +46,31 @@ class StateFolder:
         return self._explicit or self._workspace_root / HOME_DIRNAME
 
     @property
+    def project_dir(self) -> Path | None:
+        """The folder ``DOMYN_PROJECT_DIR`` names (``~/.domyn`` or a project), when the
+        session has one. Without it the state is in the workspace and there is no config."""
+        return self._explicit
+
+    @property
+    def config(self) -> Path | None:
+        """The session's ``config.yaml``, which is in that folder. A container may read
+        it and never write it: it names code the host runs and which backend to use."""
+        return self._explicit / "config.yaml" if self._explicit is not None else None
+
+    @property
     def processes(self) -> Path:
         return self.root / StateFolders.PROCESSES
+
+    @property
+    def browser(self) -> Path:
+        return self.root / StateFolders.BROWSER
 
     def conversation_home(self, conversation: str) -> Path:
         environment = SessionEnvironment(self._workspace_root, state_dir=self._explicit)
         return environment.paths(conversation).home
 
     def prepare(self, conversation: str) -> None:
-        """Make the two places a container writes in, without following a link.
+        """Make the places a container writes in, without following a link.
 
         A cloned repository can commit ``.domyn`` or any folder in it as a link, and
         a project folder given by path may be someone else's export; a bind mount
@@ -62,10 +78,10 @@ class StateFolder:
         the dotfiles), what is below it may not.
         """
         start = self._explicit or self._workspace_root
-        for target in (self.processes, self.conversation_home(conversation)):
+        for target in (self.processes, self.browser, self.conversation_home(conversation)):
             if (link := linked_below(start, target)) is not None:
                 raise BackendUnavailableError(
-                    f"{link} is a link: the sandbox will not mount through it"
+                    f"{link} is a link: the container will not mount through it"
                 )
             target.mkdir(parents=True, exist_ok=True)
         if self._explicit is None:

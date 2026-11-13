@@ -1,4 +1,4 @@
-"""The Docker sandbox for ``run_command``: ``sandbox: docker`` or ``auto``.
+"""The Docker backend for ``run_command``: ``backend: docker`` or ``auto``.
 
 ``backend`` holds the backend, which coordinates the rest: ``cli`` runs ``docker``,
 ``images`` prepares the image, ``network`` is the proxy and the internal network,
@@ -6,17 +6,17 @@
 ``installs`` keeps what the agent installed, and ``scope`` names and labels it all.
 """
 
-from domyn.agents.tools.builtin.backends.docker_sandbox.backend import DockerBackend
-from domyn.agents.tools.builtin.backends.docker_sandbox.images import BASE_IMAGE, DERIVED_IMAGE
-from domyn.agents.tools.builtin.backends.docker_sandbox.options import (
+from domyn.agents.tools.builtin.backends.docker.backend import DockerBackend
+from domyn.agents.tools.builtin.backends.docker.images import IMAGE_REPOSITORY, default_image
+from domyn.agents.tools.builtin.backends.docker.options import (
     REGISTRY_HOSTS,
     DockerBackendOptions,
 )
 
 __all__ = [
-    "BASE_IMAGE",
-    "DERIVED_IMAGE",
+    "IMAGE_REPOSITORY",
     "REGISTRY_HOSTS",
     "DockerBackend",
     "DockerBackendOptions",
+    "default_image",
 ]

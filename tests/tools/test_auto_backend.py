@@ -1,4 +1,4 @@
-"""``sandbox: auto``: Docker when it can be used, this machine when it cannot, and
+"""``backend: auto``: Docker when it can be used, this machine when it cannot, and
 the fallback is said rather than silent. An explicit ``docker`` still refuses."""
 
 from pathlib import Path
@@ -8,42 +8,48 @@ import pytest
 
 from domyn.agents.tools.builtin import (
     BuiltinBundleConfig,
+    DockerBackend,
     DockerBackendOptions,
     LocalBackend,
     Workspace,
     build_backend,
+    file_tools,
 )
 from domyn.agents.tools.builtin.backends import BackendUnavailableError, CommandResult
 from domyn.agents.tools.builtin.backends.auto import AutoBackend
-from domyn.agents.tools.builtin.backends.sandbox import SandboxBackend
 
 
-class _Fake(SandboxBackend):
-    name = "docker"
-    is_isolated = True
-    destroys_on_close = True
+@pytest.fixture
+def docker_works(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Docker as a machine that has it: what `DockerBackend` does is recorded, and
+    nothing is run. `AutoBackend` is one, so it reaches these through `super()`."""
+    calls: list[str] = []
 
-    def __init__(self) -> None:
-        self.calls: list[str] = []
+    async def check(self: DockerBackend) -> None:
+        calls.append("check")
 
-    async def check(self) -> None:
-        self.calls.append("check")
+    async def prepare(self: DockerBackend) -> None:
+        calls.append("prepare")
 
-    async def prepare(self) -> None:
-        self.calls.append("prepare")
-
-    async def warm_up(self, conversation_id: str) -> None:
-        self.calls.append(f"warm {conversation_id}")
-
-    async def run(self, command: str, **kwargs: Any) -> CommandResult:
-        self.calls.append(f"run {command}")
+    async def run(self: DockerBackend, command: str, **kwargs: Any) -> CommandResult:
+        calls.append(f"run {command}")
         return CommandResult(exit_code=0, stdout="in the container", stderr="")
 
-    async def end_conversation(self, conversation_id: str) -> None:
-        self.calls.append(f"end {conversation_id}")
+    async def end_conversation(self: DockerBackend, conversation_id: str) -> None:
+        calls.append(f"end {conversation_id}")
 
-    async def close(self) -> None:
-        self.calls.append("close")
+    async def close(self: DockerBackend) -> None:
+        calls.append("close")
+
+    for name, replacement in (
+        ("check", check),
+        ("prepare", prepare),
+        ("run", run),
+        ("end_conversation", end_conversation),
+        ("close", close),
+    ):
+        monkeypatch.setattr(DockerBackend, name, replacement)
+    return calls
 
 
 def _auto(tmp_path: Path, **docker: Any) -> AutoBackend:
@@ -65,10 +71,10 @@ class TestFallback:
 
         await backend.check()
 
-        assert isinstance(backend._chosen, LocalBackend)
+        assert backend._on_this_machine and isinstance(backend._local, LocalBackend)
         assert backend.fallback is not None and "Docker was not found" in backend.fallback.problem
         assert backend.is_isolated is False and backend.name == "local"
-        assert len(notices) == 1 and "no sandbox" in notices[0]
+        assert len(notices) == 1 and "not in a container" in notices[0]
 
         result = await backend.run("echo hi", timeout=10, conversation_id="c")
         assert result.stdout.strip() == "hi"
@@ -91,9 +97,10 @@ class TestFallback:
         assert backend.fallback is not None
 
     @pytest.mark.asyncio
-    async def test_with_docker_it_is_the_sandbox(self, tmp_path: Path) -> None:
-        fake = _Fake()
-        backend = AutoBackend(Workspace.at(tmp_path), sandbox=fake)
+    async def test_with_docker_it_is_the_chosen_backend(
+        self, tmp_path: Path, docker_works: list[str]
+    ) -> None:
+        backend = AutoBackend(Workspace.at(tmp_path))
 
         await backend.check()
         assert backend.fallback is None
@@ -101,17 +108,68 @@ class TestFallback:
         assert (await backend.run("ls", timeout=5)).stdout == "in the container"
         await backend.end_conversation("c")
         await backend.close()
-        assert fake.calls == ["check", "run ls", "end c", "close"]
+        assert docker_works == ["check", "run ls", "end c", "close"]
+
+    @pytest.mark.asyncio
+    async def test_with_docker_a_tool_body_is_run_through_the_backend(
+        self, tmp_path: Path, docker_works: list[str]
+    ) -> None:
+        backend = AutoBackend(Workspace.at(tmp_path))
+        await backend.check()
+
+        assert backend.tool_host is not None and backend.tool_host.command
 
     @pytest.mark.asyncio
     async def test_before_deciding_it_is_not_claimed_to_isolate(self, tmp_path: Path) -> None:
         backend = _auto(tmp_path)
         assert backend.is_isolated is False
-        assert isinstance(backend, SandboxBackend)
+        assert isinstance(backend, DockerBackend)
 
     @pytest.mark.asyncio
     async def test_closing_an_undecided_backend_is_fine(self, tmp_path: Path) -> None:
         await _auto(tmp_path).close()
+
+
+class TestAnImageThatWillNotPull:
+    """Docker is there but the image cannot be had: `auto` still starts, on this machine."""
+
+    @pytest.mark.asyncio
+    async def test_it_falls_back_when_preparing_fails(
+        self, tmp_path: Path, docker_works: list[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def unpullable(self: DockerBackend) -> None:
+            raise BackendUnavailableError("could not pull the image x.", fix="Check the network.")
+
+        monkeypatch.setattr(DockerBackend, "prepare", unpullable)
+        backend = AutoBackend(Workspace.at(tmp_path))
+        notices: list[str] = []
+        backend.on_notice = notices.append
+
+        await backend.check()
+        assert backend.name == "docker" and backend.fallback is None
+        await backend.prepare()
+
+        assert backend.name == "local" and backend.is_isolated is False
+        assert backend.fallback is not None and "could not pull" in backend.fallback.problem
+        assert notices and "not in a container" in notices[-1]
+        assert (
+            await backend.run("echo hi", timeout=10, conversation_id="c")
+        ).stdout.strip() == "hi"
+
+
+class TestToolsFollowTheBackend:
+    @pytest.mark.asyncio
+    async def test_a_tool_body_runs_on_this_machine_when_commands_do(self, tmp_path: Path) -> None:
+        (tmp_path / "a.txt").write_text("here")
+        backend = _auto(tmp_path)
+        await backend.check()
+
+        tool = {t.name: t for t in file_tools(Workspace.at(tmp_path), host=backend)}["read_file"]
+
+        result = await tool.execute(path="a.txt", conversation_id="c")
+
+        assert result.success and "here" in result.data
+        assert backend.tool_host is None  # in this process, nothing to exec
 
 
 class TestWhatIsExplicit:
@@ -130,15 +188,14 @@ class TestWhatIsExplicit:
 
     def test_a_bundle_entry_defaults_to_auto(self, tmp_path: Path) -> None:
         entry = BuiltinBundleConfig(name="x", bundles=["shell"], workspace=str(tmp_path))
-        assert entry.sandbox == "auto"
+        assert entry.backend == "auto"
         assert isinstance(entry.build().backend, AutoBackend)
 
-    def test_the_browser_keeps_its_own_backend_beside_an_auto_one(self, tmp_path: Path) -> None:
+    def test_the_browser_goes_where_the_commands_go(self, tmp_path: Path) -> None:
         entry = BuiltinBundleConfig(name="x", bundles=["shell", "browser"], workspace=str(tmp_path))
         built = entry.build()
         assert built.browser is not None
-        assert isinstance(built.browser.backend, LocalBackend)
-        assert built.browser.backend is not built.backend
+        assert built.browser.backend is built.backend
 
 
 class TestTheStateFolder:
@@ -175,10 +232,10 @@ class TestTheStateFolder:
             raise BackendUnavailableError("no docker")
 
         monkeypatch.setattr(
-            "domyn.agents.tools.builtin.backends.docker_sandbox.DockerBackend.check", refuse
+            "domyn.agents.tools.builtin.backends.docker.DockerBackend.check", refuse
         )
-        chosen = await auto.decide()
-        assert isinstance(chosen, LocalBackend) and chosen.state_dir == str(state)
+        await auto.decide()
+        assert auto._on_this_machine and auto._local.state_dir == str(state)
 
     def test_without_any_it_is_dot_domyn(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

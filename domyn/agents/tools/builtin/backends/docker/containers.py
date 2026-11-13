@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from domyn.agents.tools.builtin.backends.base import BackendUnavailableError
-from domyn.agents.tools.builtin.backends.docker_sandbox.cli import (
+from domyn.agents.tools.builtin.backends.docker.cli import (
     ACTION_SECONDS,
     CONTAINER_START_SECONDS,
     DockerCli,
@@ -14,15 +14,16 @@ from domyn.agents.tools.builtin.backends.docker_sandbox.cli import (
     container_is_gone,
     retry_once,
 )
-from domyn.agents.tools.builtin.backends.docker_sandbox.network import EgressNetwork
-from domyn.agents.tools.builtin.backends.docker_sandbox.options import DockerBackendOptions
-from domyn.agents.tools.builtin.backends.docker_sandbox.scope import FINGERPRINT_LABEL, SandboxScope
+from domyn.agents.tools.builtin.backends.docker.network import EgressNetwork
+from domyn.agents.tools.builtin.backends.docker.options import DockerBackendOptions
+from domyn.agents.tools.builtin.backends.docker.scope import FINGERPRINT_LABEL, BackendScope
+from domyn.agents.tools.builtin.session import PROJECT_DIR_VAR
 
-SANDBOX_HOME = "/tmp/domyn-home"
+CONTAINER_HOME = "/tmp/domyn-home"
 """``HOME`` inside the container. Not a mount: ``pip install --user`` and
 ``npm install -g`` write under it, and a new container starts without them."""
 
-NPM_PREFIX = f"{SANDBOX_HOME}/.npm-global"
+NPM_PREFIX = f"{CONTAINER_HOME}/.npm-global"
 
 _PROXY_VARIABLES = ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY")
 _NO_PROXY = "localhost,127.0.0.1"
@@ -42,11 +43,13 @@ class ContainerLauncher:
         self,
         cli: DockerCli,
         options: DockerBackendOptions,
-        scope: SandboxScope,
+        scope: BackendScope,
         network: EgressNetwork | None,
         workdir: Path,
         notify: Callable[[str], None],
+        project_dir: Path | None = None,
     ) -> None:
+        self._project_dir = project_dir
         self._cli = cli
         self._options = options
         self._scope = scope
@@ -59,9 +62,9 @@ class ContainerLauncher:
     ) -> DockerContainer:
         """Start the container, once more if Docker failed the first time. A refusal
         that comes back is real and is raised."""
-        self._notify("Starting the sandbox…")
+        self._notify("Starting the container…")
         if self._network is not None:
-            await self._network.ensure()
+            await self._network.ensure(image)
 
         async def attempt() -> DockerContainer:
             return await self._start_once(name, fingerprint, image, mounts)
@@ -76,7 +79,7 @@ class ContainerLauncher:
         )
         if not started.ok:
             await self._cli("rm", "-f", name, timeout=ACTION_SECONDS)
-            raise TransientDockerError(f"could not start the sandbox: {started.error()}")
+            raise TransientDockerError(f"could not start the container: {started.error()}")
         await self._probe(name, image)
         return DockerContainer(name, fingerprint)
 
@@ -85,7 +88,7 @@ class ContainerLauncher:
         check the image has the tools the background-command wrapper needs."""
         probed = await self._cli(
             "exec", name, "sh", "-c",
-            f"mkdir -p {SANDBOX_HOME}/.local {NPM_PREFIX} && command -v bash timeout ps >/dev/null",
+            f"mkdir -p {CONTAINER_HOME}/.local {NPM_PREFIX} && command -v bash timeout ps >/dev/null",
             timeout=ACTION_SECONDS,
         )  # fmt: skip
         if probed.ok:
@@ -97,7 +100,7 @@ class ContainerLauncher:
             or "daemon" in probed.stderr.lower()
         )
         if docker_failed:  # the probe did not run, so the image was not looked at
-            raise TransientDockerError(f"the sandbox stopped as it started: {probed.error()}")
+            raise TransientDockerError(f"the container stopped as it started: {probed.error()}")
         raise BackendUnavailableError(
             f"the image {image} lacks bash, timeout or ps: use `docker: image: auto` "
             "or an image that has them"
@@ -116,11 +119,15 @@ class ContainerLauncher:
             "--cpus", str(self._options.cpus),
             "-w", str(self._workdir),
             *_environment(
-                HOME=SANDBOX_HOME,
-                PYTHONUSERBASE=f"{SANDBOX_HOME}/.local",
+                HOME=CONTAINER_HOME,
+                PYTHONUSERBASE=f"{CONTAINER_HOME}/.local",
                 NPM_CONFIG_PREFIX=NPM_PREFIX,
                 PIP_DISABLE_PIP_VERSION_CHECK="1",
                 PYTHONDONTWRITEBYTECODE="1",
+                # What a skill or the agent reads to know where it is running: not on the
+                # machine a config can be edited on (see ``mounts``).
+                DOMYN_BACKEND="docker",
+                **({PROJECT_DIR_VAR: str(self._project_dir)} if self._project_dir else {}),
             ),
             *_as_host_user(),
             *self._network_arguments(),

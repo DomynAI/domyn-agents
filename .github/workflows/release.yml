@@ -40,6 +40,13 @@ jobs:
       id-token: write      # provenance attestation
       attestations: write
 
+  docker-backend-image:
+    needs: tests
+    uses: ./.github/workflows/docker-backend-image.yml
+    permissions:
+      contents: read
+      packages: write  # the image
+
   docs:
     needs: tests
     # Stable releases only: a pre-release tag (vX.Y.ZaN, bN, rcN) has an `a`, a `b`

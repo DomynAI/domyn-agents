@@ -1,4 +1,4 @@
-"""What the REPL does for a sandboxed command backend.
+"""What the REPL does for a managed command backend.
 
 The backend itself is tested in ``tests/tools/test_docker_backend.py``; here it is
 a fake, so the session's side — preparing under a message, warming the next
@@ -21,13 +21,13 @@ from domyn.agents.tools.builtin import (
     BuiltinTools,
     CommandBackend,
     CommandResult,
-    SandboxBackend,
+    DockerBackend,
 )
 from tests.cli.test_repl_session import _agent, _repl
 
 
-class FakeSandbox(SandboxBackend):
-    name = "fake-sandbox"
+class FakeDockerBackend(DockerBackend):
+    name = "fake-backend"
     is_isolated = True
     destroys_on_close = True
 
@@ -45,7 +45,7 @@ class FakeSandbox(SandboxBackend):
         if self.fail_prepare:
             raise RuntimeError("Docker is not running")
         if self.on_notice:
-            self.on_notice("Preparing the sandbox image (first run only)…")
+            self.on_notice("Preparing the image (first run only)…")
 
     async def check(self) -> None:
         self.events.append(("check", ""))
@@ -60,8 +60,8 @@ class FakeSandbox(SandboxBackend):
         self.events.append(("close", ""))
 
 
-def _with_sandbox(*script: str, **kwargs: Any):  # type: ignore[no-untyped-def]
-    backend = FakeSandbox(**kwargs)
+def _with_backend(*script: str, **kwargs: Any):  # type: ignore[no-untyped-def]
+    backend = FakeDockerBackend(**kwargs)
     repl, out = _repl(*script)
     repl._agent.builtin_tools.append(BuiltinTools(backend=backend))
     repl._route_browser_notices()
@@ -75,33 +75,33 @@ async def _settle() -> None:
 
 class TestPreparing:
     @pytest.mark.asyncio
-    async def test_the_sandbox_is_prepared_before_the_first_prompt_and_says_so(self) -> None:
-        repl, out, backend = _with_sandbox()
+    async def test_the_backend_is_prepared_before_the_first_prompt_and_says_so(self) -> None:
+        repl, out, backend = _with_backend()
         first = repl._state.conversation_id
         await repl.run()
         await _settle()
         assert backend.events[0] == ("prepare", "")
         assert ("warm_up", first) in backend.events
-        assert "Preparing the sandbox image" in out.getvalue()
+        assert "Preparing the image" in out.getvalue()
 
     @pytest.mark.asyncio
     async def test_a_failure_is_reported_and_the_session_carries_on(self) -> None:
-        repl, out, backend = _with_sandbox(fail_prepare=True)
+        repl, out, backend = _with_backend(fail_prepare=True)
         assert await repl.run() == 0
-        assert "Sandbox unavailable: Docker is not running" in out.getvalue()
+        assert "Backend unavailable: Docker is not running" in out.getvalue()
         assert not any(kind == "warm_up" for kind, _ in backend.events)
 
     @pytest.mark.asyncio
-    async def test_a_session_without_a_sandbox_is_untouched(self) -> None:
+    async def test_a_session_without_a_managed_backend_is_untouched(self) -> None:
         repl, out = _repl()
         assert await repl.run() == 0
-        assert "Sandbox" not in out.getvalue()
+        assert "Backend" not in out.getvalue()
 
 
 class TestConversationsEnd:
     @pytest.mark.asyncio
     async def test_clear_destroys_the_old_container_and_warms_the_new_one(self) -> None:
-        repl, _, backend = _with_sandbox("/clear")
+        repl, _, backend = _with_backend("/clear")
         old = repl._state.conversation_id
         await repl.run()
         await _settle()
@@ -113,20 +113,20 @@ class TestConversationsEnd:
 
     @pytest.mark.asyncio
     async def test_the_session_closing_closes_the_backend(self) -> None:
-        repl, _, backend = _with_sandbox()
+        repl, _, backend = _with_backend()
         await repl.run()
         assert ("close", "") in backend.events
 
 
 class TestWhatSurvives:
     @pytest.mark.asyncio
-    async def test_running_commands_are_said_to_stop_with_the_sandbox(
+    async def test_running_commands_are_said_to_stop_with_the_container(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from domyn.agents.interfaces.cli import processes_view
 
         monkeypatch.setattr(processes_view, "summary", lambda state: "1 command is running")
-        repl, out, _ = _with_sandbox()
+        repl, out, _ = _with_backend()
         await repl.close()
         text = out.getvalue()
         assert "will be stopped" in text and "will keep going" not in text
@@ -141,8 +141,8 @@ class TestWhatSurvives:
         assert "will keep going" in out.getvalue()
 
 
-class _Down(FakeSandbox):
-    """A sandbox whose Docker is not running."""
+class _Down(FakeDockerBackend):
+    """A backend whose Docker is not running."""
 
     def __init__(self, *, fix: str | None = "Start Docker Desktop (`open -a Docker`).") -> None:
         super().__init__()
@@ -155,7 +155,7 @@ class _Down(FakeSandbox):
 
 
 class TestStartingWithoutDocker:
-    """`domyn run` refuses to start when the configured sandbox cannot be used, and says
+    """`domyn run` refuses to start when the configured backend cannot be used, and says
     both ways out: start Docker, or switch to running commands locally."""
 
     async def _start(self, backend: CommandBackend, config_file: Path | None) -> tuple[int, str]:
@@ -186,16 +186,16 @@ class TestStartingWithoutDocker:
         assert backend.checked == 1
         assert "Docker is installed but not running." in text
         assert "open -a Docker" in text and "run `domyn run` again" in text
-        assert "`sandbox: local`" in text and "cli tools bundle" in text
         # Unwrapped: a long path wraps at the width of the console.
-        flat = text.replace("\n", "")
-        assert "sandbox: local" in text and str(config) in flat
+        flat = " ".join(text.split())
+        assert "`backend: local`" in flat and "cli tools bundle" in flat
+        assert str(config) in text.replace("\n", "")
 
     @pytest.mark.asyncio
     async def test_a_file_less_agent_is_told_to_edit_its_config(self) -> None:
         _, text = await self._start(_Down(), None)
 
-        assert "sandbox: local" in text
+        assert "backend: local" in text
         assert " in /" not in text
 
     @pytest.mark.asyncio
@@ -203,7 +203,7 @@ class TestStartingWithoutDocker:
         from domyn.agents.cli.commands.run import command as run_command
 
         def boom(*args: Any, **kwargs: Any) -> None:
-            raise AssertionError("a session was started without a sandbox")
+            raise AssertionError("a session was started without a usable backend")
 
         monkeypatch.setattr(run_command, "Repl", boom)
 
@@ -212,7 +212,7 @@ class TestStartingWithoutDocker:
         assert code == 1
 
     @pytest.mark.asyncio
-    async def test_a_usable_sandbox_lets_the_session_start(
+    async def test_a_usable_backend_lets_the_session_start(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from domyn.agents.cli.commands.run import command as run_command
@@ -229,19 +229,19 @@ class TestStartingWithoutDocker:
 
         monkeypatch.setattr(run_command, "Repl", _Stub)
 
-        code, _ = await self._start(FakeSandbox(), None)
+        code, _ = await self._start(FakeDockerBackend(), None)
 
         assert code == 0 and started == [True]
 
     @pytest.mark.asyncio
-    async def test_a_session_without_a_sandbox_is_not_asked(self) -> None:
+    async def test_a_session_without_a_managed_backend_is_not_asked(self) -> None:
         from domyn.agents.cli.commands.run import command as run_command
 
-        assert await run_command._unusable_sandbox(_agent()) is None
+        assert await run_command._unusable_backend(_agent()) is None
 
 
-class TestStartingWithAutoSandbox:
-    """`sandbox: auto` starts either way, says where commands run, and warns on a fallback."""
+class TestStartingWithAutoBackend:
+    """`backend: auto` starts either way, says where commands run, and warns on a fallback."""
 
     async def _start(self, backend: CommandBackend, show_status: bool) -> tuple[int, str]:
         from domyn.agents.cli.commands.run import command as run_command
@@ -286,12 +286,12 @@ class TestStartingWithAutoSandbox:
 
         assert code == 0 and started == [True]
         flat = text.replace("\n", " ")
-        assert "Docker was not found" in text and "no sandbox" in text
-        assert "sandbox: local" in flat
-        assert "commands: this machine (no sandbox)" in flat
+        assert "Docker was not found" in text and "not in a container" in text
+        assert "backend: local" in flat
+        assert "tools: this machine" in flat
 
     @pytest.mark.asyncio
-    async def test_a_usable_docker_shows_the_sandbox_and_no_warning(
+    async def test_a_usable_docker_shows_docker_and_no_warning(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from domyn.agents.cli.commands.run import command as run_command
@@ -303,14 +303,14 @@ class TestStartingWithAutoSandbox:
                 return 0
 
         monkeypatch.setattr(run_command, "Repl", _Repl)
-        code, text = await self._start(FakeSandbox(), show_status=True)
+        code, text = await self._start(FakeDockerBackend(), show_status=True)
 
         assert code == 0
-        assert "commands: docker sandbox" in text
-        assert "no sandbox" not in text
+        assert "tools: docker" in text
+        assert "not in a container" not in text
 
     @pytest.mark.asyncio
-    async def test_the_browser_is_said_to_be_outside_the_sandbox(
+    async def test_the_browser_is_not_said_to_be_somewhere_else(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from types import SimpleNamespace
@@ -326,7 +326,9 @@ class TestStartingWithAutoSandbox:
         monkeypatch.setattr(run_command, "Repl", _Repl)
         buffer = io.StringIO()
         agent = _agent()
-        agent.builtin_tools.append(BuiltinTools(backend=FakeSandbox(), browser=SimpleNamespace()))
+        agent.builtin_tools.append(
+            BuiltinTools(backend=FakeDockerBackend(), browser=SimpleNamespace())
+        )
         with patch.object(run_command, "console", Console(file=buffer, width=140)):
             await run_command.start_session(
                 agent,
@@ -335,4 +337,6 @@ class TestStartingWithAutoSandbox:
                 verbose=False,
                 show_status=True,
             )
-        assert "commands: docker sandbox  ·  browser: this machine" in buffer.getvalue()
+        line = buffer.getvalue()
+        assert "tools: docker" in line
+        assert "browser: this machine" not in line  # it runs in the container too

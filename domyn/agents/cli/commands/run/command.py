@@ -51,7 +51,7 @@ from domyn.agents.skills.integration import attach_skills
 from domyn.agents.skills.layout import listed_path_is_linked
 from domyn.agents.tools.builtin.backends import BackendUnavailableError, CommandBackend
 from domyn.agents.tools.builtin.backends.auto import AutoBackend
-from domyn.agents.tools.builtin.backends.sandbox import SandboxBackend
+from domyn.agents.tools.builtin.backends.docker import DockerBackend
 
 # markup=False for the whole session: nothing here writes rich's square-bracket
 # tags, and everything here prints text from somewhere else — tool arguments, a
@@ -250,9 +250,9 @@ async def start_session(
     path only.
     """
     # Before anything is said or asked: a configuration that runs commands in a
-    # sandbox cannot do its job without one, and finding that out at the first
+    # container backend cannot do its job without one, and finding that out at the first
     # command, after the user has typed a request, is the worse moment.
-    if (refusal := await _unusable_sandbox(agent)) is not None:
+    if (refusal := await _unusable_backend(agent)) is not None:
         console.print(
             _refusal_text(refusal, config_file), style=theme.style("warning"), highlight=False
         )
@@ -268,7 +268,7 @@ async def start_session(
     index = await _startup_index(agent)
     if show_status:
         details = [agent.name]
-        commands = _commands_status(agent)
+        commands = _tools_status(agent)
         if commands:
             details.append(commands)
         skills = _skills_status(agent, index)
@@ -358,20 +358,20 @@ def _command_backends(agent: Any) -> list[CommandBackend]:
     return found
 
 
-def _sandbox_backends(agent: Any) -> list[SandboxBackend]:
-    return [b for b in _command_backends(agent) if isinstance(b, SandboxBackend)]
+def _docker_backends(agent: Any) -> list[DockerBackend]:
+    return [b for b in _command_backends(agent) if isinstance(b, DockerBackend)]
 
 
-async def _unusable_sandbox(agent: Any) -> BackendUnavailableError | None:
-    """The first sandbox the configuration asks for that cannot be used, if any.
+async def _unusable_backend(agent: Any) -> BackendUnavailableError | None:
+    """The first backend the configuration asks for that cannot be used, if any.
 
-    An explicit ``sandbox: docker`` stops the session rather than falling back to
-    running commands on this machine: someone who chose a sandbox and gets none,
-    without being told, has a boundary that is not there. ``sandbox: auto`` (the
+    An explicit ``backend: docker`` stops the session rather than falling back to
+    running commands on this machine: someone who chose a container and gets none,
+    without being told, has a boundary that is not there. ``backend: auto`` (the
     default) never fails ``check``: it falls back to this machine, which
     ``_fallbacks`` reports.
     """
-    for backend in _sandbox_backends(agent):
+    for backend in _docker_backends(agent):
         try:
             await backend.check()
         except BackendUnavailableError as exc:
@@ -384,39 +384,34 @@ def _where(config_file: Path | None) -> str:
 
 
 def _refusal_text(problem: BackendUnavailableError, config_file: Path | None) -> str:
-    """What to tell someone whose sandbox cannot start: both ways out are named, start
+    """What to tell someone whose Docker backend cannot start: both ways out are named, start
     Docker or run commands locally, and `domyn run` is run again."""
     lines = [
         f"\n  {problem.problem}",
-        "  Shell commands in this configuration run in a Docker sandbox, so it cannot start.",
+        "  Shell commands in this configuration run in a Docker container, so it cannot start.",
     ]
     if problem.fix:
-        lines.append(f"\n  To use the sandbox: {problem.fix} Then run `domyn run` again.")
+        lines.append(f"\n  To use Docker: {problem.fix} Then run `domyn run` again.")
     lines.append(
-        "\n  To run commands on this machine instead (no sandbox), "
-        f"set `sandbox: local` in the cli tools bundle{_where(config_file)} "
-        "(or `sandbox: auto` for an adaptive choice).\n"
+        "\n  To run commands on this machine instead (no container), "
+        f"set `backend: local` in the cli tools bundle{_where(config_file)} "
+        "(or `backend: auto` for an adaptive choice).\n"
         "  Then, run `domyn run` again."
     )
     return "\n".join(lines)
 
 
-def _commands_status(agent: Any) -> str | None:
-    """Where the shell commands run, for the line under the banner. The browser is
-    named when it is not where the commands are: it always runs on this machine."""
+def _tools_status(agent: Any) -> str | None:
+    """Where the agent's tools run, for the line under the banner: commands, files and
+    the browser go together."""
     backends = _command_backends(agent)
     if not backends:
         return None
-    if any(b.is_isolated for b in backends):
-        text = "commands: docker sandbox"
-        if any(getattr(built, "browser", None) is not None for built in _builtin_bundles(agent)):
-            text += "  ·  browser: this machine"
-        return text
-    return "commands: this machine (no sandbox)"
+    return "tools: docker" if any(b.is_isolated for b in backends) else "tools: this machine"
 
 
 def _fallbacks(agent: Any) -> list[BackendUnavailableError]:
-    """Why each ``sandbox: auto`` backend that could not use Docker runs commands on this
+    """Why each ``backend: auto`` backend that could not use Docker runs commands on this
     machine instead."""
     return [
         backend.fallback
@@ -426,11 +421,11 @@ def _fallbacks(agent: Any) -> list[BackendUnavailableError]:
 
 
 def _fallback_text(problem: BackendUnavailableError, config_file: Path | None) -> str:
-    lines = [f"\n  {problem.problem} Commands run on this machine, with no sandbox."]
+    lines = [f"\n  {problem.problem} Commands run on this machine, not in a container."]
     if problem.fix:
-        lines.append(f"  To sandbox them: {problem.fix} Then run `domyn run` again.")
+        lines.append(f"  To run them in a container: {problem.fix} Then run `domyn run` again.")
     lines.append(
-        "  To always run on this machine (and not see this): set `sandbox: local` "
+        "  To always run on this machine (and not see this): set `backend: local` "
         f"in the cli tools bundle{_where(config_file)}.\n"
     )
     return "\n".join(lines)

@@ -1,10 +1,11 @@
 """Where a command actually runs.
 
 One backend ships here (the local machine); the interface is meant for others,
-e.g. a remote executor, implemented outside the package. A backend that runs
-commands in an environment of its own, which has to be checked, prepared and torn
-down, is a :class:`~domyn.agents.tools.builtin.backends.sandbox.SandboxBackend`: the
-Docker one (``docker_sandbox/``) and ``auto`` (``auto.py``) are, next to this module.
+e.g. a remote executor, implemented outside the package. The three a user can pick
+are ``local`` (``local.py``), ``docker`` (``docker/``) and ``auto`` (``auto.py``: Docker,
+or this machine when Docker cannot be used). Docker has what a front-end needs to
+check, prepare and tear down an environment of its own, and a local machine has none
+of that, so none of it is here.
 
 Each member is there for what a remote backend needs and a local one does not:
 
@@ -36,6 +37,7 @@ parameter is safe, a required one is a breaking change.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 
 from domyn.agents.tools.builtin.session import HOME_DIRNAME, StateFolders
 
@@ -44,7 +46,7 @@ class BackendUnavailableError(RuntimeError):
     """The requested backend cannot be used.
 
     Raised, never swallowed into a fallback: running on the host while the user
-    believes they are sandboxed turns a safety feature into a hazard.
+    believes they are isolated turns a safety feature into a hazard.
 
     ``problem`` says what is wrong and ``fix`` what to do about it, when the backend
     knows: a front-end can lay them out, while ``str(error)`` has both in one line
@@ -55,6 +57,19 @@ class BackendUnavailableError(RuntimeError):
         super().__init__(f"{problem} {fix}" if fix else problem)
         self.problem = problem
         self.fix = fix
+
+
+@dataclass(frozen=True)
+class ToolHost:
+    """Where and how a tool body runs when it is not in this process."""
+
+    command: str
+    """Run through ``CommandBackend.run`` with the request on stdin: it prints the answer."""
+
+    roots: tuple[Path, ...] = ()
+    """What the body may reach besides the workspace and the skills. The boundary a
+    workspace draws protects what is the user's on this machine; elsewhere the boundary
+    is what the backend mounts, and these are what it adds."""
 
 
 @dataclass(frozen=True)
@@ -116,6 +131,17 @@ class CommandBackend(ABC):
         front. ``None`` means none — which is not the same as leaving it unset;
         see ``LocalBackend.run``.
         """
+
+    @property
+    def tool_host(self) -> "ToolHost | None":
+        """How a tool's body runs where this backend runs commands, or ``None`` for in
+        this process (see ``files``).
+
+        The tool stays on this side (its schema, its approval) and only the body moves,
+        through ``run``: the command named here is run with one JSON request on stdin.
+        ``None``, the default, is right for a backend that runs commands on this machine,
+        and for any written outside the package: it needs nothing more than ``run``."""
+        return None
 
     # Not abstract, and empty on purpose: a backend with nothing to set up —
     # the local one — should not have to write two empty methods to say so.
