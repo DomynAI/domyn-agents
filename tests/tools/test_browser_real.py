@@ -33,6 +33,10 @@ PAGES = {
         '<button type="submit">Send</button></form>'
     ),
     "/names": '<title>Names</title><a href="/card">Apple&nbsp;Card</a>',
+    "/clickable": (
+        "<title>Clickable</title>"
+        """<div onclick="location='/done'">Search<span>/</span></div>"""
+    ),
 }
 
 
@@ -148,6 +152,24 @@ async def test_a_non_breaking_space_is_matched_as_the_snapshot_shows_it(
         opened = await _call(tools, cid, "browser_open", url=f"{site}/names")
         card = {"url": f"{site}/names", "ref": _ref(opened, "Apple Card"), "name": "Apple Card"}
         assert f"The page is now {site}/card" in await _call(tools, cid, "browser_click", **card)
+    finally:
+        await built.close()
+
+
+@pytest.mark.asyncio
+async def test_an_element_that_is_only_clickable_is_matched_by_its_label(
+    site: str, tmp_path: Path
+) -> None:
+    """A ``<div>`` with an ``onclick`` has no accessible name: the JSON says
+    ``""``, the text the model copies shows its ``textContent``, and that must
+    verify."""
+    built = bundle("browser", root=tmp_path, browser=BrowserOptions(allow_private_urls=True))
+    tools = {t.name: t for t in built}
+    cid = f"test-{uuid.uuid4()}"
+    try:
+        opened = await _call(tools, cid, "browser_open", url=f"{site}/clickable")
+        search = {"url": f"{site}/clickable", "ref": _ref(opened, "Search/"), "name": "Search/"}
+        assert f"The page is now {site}/done" in await _call(tools, cid, "browser_click", **search)
     finally:
         await built.close()
 

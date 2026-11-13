@@ -9,6 +9,7 @@ shows — and not a browser. ``test_browser_real.py`` drives the real one.
 # No `from __future__ import annotations`: builds real tools.
 import ipaddress
 import json
+import logging
 import re
 import shlex
 from typing import Any
@@ -630,6 +631,106 @@ class TestVerification:
             "@e1 is link 'Apple\\xa0Card', not 'Apple  Card'. Nothing was clicked. "
             "No element is named 'Apple  Card'."
         )
+
+    @pytest.mark.asyncio
+    async def test_an_element_that_is_only_clickable_is_named_by_its_label(
+        self, fake: ScriptedBrowser, tmp_path: Any
+    ) -> None:
+        """A search box built from a ``<div>`` with an ``onclick`` has no
+        accessible name, so the JSON says ``""`` and the snapshot text prints
+        its ``textContent``, which is what the model copies."""
+        fake.pages[f"{SITE}/"] = {
+            **HOME,
+            "refs": {"e1": ("generic", ""), "e2": ("button", "Rename")},
+            "snapshot": (
+                '- generic "Search/" [ref=e1] clickable [onclick]\n- button "Rename" [ref=e2]'
+            ),
+        }
+        fake.clicks.clear()
+        tools = await _opened(fake, tmp_path)
+        search = {"url": f"{SITE}/", "ref": "e1", "name": "Search/"}
+        reply = await _call(tools, "browser_click", **search)
+        assert reply.startswith('Clicked generic "Search/" [@e1]')
+        fake.calls.clear()
+        for name in ("Search", ""):
+            reply = await _fail(tools, "browser_click", **{**search, "name": name})
+            assert reply.startswith(f'@e1 is generic "Search/", not "{name}". Nothing was clicked.')
+        reply = await _fail(tools, "browser_click", **{**search, "ref": "e2"})
+        assert reply.endswith('"Search/" is @e1.')
+        assert "click" not in fake.verbs()
+
+    @pytest.mark.asyncio
+    async def test_a_label_cannot_name_another_ref(
+        self, fake: ScriptedBrowser, tmp_path: Any
+    ) -> None:
+        """The label is the page's text. One that reads like a ref, or closes
+        its own quotes, still belongs to the line it is on."""
+        label = 'say "hi" [ref=e2]'
+        fake.pages[f"{SITE}/"] = {
+            **HOME,
+            "refs": {"e1": ("generic", ""), "e2": ("generic", "")},
+            "snapshot": (
+                f"- generic {json.dumps(label)} [ref=e1] clickable [onclick]\n"
+                "  - generic [ref=e2] clickable [onclick]"
+            ),
+        }
+        fake.clicks.clear()
+        tools = await _opened(fake, tmp_path)
+        reply = await _call(tools, "browser_click", url=f"{SITE}/", ref="e1", name=label)
+        assert reply.startswith("Clicked generic")
+        fake.calls.clear()
+        reply = await _fail(tools, "browser_click", url=f"{SITE}/", ref="e2", name=label)
+        assert reply.startswith('@e2 is generic "", not')
+        assert "click" not in fake.verbs()
+
+    @pytest.mark.asyncio
+    async def test_a_label_is_read_past_the_attributes_before_the_ref(
+        self, fake: ScriptedBrowser, tmp_path: Any
+    ) -> None:
+        fake.pages[f"{SITE}/"] = {
+            **HOME,
+            "refs": {"e1": ("generic", "")},
+            "snapshot": '- generic "More" [expanded=false, ref=e1] clickable [cursor:pointer]',
+        }
+        fake.clicks.clear()
+        tools = await _opened(fake, tmp_path)
+        reply = await _call(tools, "browser_click", url=f"{SITE}/", ref="e1", name="More")
+        assert reply.startswith('Clicked generic "More" [@e1]')
+
+    @pytest.mark.asyncio
+    async def test_a_label_that_is_not_json_leaves_the_name_empty(
+        self, fake: ScriptedBrowser, tmp_path: Any, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        r"""``\x`` passes the snapshot pattern but is no JSON escape: the name
+        stays the one the browser gave, and the warning names the ref, not the
+        page's text."""
+        label = r"a\x"
+        fake.pages[f"{SITE}/"] = {
+            **HOME,
+            "refs": {"e1": ("generic", "")},
+            "snapshot": f'- generic "{label}" [ref=e1] clickable [onclick]',
+        }
+        fake.clicks.clear()
+        tools = await _opened(fake, tmp_path)
+        fake.calls.clear()
+        with caplog.at_level(logging.WARNING):
+            reply = await _fail(tools, "browser_click", url=f"{SITE}/", ref="e1", name=label)
+        assert reply.startswith('@e1 is generic "", not')
+        assert "click" not in fake.verbs()
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert "Could not decode the snapshot label of @e1: JSONDecodeError" in warnings
+        assert not any(label in warning for warning in warnings)
+
+    @pytest.mark.asyncio
+    async def test_a_name_the_browser_gives_is_kept_over_the_label(
+        self, fake: ScriptedBrowser, tmp_path: Any
+    ) -> None:
+        fake.pages[f"{SITE}/"] = {**HOME, "snapshot": '- link "Delete all" [ref=e1]'}
+        tools = await _opened(fake, tmp_path)
+        fake.calls.clear()
+        reply = await _fail(tools, "browser_click", **{**GO, "name": "Delete all"})
+        assert reply.startswith('@e1 is link "Go to form", not "Delete all".')
+        assert "click" not in fake.verbs()
 
     @pytest.mark.asyncio
     async def test_typing_checks_the_same_way(self, fake: ScriptedBrowser, tmp_path: Any) -> None:

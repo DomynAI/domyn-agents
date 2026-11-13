@@ -436,6 +436,14 @@ class BrowserSessions:
     # or ` --version` is typed, measured on 0.38.1). Not a list of its flags,
     # which the next release can outgrow.
     _OPTION_SHAPED: ClassVar[re.Pattern[str]] = re.compile(r"-\S*")
+    # One line of a snapshot's text, read from its start: the role, the label when
+    # there is one (a JSON string), then the attribute group holding the ref. The
+    # label is consumed before the group is looked for, so page text such as
+    # `[ref=e5]` inside a label names no ref.
+    _SNAPSHOT_LINE: ClassVar[re.Pattern[str]] = re.compile(
+        r'^\s*- \S+(?: (?P<label>"(?:[^"\\]|\\.)*"))? \[(?:[^\]"]*, )?ref=(?P<ref>e\d{1,7})[,\]]',
+        re.MULTILINE,
+    )
 
     _NO_PAGE: ClassVar[str] = (
         "No page is open in this conversation's browser: none was opened yet, or the browser "
@@ -748,7 +756,13 @@ class BrowserSessions:
         self, conversation_id: str, full: bool
     ) -> tuple[str, str, dict[str, tuple[str, str]]]:
         """Snapshot the page: its URL, its text, and ``ref -> (role, name)``.
-        The URL comes with the snapshot, so it is the page the refs belong to."""
+        The URL comes with the snapshot, so it is the page the refs belong to.
+
+        The name is the one in agent-browser's ``refs``, or, when that is empty,
+        the label on the element's own line of the text: an element that is
+        only clickable (``onclick``, ``cursor:pointer``) has no accessible name,
+        and the text shows its ``textContent`` instead, which is what the model
+        copies."""
         reply = await self.call(conversation_id, "snapshot", *([] if full else ["-i", "-c"]))
         if not reply.ok:
             raise self.failure(reply, "Taking a snapshot")
@@ -763,7 +777,30 @@ class BrowserSessions:
             for key, value in (reply.data.get("refs") or {}).items()
             if isinstance(value, dict)
         }
-        return url, str(reply.data.get("snapshot") or ""), refs
+        text = str(reply.data.get("snapshot") or "")
+        # Fill in the names the JSON leaves empty from the text the model reads.
+        # For `<div onclick="…">Search<span>/</span></div>` agent-browser gives
+        #   refs:  {"e1": {"role": "generic", "name": ""}}
+        #   text:  - generic "Search/" [ref=e1] clickable [onclick]
+        # and the model calls browser_click(..., ref="e1", name="Search/"), which
+        # `verify` would refuse against "". Each line of the text that has a
+        # label gives `ref -> label`; the label becomes the name only when:
+        #   - the line has a label (`- generic [ref=e5]` has none),
+        #   - agent-browser reported the ref (the page's text cannot add one),
+        #   - its JSON name is empty (a name the browser gives always wins).
+        # The label is a JSON string, quotes and escapes included, so
+        # `json.loads` turns `"say \"hi\""` into `say "hi"`.
+        for line in self._SNAPSHOT_LINE.finditer(text):
+            key, label = line["ref"], line["label"]
+            if label and key in refs and not refs[key][1]:
+                try:
+                    refs[key] = (refs[key][0], str(json.loads(label)))
+                except json.JSONDecodeError as e:
+                    get_logger().warning(
+                        f"Could not decode the snapshot label of @{key}: {type(e).__name__}"
+                    )
+                    get_logger().debug(f"Label {label} on {url}, detail: {e}")
+        return url, text, refs
 
     async def take_snapshot(self, conversation_id: str, full: bool, title: str = "") -> str:
         url, text, refs = await self.snap(conversation_id, full)
