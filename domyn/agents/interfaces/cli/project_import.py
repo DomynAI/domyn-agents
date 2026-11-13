@@ -28,11 +28,14 @@ skill whose ``external_files`` lead out of it (`external_files_outside`), is
 refused before anything is copied: it would have this machine read, run or write
 what the export's author chose.
 
-**Code is not imported.** The export's ``tools`` and ``hooks`` entries that run a file
-of their own are not kept by the wizard, which writes the project's ``config.yaml``
-from its own questions, so their ``code/`` is not copied either, and the import names
-them (`ProjectImport.code_left_out`). A project that needs them gets them by a hand
-edit; a project imported is used by name, and trusted as it is (`select_project`).
+**Code is imported only on a yes.** A project imported is used by name, and trusted
+as it is (`select_project`): the code of its ``tools`` and ``hooks`` would run every
+time its agent starts, never asked about again. So the import is where it is asked
+about, once: ``code/`` is copied with the rest, and before the wizard `domyn setup`
+lists every file the project would run (`ProjectImport.code`, from
+`export.code_references`, as the project's own copies, so what is checked is what
+runs), warns that they run and must be checked, and asks. On a no, or with no
+terminal to ask on, the import is aborted and the project removed.
 
 Everything else at the export's top — ``instructions/``, and any file a skill shares
 from there — is copied as it is, so the config's paths into it stay true. Hidden entries,
@@ -43,21 +46,21 @@ nor the session's working state at the top (`StateFolders`).
 import functools
 import shutil
 import tempfile
-from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
+from pydantic import BaseModel, Field
 
 from domyn.agents.interfaces.cli.config import (
     CONFIG_FILENAME,
     read_raw_config,
 )
 from domyn.agents.interfaces.cli.export import (
-    CODE_DIR,
     INFO_FILENAME,
     INFO_VERSION_KEY,
     PrivatePlaces,
+    code_references,
     external_files_outside,
     installed_version,
     is_private,
@@ -70,19 +73,18 @@ class ProjectImportError(Exception):
     """The export cannot be imported; nothing was written."""
 
 
-@dataclass
-class ProjectImport:
+class ProjectImport(BaseModel):
     source: Path
     """The export's folder, resolved."""
     config: dict[str, Any]
     """Its configuration, as exported: its paths name the project's files with
     ``${DOMYN_PROJECT_DIR}``, which the copy keeps true."""
-    copied: list[str] = field(default_factory=list)
+    copied: list[str] = Field(default_factory=list)
     """The top-level entries copied, by name, the same in the project as in the export."""
-    code_left_out: list[str] = field(default_factory=list)
-    """The export's ``tools`` and ``hooks`` entries that run code of their own, as
-    ``tool <name>`` / ``hook <name>``: not imported (`_copy_plan`)."""
-    info: dict[str, str] = field(default_factory=dict)
+    code: list[str] = Field(default_factory=list)
+    """What in the export's configuration runs code of its own (`code_references`),
+    as ``tool 'name' code``: the import goes on only when the user accepts it."""
+    info: dict[str, str] = Field(default_factory=dict)
     """What the export's ``.info`` records (`export.export_info`), every value
     as text; empty when it has none (an export older than the file, or edited)."""
 
@@ -168,12 +170,7 @@ def import_project(source: Path, project: Path) -> ProjectImport:
         config=raw,
         info=_read_info(source),
         copied=[origin.name for origin in plan],
-        code_left_out=[
-            f"{section[:-1]} {entry.get('name')}"
-            for section in ("tools", "hooks")
-            for entry in raw.get(section) or []
-            if isinstance(entry, dict) and entry.get("path")
-        ],
+        code=[ref.where for ref in code_references(raw)],
     )
 
 
@@ -211,15 +208,14 @@ def _copy_plan(source: Path, places: PrivatePlaces) -> list[Path]:
     """The export's top-level entries to copy, each to the same name in the project."""
     plan: list[Path] = []
     for child in sorted(source.iterdir()):
-        # `code/` is what the export's tools and hooks run, and setup writes neither
-        # back: copied, it would be code nothing names, waiting for a hand edit to run.
+        # `code/` is copied: what the export's tools and hooks run is asked about, in
+        # the project, before the wizard, and the import aborted on a no.
         # The manifest describes the export, not the project made from it. The
         # session's working state is no export's (`domyn export` writes none): one
         # put there by hand, or a project folder imported as an export, would bring
         # in another session's environments and logs.
         if child.name in (
             CONFIG_FILENAME,
-            CODE_DIR,
             INFO_FILENAME,
             *StateFolders,
         ) or _left_behind(child, places):

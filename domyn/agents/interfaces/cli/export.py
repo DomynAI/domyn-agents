@@ -86,12 +86,12 @@ import shutil
 import sys
 import tempfile
 from collections.abc import Iterable
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
+from pydantic import BaseModel, ConfigDict, Field
 from rich.console import Console
 
 import domyn.agents
@@ -183,23 +183,21 @@ class ExportError(Exception):
     """The export cannot be made; nothing was written."""
 
 
-@dataclass
-class ExportReport:
+class ExportReport(BaseModel):
     dest: Path
-    skill_paths: list[str] = field(default_factory=list)
+    skill_paths: list[str] = Field(default_factory=list)
     """The skills paths of the exported config, as written in it."""
-    instruction_files: list[str] = field(default_factory=list)
+    instruction_files: list[str] = Field(default_factory=list)
     """The instruction files copied, relative to the export."""
     files_copied: int = 0
-    dropped: list[str] = field(default_factory=list)
+    dropped: list[str] = Field(default_factory=list)
     """Paths the config lists that are not in the export, each with the reason."""
-    warnings: list[str] = field(default_factory=list)
-    env_vars: list[str] = field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    env_vars: list[str] = Field(default_factory=list)
     """Every ``${VAR}`` the exported config needs set to load."""
 
 
-@dataclass
-class _InstructionSource:
+class _InstructionSource(BaseModel):
     """A folder or file an agent's ``standing_instructions`` reads."""
 
     path: Path
@@ -208,8 +206,7 @@ class _InstructionSource:
     """What it contributes: its ``SOUL.md`` and ``AGENTS.md``, or the file itself."""
 
 
-@dataclass
-class _MergedSkill:
+class _MergedSkill(BaseModel):
     """One skill of the merged autodiscovery folders."""
 
     root: Path
@@ -219,12 +216,11 @@ class _MergedSkill:
     name: str
     files: list[Path]
     """Its ``SKILL.md`` and what its ``external_files`` declare."""
-    place: PurePosixPath = field(default_factory=PurePosixPath)
+    place: PurePosixPath = Field(default_factory=PurePosixPath)
     """Where it is copied, relative to ``skills/``: categories kept."""
 
 
-@dataclass
-class _MergedSkills:
+class _MergedSkills(BaseModel):
     """The autodiscovery folders of one agent, merged into ``skills/``.
 
     A skill whose name an earlier folder already has is not in it: the loader would
@@ -235,15 +231,14 @@ class _MergedSkills:
     skills: list[_MergedSkill]
 
 
-@dataclass
-class _SkillsEntry:
+class _SkillsEntry(BaseModel):
     """One listed skills path that exists, and what it needs copied."""
 
     agent: int
     listed: Path
     """Resolved: a folder of skills, a skill folder, or a loose ``.md``."""
     files: set[Path]
-    anchor: Path = field(default=Path())
+    anchor: Path = Path()
 
 
 class _Exporter:
@@ -334,8 +329,10 @@ class _Exporter:
                 declared = {skill_file, *self._external_files(skill_file)}
                 if skill_root.is_dir():
                     self._name_undeclared(skill_root, declared)
-                skills.append(_MergedSkill(skill_root, folder, name, sorted(declared)))
-        return _MergedSkills(folders, skills) if skills else None
+                skills.append(
+                    _MergedSkill(root=skill_root, folder=folder, name=name, files=sorted(declared))
+                )
+        return _MergedSkills(folders=folders, skills=skills) if skills else None
 
     def _occupied(self, dest: PurePosixPath) -> bool:
         """Whether something is already exported at ``dest`` or under it."""
@@ -485,7 +482,7 @@ class _Exporter:
         if not files:
             self.report.dropped.append(f"{written} (no skill found in it)")
             return None
-        return _SkillsEntry(agent, listed, files)
+        return _SkillsEntry(agent=agent, listed=listed, files=files)
 
     def _name_undeclared(self, skill_root: Path, declared: set[Path]) -> None:
         """Warn about what a skill's folder holds beyond its declared files."""
@@ -687,7 +684,7 @@ class _Exporter:
                     found = find_instruction_files(listed.resolve())
                     for file in found.paths:
                         file = file.resolve()
-                        sources.setdefault(file, _InstructionSource(file, [file]))
+                        sources.setdefault(file, _InstructionSource(path=file, files=[file]))
                         items.append(file)
                     continue
                 if not listed.exists():
@@ -701,7 +698,7 @@ class _Exporter:
                             f"{written} (instructions: no SOUL.md or AGENTS.md in it)"
                         )
                         continue
-                    sources[listed] = _InstructionSource(listed, files)
+                    sources[listed] = _InstructionSource(path=listed, files=files)
                 items.append(listed)
             rewritten.append((source, items))
 
@@ -761,32 +758,28 @@ class _Exporter:
                 )
 
     def _export_code(self) -> None:
-        """Copy the file each ``tools``/``hooks`` entry runs into ``code/``, and point the
-        entry at the copy. The file alone, as declared: a module it imports from beside
-        it is not copied. One that cannot be copied keeps its path, which
-        `_refuse_paths_outside` then refuses."""
+        """Copy the file each ``tools``/``hooks`` entry runs (`code_references`) into
+        ``code/``, and point the entry at the copy. The file alone, as declared: a module
+        it imports from beside it is not copied. One that cannot be copied keeps its
+        path, which `_refuse_paths_outside` then refuses."""
         places: dict[Path, str] = {}
         taken: set[str] = set()
-        for section in ("tools", "hooks"):
-            for entry in self.config.get(section) or []:
-                if not isinstance(entry, dict) or not entry.get("path"):
-                    continue
-                written = entry["path"]
-                if isinstance(written, str) and _inside_project(written):
-                    continue  # a project's own file, already named in its terms
-                path = self._listed_path(written, f"{section[:-1]} code")
-                if path is None or path.is_symlink() or not path.is_file():
-                    continue
-                path = path.resolve()
-                if path not in places:
-                    name, n = path.name, 2
-                    while name in taken:
-                        name, n = f"{path.stem}-{n}{path.suffix}", n + 1
-                    taken.add(name)
-                    places[path] = f"{CODE_DIR}/{name}"
-                    self._copy(path, Path(places[path]))
-                    self.report.warnings.extend(import_warnings(path, places[path]))
-                entry["path"] = _in_project(places[path])
+        for ref in code_references(self.config):
+            if isinstance(ref.written, str) and _inside_project(ref.written):
+                continue  # a project's own file, already named in its terms
+            path = self._listed_path(ref.written, ref.where)
+            if path is None or path.is_symlink() or not path.is_file():
+                continue
+            path = path.resolve()
+            if path not in places:
+                name, n = path.name, 2
+                while name in taken:
+                    name, n = f"{path.stem}-{n}{path.suffix}", n + 1
+                taken.add(name)
+                places[path] = f"{CODE_DIR}/{name}"
+                self._copy(path, Path(places[path]))
+                self.report.warnings.extend(import_warnings(path, places[path]))
+            ref.set_in(self.config, _in_project(places[path]))
 
     def _refuse_paths_outside(self) -> None:
         """Refuse the export when the config it would write still names a file or
@@ -978,6 +971,62 @@ def _copy_into(
     shutil.copy2(source, target, follow_symlinks=False)
 
 
+class CodeReference(BaseModel):
+    """One place in a config that names a Python file the loader runs."""
+
+    where: str
+    """What names it, for a message: ``tool 'search' code``, ``tool 'search' func.path``."""
+    written: Any
+    """The path as the config writes it."""
+    keys: tuple[str | int, ...]
+    """Where it is in the config, key by key (``("tools", 1, "func", "path")``), so
+    the path can be rewritten in place (`set_in`)."""
+
+    def set_in(self, config: dict[str, Any], value: Any) -> None:
+        """Write ``value`` where this reference is, in ``config``."""
+        holder: Any = config
+        for key in self.keys[:-1]:
+            holder = holder[key]
+        holder[self.keys[-1]] = value
+
+
+def code_references(config: dict[str, Any]) -> list[CodeReference]:
+    """Every Python file ``config`` has the loader run, read the way the loader reads
+    them: a tool's ``path``, else its ``func.path`` or ``func.module``
+    (`FunctionTool.from_config`), a hook's ``path`` (`HookFactory.from_config`), and
+    a hook written whole in a tool's own ``hooks``.
+
+    The one list that the export, the code review of a project given by path, and the
+    import ask about: a key one of them missed would be code that runs unseen.
+    """
+    found: list[CodeReference] = []
+
+    def add(where: str, holder: dict[str, Any], keys: tuple[str | int, ...]) -> None:
+        if written := holder.get(str(keys[-1])):
+            found.append(CodeReference(where=where, written=written, keys=keys))
+
+    for section in ("tools", "hooks"):
+        for i, entry in enumerate(config.get(section) or []):
+            if not isinstance(entry, dict):
+                continue
+            label = f"{section[:-1]} {entry.get('name')!r}"
+            if "path" in entry:
+                add(f"{label} code", entry, (section, i, "path"))
+            elif section == "tools" and isinstance(func := entry.get("func"), dict):
+                key = "path" if func.get("path") else "module"
+                add(f"{label} func.{key}", func, (section, i, "func", key))
+            if section != "tools":
+                continue
+            for j, hook in enumerate(entry.get("hooks") or []):
+                if isinstance(hook, dict) and "path" in hook:
+                    add(
+                        f"{label} hook {hook.get('name')!r} code",
+                        hook,
+                        (section, i, "hooks", j, "path"),
+                    )
+    return found
+
+
 def config_paths(config: dict[str, Any]) -> list[tuple[str, Any]]:
     """Every value in ``config`` that names a file or folder, with where it is.
 
@@ -996,10 +1045,7 @@ def config_paths(config: dict[str, Any]) -> list[tuple[str, Any]]:
             if isinstance(source, dict) and source.get("type", "local_dir") == "local_dir":
                 for path in source.get("paths") or []:
                     found.append((f"agent {agent.get('name')!r} {key}", path))
-    for section in ("tools", "hooks"):
-        for entry in config.get(section) or []:
-            if isinstance(entry, dict) and entry.get("path"):
-                found.append((f"{section[:-1]} {entry.get('name')!r} code", entry["path"]))
+    found.extend((ref.where, ref.written) for ref in code_references(config))
     for bundle in config.get("tool_bundles") or []:
         if not isinstance(bundle, dict):
             continue
@@ -1045,11 +1091,12 @@ def _in_project(relative: str) -> str:
     return f"${{{PROJECT_DIR_VAR}}}/{relative}"
 
 
-@dataclass(frozen=True)
-class PrivatePlaces:
+class PrivatePlaces(BaseModel):
     """Where a domyn home's session state can be: the folders `is_private` looks
     for a `StateFolders` folder in. Resolved once per export or import
     (`PrivatePlaces.now`), since `is_private` is asked about every file they copy."""
+
+    model_config = ConfigDict(frozen=True)
 
     homes: frozenset[Path]
     """The active home (`home_dir`) and ``~/.domyn``, resolved."""

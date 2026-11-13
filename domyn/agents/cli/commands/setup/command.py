@@ -7,7 +7,7 @@ from typing import Annotated, NoReturn
 import typer
 from rich.console import Console
 
-from domyn.agents.cli.project import ProjectOption, select_project
+from domyn.agents.cli.project import ProjectOption, ask_yes, select_project
 from domyn.agents.interfaces.cli import Theme
 from domyn.agents.interfaces.cli.config import (
     ProjectError,
@@ -15,7 +15,13 @@ from domyn.agents.interfaces.cli.config import (
     project_dir,
     read_raw_config,
 )
-from domyn.agents.interfaces.cli.project_import import ProjectImportError, import_project
+from domyn.agents.interfaces.cli.project_import import (
+    ProjectImport,
+    ProjectImportError,
+    import_project,
+)
+from domyn.agents.interfaces.cli.project_trust import code_files
+from domyn.agents.interfaces.cli.prompt import interactive_terminal
 from domyn.agents.interfaces.cli.setup import render_config, run_setup
 
 console = Console()
@@ -75,6 +81,30 @@ def _fail(message: str, theme: Theme) -> NoReturn:
     raise typer.Exit(1)
 
 
+def _accept_code(imported: ProjectImport, folder: Path, theme: Theme) -> bool:
+    """List the files the imported project would run, warn that they run and must be
+    checked, and ask: no unless the user says yes, and no without a terminal to ask on.
+
+    Asked here, once, because it is never asked again: a project imported is used by
+    name, and trusted as it is (`select_project`). The files listed are the project's
+    copies, so what is checked is what runs. Their content is never shown: the user
+    reads the files themselves."""
+    files = "".join(f"    {path}\n" for path in code_files(imported.config))
+    console.print(
+        f"  The export runs Python code of its own ({', '.join(imported.code)}), from "
+        f"these files, now in the new project:\n{files}"
+        "  Imported, they run with everything you can do on this machine, every time the "
+        "project's agent starts, without being asked about again. Check them carefully "
+        "before you accept.",
+        style=theme.style("warning"),
+        highlight=False,
+        markup=False,
+    )
+    if not interactive_terminal():
+        return False
+    return ask_yes(console, theme, "Import this code?")
+
+
 def _import_and_set_up(source: Path, project: str | None, theme: Theme) -> None:
     """Copy the export into ``project`` (a name or a path, as ``--project`` takes it),
     by default the project under ``~/.domyn/projects`` named after the export's folder,
@@ -102,14 +132,13 @@ def _import_and_set_up(source: Path, project: str | None, theme: Theme) -> None:
             highlight=False,
             markup=False,
         )
-    if imported.code_left_out:
-        console.print(
-            f"  Not imported: {', '.join(imported.code_left_out)}, which run code of their "
-            "own. Setup does not keep tools or hooks; add them to the project's "
-            "config.yaml by hand if you need them.\n",
-            style=theme.style("warning"),
-            highlight=False,
-            markup=False,
+    if imported.code and not _accept_code(imported, folder, theme):
+        shutil.rmtree(folder, ignore_errors=True)
+        _fail(
+            f"Import aborted: the code of {source} was not accepted, and nothing was "
+            "imported. Check the files listed above, then import again from a terminal "
+            "and accept them.",
+            theme,
         )
 
     if run_setup(console, theme, imported.config, imported=imported) is None:

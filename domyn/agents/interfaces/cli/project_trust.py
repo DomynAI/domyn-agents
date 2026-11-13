@@ -15,8 +15,9 @@ being the folders `domyn setup` made or imported:
   (`config_paths`), where it really leads — a link, ``..`` or an absolute path into the
   project are judged by where they land — and every skill's ``external_files`` entry
   leading out of it (`external_files_outside`).
-- **Code** (`code_files`): the file of every ``tools``/``hooks`` entry, shown with what
-  it imports before ``domyn run`` runs it.
+- **Code** (`code_files`): every file the loader would run (`export.code_references`:
+  a tool's ``path``, ``func.path`` or ``func.module``, a hook's ``path``, a hook written
+  in a tool's ``hooks``), shown with what it imports before ``domyn run`` runs it.
 
 Both are shown and asked about on a terminal, every time, and refused without one. A
 project ``domyn setup`` made, used by its path, can name files outside itself (a skills
@@ -27,7 +28,11 @@ too: from a path alone, a project you made and one you were sent look the same.
 from pathlib import Path
 from typing import Any
 
-from domyn.agents.interfaces.cli.export import config_paths, external_files_outside
+from domyn.agents.interfaces.cli.export import (
+    code_references,
+    config_paths,
+    external_files_outside,
+)
 from domyn.agents.interfaces.cli.project_import import skill_files_in
 from domyn.agents.loader import interpolate_env_vars
 
@@ -55,14 +60,11 @@ def project_problems(folder: Path, raw: dict[str, Any]) -> list[str]:
 
 
 def code_files(raw: dict[str, Any]) -> list[Path]:
-    """The file every ``tools``/``hooks`` entry of ``raw`` runs, as the loader finds it
-    (``${VAR}`` filled in, relative to the working directory), each once."""
+    """Every file ``raw`` has the loader run (`code_references`), as the loader finds
+    it (``${VAR}`` filled in, relative to the working directory), each once."""
     found: list[Path] = []
-    for section in ("tools", "hooks"):
-        for entry in raw.get(section) or []:
-            if not isinstance(entry, dict) or not entry.get("path"):
-                continue
-            path = _resolved(entry["path"]) or Path(str(entry["path"]))
-            if path not in found:
-                found.append(path)
+    for ref in code_references(raw):
+        path = _resolved(ref.written) or Path(str(ref.written))
+        if path not in found:
+            found.append(path)
     return found
