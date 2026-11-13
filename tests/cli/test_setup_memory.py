@@ -248,37 +248,12 @@ class TestTheRemeberedLine:
             content=[Part(text=text)] if text else [],
         )
 
-    def test_the_automatic_memory_is_shown_like_a_call(self):
-        renderer, buffer = self.renderer()
-        renderer.render(self.hook_end("The user likes tea"))
-        assert "remembered The user likes tea" in self.text(buffer)
-
-    def test_it_is_drawn_in_the_tool_calls_yellow(self, monkeypatch):
-        """The same two styles as the agent's own `remember` call."""
-        renderer, _ = self.renderer()
-        printed = []
-        renderer._console.print = lambda line, **kw: printed.append(line)
-        # The role, whatever the terminal's colours.
-        monkeypatch.setattr(Theme, "style", lambda self, name: name)
-        renderer.render(self.start("c1", memory_content="likes tea"))
-        renderer.render(self.hook_end("The user likes tea"))
-        call, automatic = printed
-
-        def styles(line):
-            return [str(span.style) for span in line.spans]
-
-        assert styles(automatic) == styles(call)
-        assert styles(call) == ["tool_name", "tool_call"]
-
-    def test_nothing_stored_says_nothing(self):
+    def test_the_automatic_memory_says_nothing(self):
+        """Its hook returns before anything is stored, so its event carries nothing
+        and the renderer draws no line for it."""
         renderer, buffer = self.renderer()
         renderer.render(self.hook_end(""))
         assert self.text(buffer).strip() == ""
-
-    def test_another_hook_stays_quiet(self):
-        renderer, buffer = self.renderer()
-        renderer.render(self.hook_end("The user likes tea", name="other"))
-        assert "remembered" not in self.text(buffer)
 
     def test_the_line_cannot_carry_an_escape_sequence(self):
         renderer, buffer = self.renderer()

@@ -185,7 +185,7 @@ The memory is a markdown file you can open and edit; one bullet is one fact. The
 With a [decision model](../guides/decision-models.md) configured, setup also asks **who decides what to remember**:
 
 - **the agent**: the agent's model stores a fact when it judges one worth keeping, with its `remember` tool (`execution_mode: agentic`).
-- **the decision model**: after every turn the decision model says whether the turn told it something new about you; only on a yes is the agent's model asked to write the fact (`execution_mode: automatic`). What is stored this way is shown as `→ remembered …`.
+- **the decision model**: after every turn the decision model says whether the turn told it something new about you; only on a yes is the agent's model asked to write the fact (`execution_mode: automatic`). It runs in the background once the answer is out, so the turn does not wait for it, and nothing is printed for it: `/memory` lists what it stored.
 
 Without a decision model the question is not asked, and the agent decides. Removing the decision model in a later setup gives the decision back to the agent, and setup says so. It reads the memory at the start of each conversation, and can look back through it page by page. See [Conversations and memory](../guides/conversations-and-memory.md) for how it works, and `/memory` under [Commands](sessions.md#commands) to see or change it.
 

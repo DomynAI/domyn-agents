@@ -143,8 +143,9 @@ class _Extractor(_Model):
 
 
 @pytest.mark.asyncio
-async def test_the_automatic_memory_says_what_it_remembered(tmp_path):
-    """The post-agent hook stores silently; the line is the only sign of it."""
+async def test_the_automatic_memory_stores_in_the_background(tmp_path):
+    """The post-agent hook returns at once and prints nothing; the session's end
+    waits for the update it started, so the fact is stored by then."""
     file = tmp_path / "memory.md"
     agent = Agent(
         name="Assistant",
@@ -169,11 +170,9 @@ async def test_the_automatic_memory_says_what_it_remembered(tmp_path):
     repl._input.ask = MagicMock(side_effect=EOFError)  # type: ignore[method-assign]
 
     await repl.run("I like green tea")
-    assert "remembered The user likes green tea" in buffer.getvalue()
+    assert "remembered" not in buffer.getvalue()
     assert "The user likes green tea" in file.read_text()
 
-    # Already remembered: not stored again, and nothing said.
-    seen = len(buffer.getvalue())
+    # Already remembered: not stored again.
     await repl.run("I really like green tea")
-    assert "remembered" not in buffer.getvalue()[seen:]
     assert file.read_text().count("The user likes green tea") == 1
