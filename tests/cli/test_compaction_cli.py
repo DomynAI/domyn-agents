@@ -21,6 +21,7 @@ from domyn.agents.planner_strategy import (
     Compactor,
     PruneOnlyCompaction,
 )
+from domyn.agents.planner_strategy.context_management.compaction import DEFAULT_RESERVE_TOKENS
 
 
 def _renderer(verbose: bool = False) -> tuple[EventRenderer, io.StringIO]:
@@ -411,7 +412,7 @@ class TestMeasuringFromTheProvidersCountInARealSession:
                 estimate = estimator.estimate_messages(messages)
                 estimate += estimator.estimate_tool_definitions(kwargs.get("tools") or [])
                 if self.context_window is None:
-                    self.context_window = CompactionPolicy().reserve_tokens + 2 * estimate
+                    self.context_window = DEFAULT_RESERVE_TOKENS + 2 * estimate
                 response = await super().generate(messages, **kwargs)
                 if self.counted:
                     response.usage = {"prompt_tokens": 3 * estimate, "completion_tokens": 5}

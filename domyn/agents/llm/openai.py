@@ -41,6 +41,8 @@ class OpenAIProvider(BaseLLMProvider):
     )
     # OpenAI's /v1/models lists no window: the catalogue is the only source.
     context_window_catalog: ClassVar[str | None] = "openai"
+    # The Responses API names the reply's ceiling `max_output_tokens`.
+    max_reply_keys: ClassVar[tuple[str, ...]] = ("max_output_tokens",)
 
     default_generation_params: ClassVar[dict[str, Any]] = {
         "reasoning_effort": "medium",
