@@ -243,3 +243,12 @@ class TestTheStateFolder:
         (tmp_path / "ws").mkdir()
         monkeypatch.delenv("DOMYN_PROJECT_DIR", raising=False)
         assert AutoBackend(Workspace.at(tmp_path / "ws")).state_dir == ".domyn"
+
+
+class TestInsideTheContainer:
+    def test_a_domyn_started_in_our_container_runs_its_tools_there_quietly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DOMYN_BACKEND", "docker")
+        for name in ("auto", "docker"):
+            assert isinstance(build_backend(name, Workspace.at(tmp_path)), LocalBackend)

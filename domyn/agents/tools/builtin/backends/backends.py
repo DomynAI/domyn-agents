@@ -31,6 +31,10 @@ def build_backend(
     degrades with a warning: handing back a local backend to someone who asked
     for a container gives the illusion of a boundary, which is worse than none.
     """
+    if name in ("auto", "docker") and os.environ.get("DOMYN_BACKEND") == "docker":
+        # A `domyn` the agent runs inside our container (it sets this variable): there is
+        # no Docker there to look for, and the container already is the boundary.
+        name = "local"
     if name == "local":
         return LocalBackend(
             workspace,
