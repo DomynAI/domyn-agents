@@ -52,15 +52,18 @@ def render(
     number: int,
     last: int,
     path: str | None = None,
+    read_only: list[str] | None = None,
 ) -> None:
-    """One page of memories, and how to read the next."""
+    """One page of memories, and how to read the next.
+
+    ``path`` is the file the memory writes, ``read_only`` the files it only reads
+    (`FilesystemMemoryManager.read_only_sources`), whose entries are marked: ``/memory forget``
+    and ``clear`` do not reach them.
+    """
     meta = theme.style("meta")
     if not page.items:
         console.print("  Nothing is remembered yet.", style=meta, highlight=False)
-        if path:
-            console.print(
-                f"  file  {path}", style=meta, highlight=False, markup=False, soft_wrap=True
-            )
+        _files(console, meta, path, read_only)
         return
     console.print()
     for memory in page.items:
@@ -68,8 +71,9 @@ def render(
         # escape sequence in one must not redraw the screen.
         text = as_written(neutralize(memory.memory))
         stamp = memory.timestamp.date().isoformat()
+        mark = "  (read only)" if memory.read_only_source is not None else ""
         console.print(
-            f"  {memory.id:<8}  {stamp}  {text}", style=meta, highlight=False, markup=False
+            f"  {memory.id:<8}  {stamp}  {text}{mark}", style=meta, highlight=False, markup=False
         )
     total = f" of {page.total}" if page.total is not None else ""
     more = f" · /memory list {number + 1} for the next page" if number < last else ""
@@ -79,5 +83,18 @@ def render(
         highlight=False,
         markup=False,
     )
+    _files(console, meta, path, read_only)
+
+
+def _files(console: Console, meta: Any, path: str | None, read_only: list[str] | None) -> None:
+    """The file written and, when there are any, the files only read."""
     if path:
         console.print(f"  file  {path}", style=meta, highlight=False, markup=False, soft_wrap=True)
+    for other in read_only or []:
+        console.print(
+            f"  reads {other} (read only)",
+            style=meta,
+            highlight=False,
+            markup=False,
+            soft_wrap=True,
+        )

@@ -7,6 +7,7 @@ again, and a memory somebody tuned by hand must survive a re-run.
 
 import io
 import re
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -22,6 +23,7 @@ from domyn.agents.interfaces.cli.config import (
     DecisionsChoice,
     MemoryChoice,
     MemoryDecider,
+    MemoryScope,
     configuration_v1_dict_from,
     current_memory_from,
     current_settings_from,
@@ -110,15 +112,55 @@ class TestWhatTheWizardWrites:
         again = written(raw, MemoryChoice(scope="project"))
         assert manager_of(again)["file_path"] == f"${{{PROJECT_DIR_VAR}}}/memory.md"
 
+    def test_both_writing_project_reads_the_global_memory_too(self, tmp_path):
+        manager = manager_of(written(base(), MemoryChoice(scope=MemoryScope.BOTH_WRITING_PROJECT)))
+        assert manager["file_path"] == f"${{{PROJECT_DIR_VAR}}}/memory.md"
+        assert manager["read_only_sources"] == [str(tmp_path / "home" / ".domyn" / "memory.md")]
+
+    def test_both_writing_global_reads_the_projects_memory_too(self, tmp_path):
+        manager = manager_of(written(base(), MemoryChoice(scope=MemoryScope.BOTH_WRITING_GLOBAL)))
+        assert manager["file_path"] == str(tmp_path / "home" / ".domyn" / "memory.md")
+        assert manager["read_only_sources"] == [f"${{{PROJECT_DIR_VAR}}}/memory.md"]
+
+    def test_a_scope_reading_one_file_writes_no_read_only_sources(self):
+        raw = written(base(), MemoryChoice(scope=MemoryScope.BOTH_WRITING_PROJECT))
+        again = manager_of(written(raw, MemoryChoice(scope="project")))
+        assert "read_only_sources" not in again
+
+    def test_changing_the_scope_keeps_what_was_tuned_by_hand(self):
+        raw = written(base(), MemoryChoice(scope="project"))
+        raw["agents"][0]["memory_manager"]["max_chars"] = 900
+        raw["agents"][0]["memory_manager"]["execution_mode"] = "automatic"
+        again = manager_of(written(raw, MemoryChoice(scope=MemoryScope.BOTH_WRITING_GLOBAL)))
+        assert again["max_chars"] == 900 and again["execution_mode"] == "automatic"
+
     def test_the_path_helper_agrees(self):
         assert memory_file_path("project") == f"${{{PROJECT_DIR_VAR}}}/memory.md"
         assert memory_file_path("global").endswith("memory.md")
 
 
 class TestReadingItBack:
-    @pytest.mark.parametrize("scope", ["global", "project"])
+    @pytest.mark.parametrize("scope", [s for s in MemoryScope if s.enabled])
     def test_what_it_writes_is_what_it_reads(self, scope):
         assert current_memory_from(written(base(), MemoryChoice(scope=scope))).scope == scope
+
+    def test_read_only_sources_written_by_hand_reads_as_both(self):
+        raw = base()
+        raw["agents"][0]["memory_manager"] = {
+            "type": "filesystem",
+            "file_path": f"${{{PROJECT_DIR_VAR}}}/memory.md",
+            "read_only_sources": ["~/.domyn/memory.md"],
+        }
+        assert current_memory_from(raw).scope is MemoryScope.BOTH_WRITING_PROJECT
+
+    def test_another_file_read_beside_it_is_not_the_other_memory(self):
+        raw = base()
+        raw["agents"][0]["memory_manager"] = {
+            "type": "filesystem",
+            "file_path": f"${{{PROJECT_DIR_VAR}}}/memory.md",
+            "read_only_sources": ["/data/notes.md"],
+        }
+        assert current_memory_from(raw).scope is MemoryScope.PROJECT
 
     def test_nothing_declared_reads_as_no(self):
         assert current_memory_from(base()).scope == "no"
@@ -157,6 +199,21 @@ class TestTheFileTheWizardWroteActuallyLoads:
     async def test_project_keeps_it_in_the_projects_folder(self, tmp_path, monkeypatch):
         agent = await self.built(tmp_path, monkeypatch, "project")
         assert agent.memory_manager.file_path == str(tmp_path / "project" / "memory.md")
+        assert agent.memory_manager.read_only_sources == []
+
+    @pytest.mark.asyncio
+    async def test_both_writing_project_reads_the_global_memory(self, tmp_path, monkeypatch):
+        agent = await self.built(tmp_path, monkeypatch, MemoryScope.BOTH_WRITING_PROJECT)
+        assert agent.memory_manager.file_path == str(tmp_path / "project" / "memory.md")
+        assert agent.memory_manager.read_only_sources == [
+            str(tmp_path / "home" / ".domyn" / "memory.md")
+        ]
+
+    @pytest.mark.asyncio
+    async def test_both_writing_global_reads_the_projects_memory(self, tmp_path, monkeypatch):
+        agent = await self.built(tmp_path, monkeypatch, MemoryScope.BOTH_WRITING_GLOBAL)
+        assert agent.memory_manager.file_path == str(tmp_path / "home" / ".domyn" / "memory.md")
+        assert agent.memory_manager.read_only_sources == [str(tmp_path / "project" / "memory.md")]
 
 
 class TestWhatConfigShows:
@@ -177,13 +234,17 @@ class TestTheQuestion:
     def numbered(self, monkeypatch):
         monkeypatch.setattr(select_mod, "_interactive", lambda theme: False)
 
-    def ask(self, current, answer, *, project=False, monkeypatch=None):
-        console = Console(file=io.StringIO(), width=100, force_terminal=False)
+    def ask(self, current, answer, *, project=False, shown=None):
+        buffer = io.StringIO()
+        console = Console(file=buffer, width=200, force_terminal=False)
         with (
             patch("builtins.input", side_effect=[answer]),
-            patch.object(setup, "active_project", lambda: "p" if project else None),
+            patch.object(setup, "active_project", lambda: Path("/work/p") if project else None),
         ):
-            return setup._ask_memory(console, Theme.build(allow_animation=False), current)
+            chosen = setup._ask_memory(console, Theme.build(allow_animation=False), current)
+        if shown is not None:
+            shown.append(buffer.getvalue())
+        return chosen
 
     def test_enter_keeps_what_is_there(self):
         assert self.ask(MemoryChoice(scope="global"), "").scope == "global"
@@ -198,6 +259,50 @@ class TestTheQuestion:
         # Outside one, "project" is not a choice, so it is not accepted.
         with pytest.raises(Exception):  # noqa: B017
             self.ask(MemoryChoice(), "project", project=False)
+
+    @pytest.mark.parametrize(
+        "scope", [MemoryScope.BOTH_WRITING_GLOBAL, MemoryScope.BOTH_WRITING_PROJECT]
+    )
+    def test_reading_both_is_offered_only_inside_a_project(self, scope):
+        assert self.ask(MemoryChoice(), str(scope), project=True).scope is scope
+        with pytest.raises(Exception):  # noqa: B017
+            self.ask(MemoryChoice(), str(scope), project=False)
+
+    def test_every_choice_says_what_follows_from_it(self):
+        shown = []
+        self.ask(MemoryChoice(), "", project=True, shown=shown)
+        printed = " ".join(shown[0].split())
+        for scope in MemoryScope:
+            assert f"{scope} — {cfg.MEMORY_SCOPE_BLURB[scope]}" in printed
+
+    @pytest.mark.parametrize(
+        ("scope", "lines"),
+        [
+            (MemoryScope.NONE, []),
+            (MemoryScope.GLOBAL, ["learns into ~/.domyn/memory.md"]),
+            (MemoryScope.PROJECT, ["learns into /work/p/memory.md"]),
+            (
+                MemoryScope.BOTH_WRITING_GLOBAL,
+                [
+                    "learns into ~/.domyn/memory.md",
+                    "also reads /work/p/memory.md, and never changes it",
+                ],
+            ),
+            (
+                MemoryScope.BOTH_WRITING_PROJECT,
+                [
+                    "learns into /work/p/memory.md",
+                    "also reads ~/.domyn/memory.md, and never changes it",
+                ],
+            ),
+        ],
+    )
+    def test_once_chosen_it_names_the_files(self, scope, lines):
+        shown = []
+        self.ask(MemoryChoice(), str(scope), project=True, shown=shown)
+        # The first follows the prompt the answer was typed at, on its line.
+        printed = [line.split(": ")[-1].strip() for line in shown[0].splitlines()]
+        assert [line for line in printed if line.startswith(("learns", "also reads"))] == lines
 
 
 class TestTheRemeberedLine:

@@ -259,7 +259,7 @@ class TestTheMemory:
 
         printed = [str(c.args[0]) for c in console.print.call_args_list if c.args]
         assert "    memory: global" in printed
-        assert f"    file: {cfg.memory_file_path('global')}" in printed
+        assert f"    writes: {cfg.memory_file_path('global')}" in printed
         assert "    decided by: the agent" in printed
 
     def test_shows_none_when_there_is_none(

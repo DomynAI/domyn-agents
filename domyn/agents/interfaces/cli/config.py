@@ -893,12 +893,70 @@ def _env_reference(value: Any) -> str | None:
 
 MEMORY_FILENAME = "memory.md"
 
-#: Shown beside each choice of the wizard's memory question. A configuration has one
-#: memory or none: nothing falls back from a project to the global one, or is merged.
+
+class MemoryScope(StrEnum):
+    """Which memories a configuration reads, and which one it writes.
+
+    Two files can hold memories: the global one, ``~/.domyn/memory.md``, and a
+    project's own, ``memory.md`` in its folder. A configuration writes one of them at
+    most, and may also read the other (`FilesystemMemoryManager.read_only_sources`). The value
+    is the answer as the wizard shows it; the last three need a project.
+    """
+
+    NONE = "no"
+    GLOBAL = "global"
+    PROJECT = "project"
+    BOTH_WRITING_GLOBAL = "project + global, writes to global"
+    BOTH_WRITING_PROJECT = "project + global, writes to project"
+
+    @property
+    def enabled(self) -> bool:
+        return self is not MemoryScope.NONE
+
+    @property
+    def writes(self) -> "MemoryScope | None":
+        """The file written, as `GLOBAL` or `PROJECT`; ``None`` for no memory."""
+        if self in (MemoryScope.GLOBAL, MemoryScope.BOTH_WRITING_GLOBAL):
+            return MemoryScope.GLOBAL
+        if self in (MemoryScope.PROJECT, MemoryScope.BOTH_WRITING_PROJECT):
+            return MemoryScope.PROJECT
+        return None
+
+    @property
+    def only_reads(self) -> "MemoryScope | None":
+        """The file read and never written, as `GLOBAL` or `PROJECT`; ``None`` for none."""
+        if self is MemoryScope.BOTH_WRITING_GLOBAL:
+            return MemoryScope.PROJECT
+        if self is MemoryScope.BOTH_WRITING_PROJECT:
+            return MemoryScope.GLOBAL
+        return None
+
+    @property
+    def needs_project(self) -> bool:
+        return MemoryScope.PROJECT in (self.writes, self.only_reads)
+
+
+#: Shown beside each choice of the wizard's memory question: what is read, what is
+#: written, and what follows from it. Nothing is read that the choice does not name.
 MEMORY_SCOPE_BLURB: dict[str, str] = {
-    "no": "the agent remembers nothing between conversations",
-    "global": "~/.domyn/memory.md, shared with every configuration that picks global",
-    "project": "a memory.md in this project's folder, for this project alone",
+    MemoryScope.NONE: "the agent remembers nothing between conversations",
+    MemoryScope.GLOBAL: (
+        "reads and writes ~/.domyn/memory.md: what it learns here is known in every "
+        "configuration that uses the global memory, and the other way round"
+    ),
+    MemoryScope.PROJECT: (
+        "reads and writes this project's memory.md alone: nothing learned elsewhere "
+        "comes in, nothing learned here goes out"
+    ),
+    MemoryScope.BOTH_WRITING_GLOBAL: (
+        "reads both, learns into the global memory: what it learns here is known in "
+        "other projects too; this project's memory.md is only read"
+    ),
+    MemoryScope.BOTH_WRITING_PROJECT: (
+        "reads both, learns into this project's memory.md: it knows what was learned "
+        "elsewhere, but what it learns here stays in the project; the global memory is "
+        "only read"
+    ),
 }
 
 
@@ -943,16 +1001,13 @@ MEMORY_DECIDER_BLURB: dict[str, str] = {
 class MemoryChoice(BaseModel):
     """The wizard's working state for long-term memory.
 
-    `scope` is ``"no"``, ``"global"`` or ``"project"``. There is nothing else to
-    choose for now: the memory is always a file you can read and edit.
-
-    A configuration has one memory or none. ``global`` is ``~/.domyn/memory.md``,
-    shared by every configuration that chose it (the default one, and any project
-    that chose it); ``project`` is the project's own file, which nothing else reads;
-    ``no`` is no memory, never a fallback to the global one.
+    `scope` says which memory files are read and which one is written (`MemoryScope`):
+    the global one, ``~/.domyn/memory.md``, shared by every configuration that uses
+    it, and a project's own, in its folder. Nothing is read that the scope does not
+    name: ``no`` is no memory, never a fallback to the global one.
     """
 
-    scope: str = "no"
+    scope: MemoryScope = MemoryScope.NONE
     decided_by: MemoryDecider | None = None
     """Who decides what to remember; ``None`` when the wizard did
     not ask (no decision model), which keeps the mode the file has, or ``agentic``
@@ -960,7 +1015,7 @@ class MemoryChoice(BaseModel):
 
     @property
     def enabled(self) -> bool:
-        return self.scope != "no"
+        return self.scope.enabled
 
 
 def _memory_manager_of(raw: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -971,21 +1026,36 @@ def _memory_manager_of(raw: dict[str, Any] | None) -> dict[str, Any] | None:
     return declared if isinstance(declared, dict) else None
 
 
+def _in_project_dir(path: Any) -> bool:
+    return str(path or "").startswith(f"${{{PROJECT_DIR_VAR}}}")
+
+
+def _read_only_sources(declared: dict[str, Any]) -> list[str]:
+    entries = declared.get("read_only_sources")
+    return [str(e) for e in entries if e] if isinstance(entries, list) else []
+
+
 def current_memory_from(raw: dict[str, Any] | None) -> MemoryChoice:
     """What the file already says about memory, as the wizard's own state.
 
-    A memory manager written by hand is read back as the closest choice: the
-    project's own folder is ``project``, anything else is ``global``. One that names
-    no ``execution_mode`` runs as ``automatic`` (`DEFAULT_MEMORY_MODE`), so it is read
-    as decided by the decision model, and the question opens there.
+    A memory manager written by hand is read back as the closest choice: a file in
+    the project's own folder is written to ``project``, anything else to ``global``;
+    the other one among its ``read_only_sources`` makes it read both. One that names no
+    ``execution_mode`` runs as ``automatic`` (`DEFAULT_MEMORY_MODE`), so it is read as
+    decided by the decision model, and the question opens there.
     """
     declared = _memory_manager_of(raw)
     if declared is None:
         return MemoryChoice()
     decided_by = MemoryDecider.of(declared.get("execution_mode"))
-    if str(declared.get("file_path", "")).startswith(f"${{{PROJECT_DIR_VAR}}}"):
-        return MemoryChoice(scope="project", decided_by=decided_by)
-    return MemoryChoice(scope="global", decided_by=decided_by)
+    read_only_sources = _read_only_sources(declared)
+    if _in_project_dir(declared.get("file_path")):
+        reads_global = any(is_global_memory(path) for path in read_only_sources)
+        scope = MemoryScope.BOTH_WRITING_PROJECT if reads_global else MemoryScope.PROJECT
+    else:
+        reads_project = any(_in_project_dir(path) for path in read_only_sources)
+        scope = MemoryScope.BOTH_WRITING_GLOBAL if reads_project else MemoryScope.GLOBAL
+    return MemoryChoice(scope=scope, decided_by=decided_by)
 
 
 def describe_memory(raw: dict[str, Any] | None) -> list[str]:
@@ -995,11 +1065,15 @@ def describe_memory(raw: dict[str, Any] | None) -> list[str]:
     if declared is None:
         return []
     choice = current_memory_from(raw)
-    return [
+    lines = [
         f"memory: {choice.scope}",
-        f"file: {declared.get('file_path') or '(default)'}",
-        f"decided by: {choice.decided_by}",
+        f"writes: {declared.get('file_path') or '(default)'}",
     ]
+    read_only_sources = _read_only_sources(declared)
+    if read_only_sources:
+        lines.append(f"also reads, never writes: {', '.join(read_only_sources)}")
+    lines.append(f"decided by: {choice.decided_by}")
+    return lines
 
 
 #: The global memory as an export writes it: whoever runs the project, in their home.
@@ -1019,12 +1093,42 @@ def is_global_memory(file_path: Any) -> bool:
     return Path(os.path.expandvars(file_path)).expanduser() == GLOBAL_DIR / MEMORY_FILENAME
 
 
-def memory_file_path(scope: str) -> str:
-    """Where a memory of ``scope`` is kept: the project's own folder, written the way
-    a project names its own files, or ``~/.domyn``."""
-    if scope == "project":
+def memory_file_path(scope: MemoryScope | str) -> str:
+    """Where the memory ``scope`` writes is kept: the project's own folder, written the
+    way a project names its own files, or ``~/.domyn``."""
+    if MemoryScope(scope).writes is MemoryScope.PROJECT:
         return f"${{{PROJECT_DIR_VAR}}}/{MEMORY_FILENAME}"
     return str(GLOBAL_DIR / MEMORY_FILENAME)
+
+
+def memory_read_only_sources(scope: MemoryScope | str) -> list[str]:
+    """The memory files ``scope`` reads and never writes, as `memory_file_path` writes
+    them: ``read_only_sources`` in the config."""
+    only_reads = MemoryScope(scope).only_reads
+    if only_reads is MemoryScope.PROJECT:
+        return [f"${{{PROJECT_DIR_VAR}}}/{MEMORY_FILENAME}"]
+    if only_reads is MemoryScope.GLOBAL:
+        return [str(GLOBAL_DIR / MEMORY_FILENAME)]
+    return []
+
+
+def memory_files_shown(scope: MemoryScope, project: Path | None) -> list[str]:
+    """What a memory of ``scope`` reads and writes, as setup says it once chosen: one
+    line each, the home folder written ``~``; empty for no memory."""
+    if not scope.enabled:
+        return []
+
+    def place(which: MemoryScope | None) -> str:
+        if which is MemoryScope.PROJECT and project is not None:
+            return f"{project_location(project)}/{MEMORY_FILENAME}"
+        if which is MemoryScope.PROJECT:
+            return f"${{{PROJECT_DIR_VAR}}}/{MEMORY_FILENAME}"
+        return GLOBAL_MEMORY_REF
+
+    lines = [f"learns into {place(scope.writes)}"]
+    if scope.only_reads is not None:
+        lines.append(f"also reads {place(scope.only_reads)}, and never changes it")
+    return lines
 
 
 def _apply_memory(
@@ -1051,11 +1155,23 @@ def _apply_memory(
         if mode is not None:
             agent_dict["memory_manager"] = {**agent_dict["memory_manager"], "execution_mode": mode}
         return config
-    agent_dict["memory_manager"] = {
-        "type": "filesystem",
-        "file_path": memory_file_path(memory.scope),
-        "execution_mode": mode or MemoryExecutionMode.AGENTIC.value,
-    }
+    # Another scope: the files are the wizard's, the rest of a filesystem manager
+    # tuned by hand (a page size, a longer recall) is kept.
+    previous = agent_dict.get("memory_manager")
+    kept = (
+        dict(previous)
+        if isinstance(previous, dict) and previous.get("type") == "filesystem"
+        else {"type": "filesystem"}
+    )
+    kept.pop("read_only_sources", None)
+    kept["file_path"] = memory_file_path(memory.scope)
+    read_only = memory_read_only_sources(memory.scope)
+    if read_only:
+        kept["read_only_sources"] = read_only
+    kept["execution_mode"] = mode or str(
+        kept.get("execution_mode") or MemoryExecutionMode.AGENTIC.value
+    )
+    agent_dict["memory_manager"] = kept
     return config
 
 
@@ -1812,9 +1928,12 @@ def _memory_items(raw: dict[str, Any]) -> list[ConfigItem]:
         fields = [
             ("type", str(declared.get("type", "?"))),
             ("mode", str(declared.get("execution_mode") or DEFAULT_MEMORY_MODE.value)),
-            ("scope", scope),
+            ("scope", str(scope)),
             ("file", str(declared.get("file_path", "(default)"))),
         ]
+        read_only_sources = _read_only_sources(declared)
+        if read_only_sources:
+            fields.append(("also reads", ", ".join(read_only_sources)))
         items.append(ConfigItem(name=str(agent.get("name", "?")), fields=fields))
     return items
 

@@ -17,7 +17,12 @@ from domyn.agents.interfaces.cli import Theme
 from domyn.agents.interfaces.cli import config as cfg
 from domyn.agents.interfaces.cli import select as select_mod
 from domyn.agents.interfaces.cli import setup as cli_setup
-from domyn.agents.interfaces.cli.config import GLOBAL_MEMORY_REF, MemoryChoice, is_global_memory
+from domyn.agents.interfaces.cli.config import (
+    GLOBAL_MEMORY_REF,
+    MemoryChoice,
+    MemoryScope,
+    is_global_memory,
+)
 from domyn.agents.interfaces.cli.export import (
     PrivatePlaces,
     config_paths,
@@ -118,6 +123,32 @@ class TestExportKeepsTheSetting:
         assert _memory_of(_written(dest))["file_path"] == GLOBAL_MEMORY_REF  # type: ignore[index]
         assert any("/data/notes/memory.md" in line for line in report.warnings)
 
+    def test_a_memory_reading_both_keeps_reading_both(self, tmp_path: Path) -> None:
+        dest, _ = _export(
+            tmp_path, _config(f"{P}/memory.md", read_only_sources=[_global_on_this_machine()])
+        )
+
+        memory = _memory_of(_written(dest))
+        assert memory is not None
+        assert (memory["file_path"], memory["read_only_sources"]) == (
+            f"{P}/memory.md",
+            [GLOBAL_MEMORY_REF],
+        )
+        assert cfg.current_memory_from(_written(dest)).scope is MemoryScope.BOTH_WRITING_PROJECT
+
+    def test_a_file_read_by_hand_elsewhere_becomes_the_global_memory_once(
+        self, tmp_path: Path
+    ) -> None:
+        dest, report = _export(
+            tmp_path,
+            _config(_global_on_this_machine(), read_only_sources=["/data/a.md", f"{P}/memory.md"]),
+        )
+
+        memory = _memory_of(_written(dest))
+        assert memory is not None and memory["read_only_sources"] == [f"{P}/memory.md"]
+        assert any("/data/a.md" in line for line in report.warnings)
+        assert [path for _, path in config_paths(_written(dest))] == [f"{P}/memory.md"]
+
     def test_no_memory_stays_no_memory(self, tmp_path: Path) -> None:
         dest, report = _export(tmp_path, _config(None))
 
@@ -172,6 +203,15 @@ class TestTheGlobalMemoryIsTheUsersOwn:
 
         assert is_global_memory(path)
         assert config_paths(_config(path)) == []
+
+    def test_a_file_only_read_outside_is_one_of_the_paths_checked(self) -> None:
+        config = _config(
+            f"{P}/memory.md", read_only_sources=["/elsewhere/notes.md", GLOBAL_MEMORY_REF]
+        )
+        assert [path for _, path in config_paths(config)] == [
+            f"{P}/memory.md",
+            "/elsewhere/notes.md",
+        ]
 
     def test_any_other_memory_file_outside_is_one_of_the_paths_checked(self) -> None:
         # What `--project <path>` asks about, and what an import refuses.
@@ -228,11 +268,17 @@ class TestAMemorySettingNeverRefusesAnExport:
 
 
 class TestTheImportedProjectsSetup:
-    @pytest.mark.parametrize("scope", ["global", "project"])
+    @pytest.mark.parametrize("scope", [s for s in MemoryScope if s.enabled])
     def test_the_wizard_opens_on_the_exported_choice_and_enter_keeps_it(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scope: str
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scope: MemoryScope
     ) -> None:
-        dest, _ = _export(tmp_path, _config(cfg.memory_file_path(scope), recency_limit=7))
+        read_only_sources = cfg.memory_read_only_sources(scope)
+        dest, _ = _export(
+            tmp_path,
+            _config(
+                cfg.memory_file_path(scope), recency_limit=7, read_only_sources=read_only_sources
+            ),
+        )
         seen = self._wizard(tmp_path, monkeypatch, dest, answer="")
 
         assert [choice.scope for choice in seen] == [scope]

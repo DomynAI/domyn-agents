@@ -54,6 +54,7 @@ from domyn.agents.interfaces.cli.config import (
     DecisionsChoice,
     MemoryChoice,
     MemoryDecider,
+    MemoryScope,
     ProviderConfig,
     _scrub_url,
     active_project,
@@ -74,6 +75,7 @@ from domyn.agents.interfaces.cli.config import (
     is_instruction_autodiscovery,
     is_skill_autodiscovery,
     load_credentials_into_environment,
+    memory_files_shown,
     memory_loses_its_decider,
     print_config_description,
     read_credentials,
@@ -381,26 +383,31 @@ def _ask_decision_key(
 
 
 def _ask_memory(console: Console, theme: Theme, current: MemoryChoice) -> MemoryChoice:
-    """Offer long-term memory, and say where it is kept.
+    """Offer long-term memory, and say what is read and what is written.
 
     Off unless chosen: what the agent writes down about the user stays on this
     machine, in a file you can read and edit, but it is still something to opt into.
-    The project's own memory is offered only inside a project. The answer is the
-    configuration's one memory: a project that picks its own does not also read the
-    global one, and one that picks none has none (`MEMORY_SCOPE_BLURB`).
+    Outside a project there is one memory to offer, the global one; inside one, its
+    own memory too, alone or with the global one, the agent learning into one of the
+    two and only reading the other (`MemoryScope`, `MEMORY_SCOPE_BLURB`). Once chosen,
+    the files are named (`memory_files_shown`), so what the choice does is on screen.
     """
-    scopes = ["no", "global"] + (["project"] if active_project() is not None else [])
+    project = active_project()
+    scopes = [s for s in MemoryScope if project is not None or not s.needs_project]
     chosen = _select(
         console,
         theme,
         "long-term memory",
-        scopes,
-        current=current.scope if current.scope in scopes else "no",
+        list(scopes),
+        current=current.scope if current.scope in scopes else MemoryScope.NONE,
         descriptions=MEMORY_SCOPE_BLURB,
     )
     if chosen is None:
         raise KeyboardInterrupt
-    return MemoryChoice(scope=chosen)
+    scope = MemoryScope(chosen)
+    for line in memory_files_shown(scope, project):
+        console.print(f"  {line}", style=theme.style("meta"), highlight=False, markup=False)
+    return MemoryChoice(scope=scope)
 
 
 def _ask_memory_decider(

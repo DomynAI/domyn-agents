@@ -94,6 +94,11 @@ class Memory(BaseModel):
     memory: str
     agent_name: str | None = None
     user_id: str | None = None
+    read_only_source: str | None = Field(default=None, exclude=True)
+    """Where the memory was read from, when the manager reads it there but never writes
+    there (`FilesystemMemoryManager.read_only_sources`): it cannot be forgotten through this
+    manager. ``None`` for a memory the manager can change. Never serialized: it says
+    how this manager reached the memory, not something the memory is."""
 
 
 class MemoryPage(BaseModel):

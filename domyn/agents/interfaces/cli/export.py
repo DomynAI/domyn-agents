@@ -807,7 +807,8 @@ class _Exporter:
         the export is used; any other is the global memory, written
         ``~/.domyn/memory.md``, the one of whoever runs the project. A hand-written
         path elsewhere is read as global by the wizard, so it is exported as global,
-        with a warning.
+        with a warning. The files a memory only reads (``read_only_sources``) are placed the
+        same way, and one that ends up the file it writes is dropped.
         """
         for agent in self.config.get("agents") or []:
             memory = agent.get("memory_manager") if isinstance(agent, dict) else None
@@ -819,14 +820,34 @@ class _Exporter:
                 "remembers is not)"
             )
             written = memory.get("file_path")
-            if not isinstance(written, str) or not written or _inside_project(written):
-                continue
-            if not is_global_memory(written):
-                self.report.warnings.append(
-                    f"agent {name!r} memory_manager: {written} is exported as the global "
-                    f"memory, {GLOBAL_MEMORY_REF}"
-                )
-            memory["file_path"] = GLOBAL_MEMORY_REF
+            if isinstance(written, str) and written:
+                memory["file_path"] = self._memory_place(name, written)
+            read_only_sources = memory.get("read_only_sources")
+            if isinstance(read_only_sources, list):
+                placed = [
+                    self._memory_place(name, p)
+                    for p in read_only_sources
+                    if isinstance(p, str) and p
+                ]
+                memory["read_only_sources"] = [
+                    p
+                    for i, p in enumerate(placed)
+                    if p not in placed[:i] and p != memory.get("file_path")
+                ]
+                if not memory["read_only_sources"]:
+                    del memory["read_only_sources"]
+
+    def _memory_place(self, agent_name: Any, path: str) -> str:
+        """A memory file as the export writes it: kept inside the project, else the
+        global memory, with a warning when it was another file."""
+        if _inside_project(path):
+            return path
+        if not is_global_memory(path):
+            self.report.warnings.append(
+                f"agent {agent_name!r} memory_manager: {path} is exported as the global "
+                f"memory, {GLOBAL_MEMORY_REF}"
+            )
+        return GLOBAL_MEMORY_REF
 
     def _refuse_paths_outside(self) -> None:
         """Refuse the export when the config it would write still names a file or
@@ -1024,8 +1045,9 @@ def config_paths(config: dict[str, Any]) -> list[tuple[str, Any]]:
 
     The places the loader reads a path from: the ``local_dir`` skills and instructions
     of every agent, the code of ``tools`` and ``hooks``, a tool bundle's workspace and
-    browser, an OAuth provider's token store, a memory file other than the global
-    memory (`is_global_memory`: the user's own, wherever the project runs). A browser
+    browser, an OAuth provider's token store, a memory file, written or only read,
+    other than the global memory (`is_global_memory`: the user's own, wherever the
+    project runs). A browser
     ``binary`` without a ``/`` is a program looked up on ``PATH``, not a path.
     """
     found: list[tuple[str, Any]] = []
@@ -1033,12 +1055,14 @@ def config_paths(config: dict[str, Any]) -> list[tuple[str, Any]]:
         if not isinstance(agent, dict):
             continue
         memory = agent.get("memory_manager")
-        if (
-            isinstance(memory, dict)
-            and memory.get("file_path")
-            and not is_global_memory(memory["file_path"])
-        ):
-            found.append((f"agent {agent.get('name')!r} memory_manager", memory["file_path"]))
+        if isinstance(memory, dict):
+            read_only_sources = memory.get("read_only_sources")
+            for path in [
+                memory.get("file_path"),
+                *(read_only_sources if isinstance(read_only_sources, list) else []),
+            ]:
+                if path and not is_global_memory(path):
+                    found.append((f"agent {agent.get('name')!r} memory_manager", path))
         for key in ("skills", "standing_instructions"):
             spec = agent.get(key)
             source = spec.get("source") if isinstance(spec, dict) else None

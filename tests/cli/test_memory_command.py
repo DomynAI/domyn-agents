@@ -36,10 +36,12 @@ class _LLM(BaseLLMProvider):
         yield
 
 
-def _repl(tmp_path, *, with_memory=True):
+def _repl(tmp_path, *, with_memory=True, read_only_sources=()):
     manager = (
         FilesystemMemoryManager(
-            file_path=str(tmp_path / "memory.md"), execution_mode=MemoryExecutionMode.AGENTIC
+            file_path=str(tmp_path / "memory.md"),
+            execution_mode=MemoryExecutionMode.AGENTIC,
+            read_only_sources=[str(path) for path in read_only_sources],
         )
         if with_memory
         else None
@@ -275,3 +277,49 @@ class TestTheUserIsPassedToTheRunner:
             )
         )
         assert seen["run_config"] == {"user_id": USER_ID}
+
+
+class TestAMemoryFileOnlyRead:
+    """A project reading the global memory beside its own (`read_only_sources`)."""
+
+    @pytest.fixture
+    def other(self, tmp_path):
+        path = tmp_path / "global.md"
+        path.write_text(
+            f"# Memory\n\n- lives in Milan <!-- id=g1 at=2026-01-01T00:00:00+00:00 "
+            f"user={USER_ID} by=Elsewhere -->\n",
+            encoding="utf-8",
+        )
+        return path
+
+    @pytest.fixture(autouse=True)
+    def numbered_prompts(self, monkeypatch):
+        monkeypatch.setattr(select_mod, "_interactive", lambda theme: False)
+
+    @pytest.mark.asyncio
+    async def test_the_list_marks_its_entries_and_names_the_file(self, tmp_path, other):
+        repl, buffer, manager = _repl(tmp_path, read_only_sources=[other])
+        await _fill(manager, 1)
+        await repl._handle_memory("list")
+        printed = buffer.getvalue()
+        assert "lives in Milan  (read only)" in printed
+        assert "fact number 00  (read only)" not in printed
+        assert f"reads {other} (read only)" in printed.replace("\n", "")
+
+    @pytest.mark.asyncio
+    async def test_forget_says_where_the_entry_is_and_leaves_it(self, tmp_path, other):
+        repl, buffer, _ = _repl(tmp_path, read_only_sources=[other])
+        before = other.read_text()
+        await repl._handle_memory("forget g1")
+        assert "Not forgotten" in buffer.getvalue()
+        assert other.read_text() == before
+
+    @pytest.mark.asyncio
+    async def test_clear_does_not_count_them_as_left_behind(self, tmp_path, other):
+        repl, buffer, manager = _repl(tmp_path, read_only_sources=[other])
+        await _fill(manager, 2)
+        with patch("builtins.input", side_effect=["yes"]):
+            await repl._handle_memory("clear")
+        assert "Memory cleared." in buffer.getvalue()
+        assert "written by hand" not in buffer.getvalue()
+        assert [m.memory for m in (await manager.recall_page(USER_ID)).items] == ["lives in Milan"]

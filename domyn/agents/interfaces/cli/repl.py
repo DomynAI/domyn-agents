@@ -1464,6 +1464,7 @@ class Repl:
                 number=shown,
                 last=last,
                 path=getattr(manager, "file_path", None),
+                read_only=list(getattr(manager, "read_only_sources", None) or []),
             )
         elif verb == "add":
             if not rest:
@@ -1514,9 +1515,13 @@ class Repl:
             )
 
     async def _after_clearing(self, manager: Any) -> str:
-        """What ``/memory clear`` says: entries that belong to no one survive it."""
+        """What ``/memory clear`` says: entries that belong to no one survive it.
+
+        Entries of a file the memory only reads were never the clear's to remove, so
+        they are not counted as left behind."""
         try:
-            kept = (await manager.recall_page(USER_ID, self._agent)).total or 0
+            page = await manager.recall_page(USER_ID, self._agent)
+            kept = sum(1 for memory in page.items if memory.read_only_source is None)
         except Exception as exc:
             get_logger().warning(f"memory: could not count what is left: {type(exc).__name__}")
             get_logger().debug(f"memory count detail: {exc}")
