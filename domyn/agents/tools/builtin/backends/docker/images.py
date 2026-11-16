@@ -15,7 +15,7 @@ from domyn.agents.tools.builtin.backends.docker.cli import (
 
 IMAGE_REPOSITORY = "ghcr.io/domynai/domyn-docker-backend"
 """Where CI publishes the image (``docker/docker-backend.Dockerfile``). Public, so a pull
-needs no login. Defined here only: CI reads it from this file (``scripts/backend_image.py``)."""
+needs no login. Defined here only: CI reads it from this file (``scripts/agents_docker_backend_image.py``)."""
 
 LATEST_TAG = "latest"
 """The newest stable release, which CI moves with each one. What a build with no

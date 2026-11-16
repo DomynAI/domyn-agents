@@ -939,8 +939,8 @@ class TestTheImage:
 
     def test_ci_reads_the_names_from_the_code_and_does_not_repeat_them(self) -> None:
         root = Path(__file__).parents[2]
-        script = root / "scripts" / "backend_image.py"
-        namespace = runpy.run_path(str(script), run_name="backend_image")
+        script = root / "scripts" / "agents_docker_backend_image.py"
+        namespace = runpy.run_path(str(script), run_name="agents_docker_backend_image")
 
         assert namespace["read"]() == {
             "IMAGE_REPOSITORY": IMAGE_REPOSITORY,

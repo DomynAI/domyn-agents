@@ -4,7 +4,7 @@
 They are defined once, in ``domyn/agents/tools/builtin/backends/docker/images.py``,
 where the CLI pulls the image by them. CI reads them from there (without importing it:
 no dependency is installed to do so) instead of repeating them, so the two cannot drift.
-Used by .github/workflows/docker-backend-image.yml: ``python3 scripts/backend_image.py >> "$GITHUB_ENV"``.
+Used by .github/workflows/docker-backend-image.yml: ``python3 scripts/agents_docker_backend_image.py >> "$GITHUB_ENV"``.
 """
 
 import ast
