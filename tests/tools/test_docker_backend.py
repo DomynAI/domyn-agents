@@ -971,7 +971,7 @@ class TestDefaults:
             "procps",
             "node",
             "agent-browser",
-            "download_chrome",
+            "chromium-headless-shell",
             "/opt/domyn",
         ):
             assert wanted in dockerfile
@@ -1094,7 +1094,7 @@ class TestToolsInTheContainer:
         assert (skills / "SKILL.md").read_text() == "new\n"
 
     @pytest.mark.asyncio
-    async def test_the_browser_opens_a_page_with_the_images_chrome(self, make_docker: Any) -> None:
+    async def test_the_browser_opens_a_page_with_the_images_browser(self, make_docker: Any) -> None:
         built = BuiltinBundleConfig(
             name="x",
             bundles=["shell", "browser"],

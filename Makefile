@@ -97,6 +97,7 @@ clean:
 # The image `backend: docker` runs in, built here for the real-container tests
 # (CI publishes the released ones: .github/workflows/docker-backend-image.yml).
 docker-backend-image:
+	rm -f dist/*.whl
 	uv build --wheel
 	docker build -f docker/docker-backend.Dockerfile -t domyn-docker-backend:dev .
 

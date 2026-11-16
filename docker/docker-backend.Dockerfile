@@ -11,8 +11,11 @@
 #     in the container as operations of this same release (the agent loop, the
 #     approvals and the model stay on the host). A separate environment, so the
 #     agent's own `pip install --user` never touches it.
-#   * agent-browser and Chrome for Testing, pinned: what the browser tools drive. The
-#     agent-browser binary is checked against scripts/agent_browser.lock.
+#   * agent-browser (pinned, checked against scripts/agent_browser.lock) and Debian's
+#     chromium-headless-shell: what the browser tools drive. It is the distro's
+#     BSD-3-Clause Chromium built from source, not Google's Chrome for Testing, which is
+#     branded Chrome and bundles the non-redistributable Widevine CDM. The headless
+#     shell is the headless-only build, so there is no `chromium` command either.
 #
 # Build from the repository root, with the wheel to install in ./dist:
 #   uv build --wheel && docker build -f docker/docker-backend.Dockerfile -t domyn-docker-backend .
@@ -24,15 +27,14 @@ FROM ${NODE_IMAGE} AS node
 
 # Everything but domyn itself: the part that changes least, so it caches best.
 FROM ${PYTHON_IMAGE} AS base
-# The libraries are Chrome's own runtime dependencies on Debian.
+# The fonts are spelled out: they are only Recommends of the browser package, which
+# --no-install-recommends drops, and every screenshot would render tofu boxes.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       procps git curl ca-certificates \
-      fonts-liberation fonts-noto-color-emoji \
-      libasound2 libatk-bridge2.0-0 libatk1.0-0 libcairo2 libcups2 libdbus-1-3 libdrm2 \
-      libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
-      libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 \
- && rm -rf /var/lib/apt/lists/*
+      chromium-headless-shell fonts-liberation fonts-noto-color-emoji \
+ && rm -rf /var/lib/apt/lists/* \
+ && test -x /usr/lib/chromium/chromium-headless-shell
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
@@ -58,14 +60,12 @@ COPY dist/*.whl /tmp/dist/
 RUN python -m venv /opt/domyn \
  && /opt/domyn/bin/pip install --no-cache-dir /tmp/dist/*.whl \
  && rm -rf /tmp/dist
-# Chrome for Testing, through the same code the host uses when it downloads one.
-RUN mkdir -p /opt/browsers && /opt/domyn/bin/python -c "\
-from pathlib import Path; \
-from domyn.agents.tools.builtin.browser_install import download_chrome; \
-Path('/opt/browsers/chrome').symlink_to(download_chrome(Path('/opt/browsers')))" \
- && chmod -R a+rX /opt/browsers /opt/domyn
+RUN chmod -R a+rX /opt/domyn
 # What the file tools run for each call: a script, found by this name because the path
 # inside site-packages depends on the Python version (see backends/docker/tool_host.py).
 RUN ln -s "$(/opt/domyn/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/domyn/agents/tools/builtin/backends/docker/tool_host.py" /opt/domyn/tool_host.py
-# The stable name agent-browser is told, whatever Chrome's version.
-ENV AGENT_BROWSER_EXECUTABLE_PATH=/opt/browsers/chrome
+# The real binary, not the /usr/bin wrapper (a shell script that runs it as a child, so the
+# PID a launcher holds would be the shell's). agent-browser adds --no-sandbox itself; Docker's
+# /dev/shm is 64 MB, which renderers outgrow on anything non-trivial.
+ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/lib/chromium/chromium-headless-shell \
+    AGENT_BROWSER_ARGS=--no-sandbox,--disable-dev-shm-usage
