@@ -36,7 +36,7 @@ edit; a project imported is used by name, and trusted as it is (`select_project`
 
 **The memory setting is imported, the memories are not.** An export keeps each
 agent's ``memory_manager``, its file named ``${DOMYN_PROJECT_DIR}/…`` or as the global
-``~/.domyn/memory.md`` (`export._export_memory`), so the wizard's memory question
+``~/.domyn/memory.md`` (`export._export_memory_manager`), so the wizard's memory question
 opens on the exported choice and can change it. A project memory starts empty here,
 and the global one is this machine's own. A ``memory.md`` in the export is not copied
 (`is_private`), and a memory file anywhere else is refused like any outside path.

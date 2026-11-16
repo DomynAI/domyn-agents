@@ -796,7 +796,7 @@ class _Exporter:
                     self.report.warnings.extend(import_warnings(path, places[path]))
                 entry["path"] = _in_project(places[path])
 
-    def _export_memory(self) -> None:
+    def _export_memory_manager(self) -> None:
         """Keep every agent's ``memory_manager``, never what it remembers.
 
         The setting travels, so a project whose memory was on still has it on, and
@@ -859,7 +859,7 @@ class _Exporter:
         self._export_skills()
         self._export_instructions()
         self._export_code()
-        self._export_memory()
+        self._export_memory_manager()
         self._scrub_secrets()
         self._refuse_paths_outside()
         text = yaml.safe_dump(self.config, sort_keys=False)
