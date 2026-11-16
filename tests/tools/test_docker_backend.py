@@ -765,7 +765,10 @@ class TestAStateFolderOutsideTheWorkspace:
         specs = [a for a in arguments if a != "--mount"]
 
         assert f"type=bind,source={scratch},target={state}" in specs
-        assert scratch.is_dir() and list(scratch.iterdir()) == []  # none of the real home
+        # Only the mount points of what goes over it, none of the real home.
+        assert {p.name for p in scratch.iterdir()} >= {"config.yaml", "processes", "conversations"}
+        assert not (scratch / "credentials").exists()
+        assert (scratch / "config.yaml").read_text() == ""
         assert specs.index(f"type=bind,source={scratch},target={state}") < specs.index(
             f"type=bind,source={state}/processes,target={state}/processes"
         ), "the folders over it come after it"

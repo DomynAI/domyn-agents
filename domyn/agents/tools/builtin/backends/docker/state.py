@@ -103,6 +103,14 @@ class StateFolder:
                     f"{link} is a link: the container will not mount through it"
                 )
             target.mkdir(parents=True, exist_ok=True)
+        if scratch is not None and self._explicit is not None:
+            # The mounts over the scratch folder need their mount points to exist:
+            # Docker Desktop (virtiofs) fails creating one inside a bind mount
+            # ("is outside of rootfs"), a file's above all.
+            for place in (self.processes, self.browser, self.conversation_home(conversation)):
+                (scratch / place.relative_to(self._explicit)).mkdir(parents=True, exist_ok=True)
+            if self.config is not None:
+                (scratch / "config.yaml").touch()
         if self._explicit is None:
             # In the workspace, where `git status` would otherwise list it.
             ignore_from_version_control(self.conversation_home(conversation).parent)
