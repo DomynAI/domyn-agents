@@ -69,6 +69,22 @@ class StateFolder:
         environment = SessionEnvironment(self._workspace_root, state_dir=self._explicit)
         return environment.paths(conversation).home
 
+    def scratch_home(self, conversation: str) -> Path | None:
+        """A writable, empty folder the container sees as the state folder itself.
+
+        A ``domyn`` run in the container (a command the agent starts) keeps its history
+        and its working files in ``DOMYN_PROJECT_DIR``, which in the container is the
+        state folder's host path. That path exists there only as the parents of the
+        mounts below it, which Docker makes root-owned, so nothing could be created in
+        it. This folder is mounted at that path, with the real ``config.yaml`` and the
+        working folders over it: what the nested run writes lands here, beside the
+        conversation, and goes with it. None of the real home (credentials, approvals,
+        history) is in it. ``None`` when the state is in the workspace, writable already.
+        """
+        if self._explicit is None:
+            return None
+        return self.conversation_home(conversation) / "domyn-home"
+
     def prepare(self, conversation: str) -> None:
         """Make the places a container writes in, without following a link.
 
@@ -78,7 +94,10 @@ class StateFolder:
         the dotfiles), what is below it may not.
         """
         start = self._explicit or self._workspace_root
-        for target in (self.processes, self.browser, self.conversation_home(conversation)):
+        targets = [self.processes, self.browser, self.conversation_home(conversation)]
+        if (scratch := self.scratch_home(conversation)) is not None:
+            targets.append(scratch)
+        for target in targets:
             if (link := linked_below(start, target)) is not None:
                 raise BackendUnavailableError(
                     f"{link} is a link: the container will not mount through it"

@@ -10,6 +10,10 @@ run code on the host or change its policy, so two things differ from this machin
 * the session's ``config.yaml`` is there to read and not to write: it names the code
   the host runs (tools, hooks, MCP servers) and which backend to use. Credentials and
   approvals are not mounted at all.
+
+The state folder's own place in the container is an empty, writable folder (see
+``StateFolder.scratch_home``) with those few mounts over it, so ``domyn run`` there can
+keep a history of its own without seeing the real one.
 """
 
 from collections.abc import Iterator
@@ -46,6 +50,8 @@ def build_mounts(workspace: Workspace, state: StateFolder, conversation: str) ->
     state.prepare(conversation)
     mounts = _Mounts()
     mounts.add(root, readonly=False)
+    if (scratch := state.scratch_home(conversation)) is not None and state.project_dir:
+        mounts.add(scratch, readonly=False, target=state.project_dir)
     mounts.add(state.processes, readonly=False)
     mounts.add(state.browser, readonly=False)
     mounts.add(state.conversation_home(conversation), readonly=False)
@@ -62,11 +68,12 @@ class _Mounts:
     def __init__(self) -> None:
         self.arguments: list[str] = []
 
-    def add(self, path: Path, *, readonly: bool) -> None:
-        if "," in str(path):
+    def add(self, path: Path, *, readonly: bool, target: Path | None = None) -> None:
+        where = target or path
+        if "," in str(path) or "," in str(where):
             get_logger().warning("docker: a path with a comma cannot be mounted; skipped")
             return
-        spec = f"type=bind,source={path},target={path}" + (",readonly" if readonly else "")
+        spec = f"type=bind,source={path},target={where}" + (",readonly" if readonly else "")
         self.arguments += ["--mount", spec]
 
 

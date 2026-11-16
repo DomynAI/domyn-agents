@@ -34,7 +34,7 @@ breaks it and not the user's computer, and that has a price you must not forget:
 | credentials, approvals, history | on disk (never print credentials) | **not there**: you cannot read them |
 | files outside the project (`~/Downloads`, `~/.ssh`, another repository) | reachable by `run_command` | **do not exist.** Only the workspace, the skill folders and the session's state are the user's files. When the user names a file elsewhere, ask them to copy it into the workspace |
 | `.git/hooks`, `.git/config` | writable | **read only**: a hook runs on the user's machine at their next `git commit` |
-| `domyn ...` commands | on `PATH` | **not available**, and they would not change the user's setup: tell the user which command to type |
+| `domyn ...` commands | on `PATH`, they change the user's setup | on `PATH` (the same release), but **they change nothing of the user's**: `$DOMYN_PROJECT_DIR` there is an empty scratch folder of this conversation, with the real `config.yaml` read-only over it. A `domyn run` keeps a history of its own and sees no credentials, so it needs a key from a `.env` in the workspace or from `allowed_env`; `domyn setup` and the like are not what the user asked for. For a change to the user's setup, tell the user which command to type |
 | programs and servers on the user's machine (a dev server on `localhost`, installed tools) | reachable | **not reachable**: `localhost` is the container, and private addresses are refused |
 | your skills, `SOUL.md` / `AGENTS.md`, `.agents`, `.domyn` in the project | writable | writable (they are mounted, as on the user's machine) |
 | file tools | confined to the workspace and the skill folders | reach the whole container, `/tmp` included; the user's files are only what is mounted |

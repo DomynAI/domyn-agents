@@ -706,8 +706,8 @@ class TestABusyDaemon:
 
 class TestAStateFolderOutsideTheWorkspace:
     """In the CLI the session's working state is under ``DOMYN_PROJECT_DIR`` (``~/.domyn``
-    or a project), not in the workspace. The container gets exactly the two places it
-    writes in, at their host paths."""
+    or a project), not in the workspace. The container gets exactly the places it
+    writes in, at their host paths, and an empty folder of its own where the state is."""
 
     def _folders(self, tmp_path: Path) -> tuple[Workspace, Path]:
         ws = tmp_path / "ws"
@@ -751,6 +751,45 @@ class TestAStateFolderOutsideTheWorkspace:
         for private in ("credentials", "approvals.yaml", "conversations.db"):
             assert not any(private in spec for spec in specs)
         assert not any(spec == f"type=bind,source={state},target={state}" for spec in specs)
+
+    def test_the_state_folders_own_place_is_an_empty_writable_folder_of_the_conversation(
+        self, tmp_path: Path
+    ) -> None:
+        """So a `domyn run` in the container can keep a history of its own: `DOMYN_PROJECT_DIR`
+        names that path there, and nothing could be created in what Docker makes of it."""
+        workspace, state = self._folders(tmp_path)
+        (state / "credentials").write_text("secret")
+        scratch = state / "conversations" / "c1" / "domyn-home"
+
+        arguments = build_mounts(workspace, StateFolder.resolve(workspace.root, state), "c1")
+        specs = [a for a in arguments if a != "--mount"]
+
+        assert f"type=bind,source={scratch},target={state}" in specs
+        assert scratch.is_dir() and list(scratch.iterdir()) == []  # none of the real home
+        assert specs.index(f"type=bind,source={scratch},target={state}") < specs.index(
+            f"type=bind,source={state}/processes,target={state}/processes"
+        ), "the folders over it come after it"
+
+    def test_the_scratch_folder_is_refused_through_a_link(self, tmp_path: Path) -> None:
+        workspace, state = self._folders(tmp_path)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        conversation = state / "conversations" / "c1"
+        conversation.mkdir(parents=True)
+        (conversation / "domyn-home").symlink_to(elsewhere)
+
+        with pytest.raises(BackendUnavailableError, match="link"):
+            build_mounts(workspace, StateFolder.resolve(workspace.root, state), "c1")
+
+    def test_a_state_in_the_workspace_needs_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("DOMYN_PROJECT_DIR", raising=False)
+        workspace, _ = self._folders(tmp_path)
+        folder = StateFolder.resolve(workspace.root, None)
+
+        assert folder.scratch_home("c1") is None
+        assert not any("domyn-home" in a for a in build_mounts(workspace, folder, "c1"))
 
     def test_a_replaced_config_is_another_mount(self, tmp_path: Path) -> None:
         """A file mount pins the inode, and the host replaces the file when it writes."""
@@ -1055,6 +1094,30 @@ class TestToolsInTheContainer:
 
         assert written.exit_code == 0 and appended.success, appended.error
         assert (make_docker.workspace / "AGENTS.md").read_text() == "rules\nmore\nand more\n"
+
+    @pytest.mark.asyncio
+    async def test_domyn_runs_there_and_keeps_its_own_history(
+        self, make_docker: Any, tmp_path: Path
+    ) -> None:
+        """What `domyn run` does in a container: it is on the PATH, and `DOMYN_PROJECT_DIR`
+        (the state folder's host path) is somewhere it can write, empty of the real home."""
+        state = tmp_path / "state"
+        state.mkdir()
+        (state / "credentials").write_text("not for the container")
+        (state / "config.yaml").write_text("version: '1.0'\n")
+        backend = make_docker(state_dir=state)
+
+        version = await _sh(backend, "domyn --version")
+        written = await _sh(backend, 'touch "$DOMYN_PROJECT_DIR/conversations.db"')
+        seen = await _sh(backend, 'ls "$DOMYN_PROJECT_DIR"')
+
+        assert version.exit_code == 0, version.stderr
+        assert written.exit_code == 0, written.stderr
+        assert "credentials" not in seen.stdout
+        assert "config.yaml" in seen.stdout
+        assert (await _sh(backend, 'echo x >> "$DOMYN_PROJECT_DIR/config.yaml"')).exit_code != 0
+        assert (state / "conversations" / "c1" / "domyn-home" / "conversations.db").is_file()
+        assert not (state / "conversations.db").exists()
 
     @pytest.mark.asyncio
     async def test_what_is_not_mounted_is_not_there(self, make_docker: Any, tmp_path: Path) -> None:
@@ -1518,7 +1581,7 @@ class TestSkillsReachTheContainer:
 @needs_docker
 class TestAStateFolderOutsideTheWorkspaceInAContainer:
     @pytest.mark.asyncio
-    async def test_the_two_folders_are_writable_and_nothing_around_them_is(
+    async def test_the_two_folders_are_writable_and_the_rest_of_the_state_is_a_scratch_copy(
         self, make_docker: Any, tmp_path: Path
     ) -> None:
         state = tmp_path / "state"
@@ -1530,9 +1593,11 @@ class TestAStateFolderOutsideTheWorkspaceInAContainer:
         assert ok.exit_code == 0, ok.stderr
         assert (state / "processes" / "x").read_text().strip() == "a"
         assert (state / "conversations" / "c1" / "y").read_text().strip() == "b"
+        # Beside them is the conversation's own scratch folder, never the real state.
         beside = await _sh(backend, f"echo no > {state}/elsewhere")
-        assert beside.exit_code != 0
+        assert beside.exit_code == 0, beside.stderr
         assert not (state / "elsewhere").exists()
+        assert (state / "conversations/c1/domyn-home/elsewhere").read_text().strip() == "no"
         assert not (make_docker.workspace / ".domyn").exists()
 
     @pytest.mark.asyncio

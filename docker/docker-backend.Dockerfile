@@ -7,10 +7,11 @@
 # What is in it, and why:
 #   * Python, Node, git, curl, procps: what an agent working on a project reaches
 #     for. procps because the background-command wrapper needs `ps` and `pkill`.
-#   * `domyn`, in its own virtualenv at /opt/domyn: the file and browser tools run
-#     in the container as operations of this same release (the agent loop, the
-#     approvals and the model stay on the host). A separate environment, so the
-#     agent's own `pip install --user` never touches it.
+#   * `domyn`, in its own virtualenv at /opt/domyn (the agent loop, the approvals and the
+#     model stay on the host): the file and browser tools run in the container as
+#     operations of this same release, and a command the agent starts can run `domyn`
+#     itself, which is on the PATH. A separate environment, so the agent's own
+#     `pip install --user` never touches it.
 #   * agent-browser (pinned, checked against scripts/agent_browser.lock) and Debian's
 #     chromium-headless-shell: what the browser tools drive. It is the distro's
 #     BSD-3-Clause Chromium built from source, not Google's Chrome for Testing, which is
@@ -60,7 +61,8 @@ COPY dist/*.whl /tmp/dist/
 RUN python -m venv /opt/domyn \
  && /opt/domyn/bin/pip install --no-cache-dir /tmp/dist/*.whl \
  && rm -rf /tmp/dist
-RUN chmod -R a+rX /opt/domyn
+RUN chmod -R a+rX /opt/domyn \
+ && ln -s /opt/domyn/bin/domyn /usr/local/bin/domyn
 # What the file tools run for each call: a script, found by this name because the path
 # inside site-packages depends on the Python version (see backends/docker/tool_host.py).
 RUN ln -s "$(/opt/domyn/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/domyn/agents/tools/builtin/backends/docker/tool_host.py" /opt/domyn/tool_host.py
