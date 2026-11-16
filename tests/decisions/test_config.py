@@ -42,6 +42,10 @@ class TestAConfigurationMistakeIsLoud:
         with pytest.raises(ValueError, match="approvals"):
             DecisionsConfig.from_dict({"provider": "p", "nonsense": {"mode": "active"}})
 
+    def test_shadow_is_refused_where_there_is_none(self):
+        with pytest.raises(ValueError, match="no shadow mode: memory"):
+            DecisionsConfig.from_dict({"provider": "p", "memory": {"mode": "shadow"}})
+
     def test_an_unknown_provider_name_is_refused(self):
         config = DecisionsConfig.from_dict({"provider": "typo", "approvals": {"mode": "off"}})
         with pytest.raises(ValueError, match="not found in configuration"):

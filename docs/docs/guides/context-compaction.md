@@ -133,7 +133,7 @@ async for event in runner.run(..., user_input=request, conversation_id=conversat
 
 It drops the older tool outputs of the agent the user is talking to, and calls no model. It leaves alone the last three results (`keep_recent_tool_results`), counting both tool outputs and the `agent_end` event that closes each agent's run, so after a few turns of one tool call each, only the latest tool output is kept. It does not need a `context_window`, and works with every strategy, `noop` included. The stream is only `context_compaction_start` and `context_compacted`, whose text says how many outputs were dropped and whose `metadata["tokens_saved"]` says how much the next request shrinks. The request is not added to the conversation. The shorter conversation is used from the next request.
 
-In the interactive CLI, `/compact` sends this request, and `/context` shows what the last request contained: the conversation and the tool definitions, the correction the provider's count gave them, their total, the share of the window used, and how far the request is from the threshold.
+In the interactive CLI, `/compact` sends this request, and `/context` shows what the last request contained: the conversation, the [memories](conversations-and-memory.md#long-term-memory) recalled for the turn (counted apart, with how many, though they are part of the conversation's total) and the tool definitions, the correction the provider's count gave them, their total, the share of the window used, and how far the request is from the threshold.
 
 ## Events
 

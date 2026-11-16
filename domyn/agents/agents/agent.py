@@ -17,17 +17,20 @@ from domyn.agents.core import (
     InteractionContext,
 )
 from domyn.agents.decisions import DecisionRuntime
-from domyn.agents.hooks import FunctionHook, HookFactory, HookPhase, HookType
+from domyn.agents.hooks import FunctionHook, HookFactory, HookPhase
+from domyn.agents.hooks.builtin.memory import memory_update_hook
 from domyn.agents.instructions import AgentInstructions, InstructionRuntime
 from domyn.agents.llm import BaseLLMProvider, LLMProviderFactory
 from domyn.agents.logger import get_logger
-from domyn.agents.memory.managers import BaseMemoryManager, MemoryExecutionMode
+from domyn.agents.memory.managers import (
+    BaseMemoryManager,
+    MemoryExecutionMode,
+)
 from domyn.agents.planner_strategy import BasePlannerStrategy, PlannerStrategyFactory
 from domyn.agents.skills import LoadedSkills, SkillRequiredError, SkillsRuntime
 from domyn.agents.skills.integration import skill_tools
 from domyn.agents.skills.turn import build_skills_payload
 from domyn.agents.tools import (
-    ConfigParam,
     DelegateTool,
     FunctionTool,
     MCPTool,
@@ -35,6 +38,7 @@ from domyn.agents.tools import (
     Tool,
 )
 from domyn.agents.tools.builtin import BuiltinTools
+from domyn.agents.tools.builtin.memory import memory_tools
 from domyn.agents.tools.mcp import MCPServerStreamableHTTPConfig
 from domyn.agents.tools.read_tool_result import READ_TOOL_RESULT
 
@@ -173,23 +177,9 @@ class Agent(BaseAgent):
             self._attach_skills()
         if self.memory_manager:
             if self.memory_manager.execution_mode == MemoryExecutionMode.AGENTIC:
-                memory_tool = FunctionTool(
-                    name="remember",
-                    description="Store relevant information to the agent's memory for future use. Use this proactively whenever the user reveals information about themselves, their preferences, interests, or opinions — even if mentioned in passing.",
-                    func=self.memory_manager.remember,  # type: ignore
-                    config_params=[
-                        ConfigParam(name="agent", value=self),
-                    ],
-                )
-                self.tools.append(memory_tool)
+                self.tools.extend(memory_tools(self.memory_manager, self))
             elif self.memory_manager.execution_mode == MemoryExecutionMode.AUTOMATIC:
-                memory_post_hook = FunctionHook(
-                    name="update_memory",
-                    fun=self.memory_manager.update_memory,  # type: ignore
-                    trigger=HookPhase.POST_AGENT_CALL,
-                    type=HookType.LISTENER,
-                )
-                self.hooks.append(memory_post_hook)
+                self.hooks.append(memory_update_hook(self.memory_manager))
 
     def _attach_skills(self) -> None:
         """Wire the lookup tools, ``skill_view`` and ``skill_search``.
@@ -215,7 +205,8 @@ class Agent(BaseAgent):
         self.tools.extend(t for t in skill_tools(self.skills) if t.name not in present)
 
     async def close(self, *, _visited: set[int] | None = None) -> None:
-        """Release what this agent's built-in tool bundles hold, and recurse into
+        """Release what this agent's built-in tool bundles hold, after waiting for the
+        memory updates its ``AUTOMATIC`` hook left running, and recurse into
         sub-agents that carry their own. Best-effort and idempotent — a single
         bundle failing to close must not stop the rest of the tree from being
         torn down, and nothing upstream can act on the failure anyway.
@@ -228,6 +219,15 @@ class Agent(BaseAgent):
         if id(self) in visited:
             return
         visited.add(id(self))
+
+        if self.memory_manager is not None:
+            # Before the tools: the updates the AUTOMATIC hook left running would
+            # otherwise be cancelled by the process exiting.
+            try:
+                await self.memory_manager.wait_for_updates()
+            except Exception as exc:
+                get_logger().warning(f"could not finish memory updates: {type(exc).__name__}")
+                get_logger().debug(f"memory update teardown detail: {exc}")
 
         for built in self.builtin_tools:
             try:

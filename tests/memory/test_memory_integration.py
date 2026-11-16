@@ -1,5 +1,6 @@
 """Integration tests for memory manager: remember, update_memory, agent validator, configuration_id."""
 
+import asyncio
 import os
 import tempfile
 from unittest.mock import AsyncMock, patch
@@ -262,6 +263,64 @@ class TestUpdateMemoryFlow:
         assert "John" in memories[0].memory
 
     @pytest.mark.asyncio
+    async def test_the_turn_that_just_ended_is_read(self, memory_manager):
+        # When the post-agent hook runs, the turn is in `interaction_history` and a
+        # first turn's `conversation_history` is empty: the LLM must still see it.
+        user_event = BaseEvent(
+            event_type=ExecutionEventType.USER_INPUT,
+            author="user",
+            content=[Part(text="I am Pippo, a comedian in Castelfranco Veneto")],
+        )
+        context = InteractionContext(
+            conversation_id="conv-1",
+            user_id="u1",
+            agent_input=user_event,
+            conversation_history=[],
+            interaction_history=[user_event],
+        )
+        agent = self._make_agent_mock("StoreMemory: no")
+
+        await memory_manager.update_memory(agent, context)
+
+        sent = agent.llm_provider.generate.call_args.kwargs["messages"][1].content
+        assert "Castelfranco Veneto" in sent
+
+    @pytest.mark.asyncio
+    async def test_an_event_in_both_histories_is_sent_once(self, memory_manager):
+        context = self._make_context()
+        context.interaction_history = list(context.conversation_history)
+        agent = self._make_agent_mock("StoreMemory: no")
+
+        await memory_manager.update_memory(agent, context)
+
+        sent = agent.llm_provider.generate.call_args.kwargs["messages"][1].content
+        assert sent.count("My name is John") == 1
+
+    @pytest.mark.asyncio
+    async def test_the_writer_after_a_decision_reads_the_turn_too(self, memory_manager):
+        # Asked after a decision model's yes, it is shown the same conversation as
+        # the writer that decides itself: on a first turn, the interaction history.
+        user_event = BaseEvent(
+            event_type=ExecutionEventType.USER_INPUT,
+            author="user",
+            content=[Part(text="I am Pippo, a comedian in Castelfranco Veneto")],
+        )
+        context = InteractionContext(
+            conversation_id="conv-1",
+            user_id="u1",
+            agent_input=user_event,
+            conversation_history=[],
+            interaction_history=[user_event, user_event],
+        )
+        agent = self._make_agent_mock("NONE")
+
+        await memory_manager.write_memory_content(agent, context, ("Pippo", ""))
+
+        sent = agent.llm_provider.generate.call_args.kwargs["messages"][1].content
+        conversation = sent.split("Latest exchange:")[0]
+        assert conversation.count("Castelfranco Veneto") == 1
+
+    @pytest.mark.asyncio
     async def test_update_memory_skips_when_no(self, memory_manager):
         agent = self._make_agent_mock("StoreMemory: no\nMemoryContent: nothing relevant")
         context = self._make_context()
@@ -327,3 +386,99 @@ class TestUpdateMemoryFlow:
 
         memories = await memory_manager.recall_memories("u1")
         assert len(memories) == 1
+
+
+# ── The AUTOMATIC hook runs the update in the background ─────
+
+
+class TestUpdateInTheBackground:
+    """The hook returns before the update ends; closing waits for what is left."""
+
+    def _context(self):
+        user_event = BaseEvent(
+            event_type=ExecutionEventType.USER_INPUT,
+            author="user",
+            content=[Part(text="I like tea")],
+        )
+        return InteractionContext(
+            conversation_id="conv-1",
+            user_id="u1",
+            agent_input=user_event,
+            conversation_history=[user_event],
+        )
+
+    def _blocked_update(self, memory_manager):
+        """An update that waits for `release`, and records that it finished."""
+        release = asyncio.Event()
+        finished = []
+
+        async def update_memory(agent, context):
+            await release.wait()
+            finished.append(context.user_id)
+            return "User likes tea"
+
+        object.__setattr__(memory_manager, "update_memory", update_memory)
+        return release, finished
+
+    @pytest.mark.asyncio
+    async def test_the_hook_returns_before_the_update_ends(self, memory_manager):
+        release, finished = self._blocked_update(memory_manager)
+
+        result = await memory_manager.start_memory_update(_build_agent(), self._context())
+
+        assert result is None
+        assert finished == []
+        release.set()
+        await memory_manager.wait_for_updates()
+        assert finished == ["u1"]
+
+    @pytest.mark.asyncio
+    async def test_the_update_stores_the_fact(self, memory_manager):
+        agent = AsyncMock()
+        agent.name = "TestAgent"
+        agent.llm_provider.generate.return_value = LLMResponse(
+            content="StoreMemory: yes\nMemoryContent: User likes tea",
+            usage={},
+            generated_tokens=10,
+            execution_time=0.01,
+        )
+
+        await memory_manager.start_memory_update(agent, self._context())
+        await memory_manager.wait_for_updates()
+
+        memories = await memory_manager.recall_memories("u1")
+        assert [m.memory for m in memories] == ["User likes tea"]
+
+    @pytest.mark.asyncio
+    async def test_an_update_still_running_at_the_limit_is_dropped(self, memory_manager):
+        release, finished = self._blocked_update(memory_manager)
+        await memory_manager.start_memory_update(_build_agent(), self._context())
+
+        await memory_manager.wait_for_updates(timeout=0.01)
+
+        release.set()
+        await asyncio.sleep(0)
+        assert finished == []
+        assert not memory_manager._updates
+
+    @pytest.mark.asyncio
+    async def test_closing_the_agent_waits_for_the_update(self, temp_file, llm_provider):
+        agent = Agent(
+            name="Assistant",
+            description="d",
+            instruction="i",
+            llm_provider=llm_provider,
+            memory_manager={
+                "type": "filesystem",
+                "file_path": temp_file,
+                "execution_mode": "automatic",
+            },
+        )
+        release, finished = self._blocked_update(agent.memory_manager)
+        hook = next(h for h in agent.post_hooks if h.name == "update_memory")
+        await hook._actual_callable(agent=agent, context=self._context())
+
+        asyncio.get_running_loop().call_soon(release.set)
+        await agent.close()
+
+        assert finished == ["u1"]
