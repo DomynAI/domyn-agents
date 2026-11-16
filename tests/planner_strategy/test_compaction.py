@@ -129,14 +129,16 @@ class TestWhenItMustNotFire:
 
     def test_exactly_on_the_threshold_does_not_fire(self) -> None:
         """`>` and not `>=`: on the exact threshold the request still fits."""
-        messages = [_msg("user", _long(300))]
+        # Long enough that the reserve leaves more than the tenth of the window the
+        # threshold never goes below (`TestTheThresholdFloor`).
+        messages = [_msg("user", _long(3_000))]
         exact = HeuristicEstimator().estimate_messages(messages)
         plan = _active(reserve_tokens=1_000).assess(messages, _Agent(exact + 1_000))
         assert plan.threshold_tokens == exact
         assert plan.needed is False
 
     def test_one_token_over_the_threshold_fires(self) -> None:
-        messages = [_msg("user", _long(300))]
+        messages = [_msg("user", _long(3_000))]
         exact = HeuristicEstimator().estimate_messages(messages)
         plan = _active(reserve_tokens=1_000).assess(messages, _Agent(exact + 1_000 - 1))
         assert plan.needed is True
@@ -457,9 +459,8 @@ class TestReplacingTheStrategy:
 
 
 class TestTheThreshold:
-    def test_a_window_smaller_than_the_reserve_gives_a_zero_threshold(self) -> None:
-        """That is, "always". It is the right reading: if there is no room for a
-        reply, any conversation is too long."""
+    def test_without_a_floor_a_reserve_over_the_window_gives_zero(self) -> None:
+        """Never negative. Only the stand-in window of a rejection has no floor."""
         budget = Budget(
             context_window=100,
             reserve_tokens=16_384,
@@ -468,6 +469,83 @@ class TestTheThreshold:
         )
         assert budget.threshold_tokens == 0
         assert budget.over_threshold is True
+
+
+class TestTheThresholdFloor:
+    """A reserve as large as the window put the threshold at zero: every request
+    compacted, no tail kept, a summary on every turn, all for no room gained."""
+
+    @staticmethod
+    def _agent(window: int, **generation_params: Any) -> Any:
+        provider = VLLMProvider(
+            url="http://vllm.test/v1/chat/completions",
+            model_name="m",
+            context_window=window,
+            generation_params=generation_params,
+        )
+        return SimpleNamespace(llm_provider=provider, name="Assistant")
+
+    @pytest.mark.parametrize("max_tokens", [32_768, 40_000, 31_000])
+    def test_a_reserve_filling_the_window_leaves_a_tenth(self, max_tokens: int) -> None:
+        plan = _active().assess([_msg("user", "hi")], self._agent(32_768, max_tokens=max_tokens))
+        assert plan.threshold_tokens == 3_276
+        assert plan.needed is False
+
+    def test_a_reasonable_reserve_is_untouched(self) -> None:
+        """At exactly a tenth left, the floor and the reserve agree."""
+        plan = _active().assess([_msg("user", "hi")], self._agent(100_000, max_tokens=90_000))
+        assert plan.threshold_tokens == 10_000
+
+    def test_a_declared_reserve_gets_the_floor_too(self) -> None:
+        plan = _active(reserve_tokens=200_000).assess(
+            [_msg("user", "hi")], self._agent(128_000, max_tokens=2_000)
+        )
+        assert plan.threshold_tokens == 12_800
+
+    def test_the_tail_is_kept_again(self) -> None:
+        plan = _active().assess([_msg("user", "hi")], self._agent(32_768, max_tokens=32_768))
+        assert plan.budget is not None
+        assert plan.budget.tail_tokens(20_000) > 0
+
+    def test_the_threshold_shown_is_the_one_checked(self) -> None:
+        agent = self._agent(32_768, max_tokens=32_768)
+        usage = _active().usage_metadata([_msg("user", "hi")], None, agent)
+        assert usage[CONTEXT_USAGE_METADATA_KEY]["threshold_tokens"] == 3_276
+
+    def test_a_rejection_still_aims_at_half_the_request(self) -> None:
+        """The stand-in window after a rejection has no floor: with one, a reserve
+        far larger than the request would put the target above the request itself."""
+        messages = _conversation(2)
+        plan = _active().overflow_plan(messages, self._agent(32_768, max_tokens=32_768))
+        assert plan is not None and plan.budget is not None
+        assert plan.threshold_tokens == plan.budget.current_tokens // 2
+
+    def test_it_warns_once_naming_the_setting(self, caplog: pytest.LogCaptureFixture) -> None:
+        agent = self._agent(32_768, max_tokens=32_768)
+        compactor = _active()
+        with caplog.at_level("WARNING", logger="domyn.agents"):
+            for _ in range(3):
+                compactor.assess([_msg("user", "hi")], agent)
+                compactor.usage_metadata([_msg("user", "hi")], None, agent)
+        warnings = [r.message for r in caplog.records if "reply reserve" in r.message]
+        assert len(warnings) == 1
+        assert "`max_tokens`" in warnings[0]
+        assert "32768-token window" in warnings[0]
+        assert "3276 tokens" in warnings[0]
+
+    def test_a_declared_reserve_is_named_as_such(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level("WARNING", logger="domyn.agents"):
+            _active(reserve_tokens=200_000).assess(
+                [_msg("user", "hi")], self._agent(128_000, max_tokens=2_000)
+            )
+        assert any("`reserve_tokens`" in r.message for r in caplog.records)
+
+    def test_no_warning_when_the_reserve_leaves_room(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("WARNING", logger="domyn.agents"):
+            _active().assess([_msg("user", "hi")], self._agent(100_000, max_tokens=32_000))
+        assert not any("reply reserve" in r.message for r in caplog.records)
 
 
 class TestDoNotTrustTheWindowValue:
@@ -863,7 +941,7 @@ class TestTheReserveFollowsTheReplyCeiling:
         return SimpleNamespace(llm_provider=provider, name="Assistant")
 
     def test_an_unset_reserve_is_the_providers_max_tokens(self) -> None:
-        messages = [_msg("user", _long(300))]
+        messages = [_msg("user", _long(30_000))]
         exact = HeuristicEstimator().estimate_messages(messages)
         agent = self._agent(exact + 32_000, max_tokens=32_000)
         plan = _active().assess(messages, agent)
