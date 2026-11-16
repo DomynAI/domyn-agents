@@ -100,6 +100,16 @@ class DecisionsConfig(BaseModel):
                 f"Unknown decision use case(s): {', '.join(unknown)}. "
                 f"Known: {', '.join(sorted(USE_CASES))}"
             )
+        shadowless = sorted(
+            name
+            for name, use_case in value.items()
+            if use_case.mode is DecisionMode.SHADOW and not USE_CASES[name].has_shadow
+        )
+        if shadowless:
+            raise ValueError(
+                f"Decision use case(s) with no shadow mode: {', '.join(shadowless)}. "
+                "Use 'off' or 'active'"
+            )
         return value
 
     @classmethod

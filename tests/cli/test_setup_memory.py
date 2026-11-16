@@ -446,16 +446,11 @@ class TestWhoDecidesWhatToRemember:
         default = FilesystemMemoryManager.model_fields["execution_mode"].default
         assert default.value == cfg.DEFAULT_MEMORY_MODE
 
-    def ask(self, current, answer, level="active"):
+    def ask(self, current, answer):
         buffer = io.StringIO()
         console = Console(file=buffer, width=200, force_terminal=False)
         with patch("builtins.input", side_effect=[answer]):
-            chosen = setup._ask_memory_decider(
-                console,
-                Theme.build(allow_animation=False),
-                current,
-                DecisionsChoice(level=level),
-            )
+            chosen = setup._ask_memory_decider(console, Theme.build(allow_animation=False), current)
         return chosen, buffer.getvalue()
 
     @pytest.fixture
@@ -468,9 +463,33 @@ class TestWhoDecidesWhatToRemember:
     def test_a_new_memory_opens_on_the_decision_model(self, numbered):
         assert self.ask(None, "")[0] == MemoryDecider.MODEL
 
-    def test_at_the_shadow_level_it_says_the_agent_still_decides(self, numbered):
-        _, shown = self.ask(None, "", level="shadow")
-        assert "the agent's model still decides" in shown
+    def test_the_shadow_level_does_not_decide_memory(self):
+        assert "memory" not in cfg.DECISION_LEVELS["shadow"]
+        assert not DecisionsChoice(level="shadow", base_url="http://d:1", model="m").decides_memory
+        assert DecisionsChoice(level="active", base_url="http://d:1", model="m").decides_memory
+
+    def test_at_the_shadow_level_it_is_not_asked(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(select_mod, "_interactive", lambda theme: False)
+        monkeypatch.setattr(
+            setup, "_choose_builtin_skills", lambda console, theme, current: current
+        )
+        monkeypatch.setattr(
+            setup,
+            "_ask_decisions",
+            lambda console, theme, current, suggested_url=None: DecisionsChoice(
+                level="shadow", base_url="http://d:1", model="m"
+            ),
+        )
+        for name in ("OPENAI_API_KEY", "VLLM_API_KEY", "LLM_API_KEY"):
+            monkeypatch.delenv(name, raising=False)
+        console = Console(file=io.StringIO(), width=100, force_terminal=False)
+        # provider, model, url, api key, max tokens, context window, memory: no "who decides"
+        answers = ["openai", "m", "", "", "", "", "global"]
+        with patch("builtins.input", side_effect=answers):
+            result = setup.run_setup(
+                console, Theme.build(allow_animation=False), path=tmp_path / "config.yaml"
+            )
+        assert manager_of(result)["execution_mode"] == "agentic"
 
     def test_in_the_wizard_it_follows_the_memory_question(self, tmp_path, monkeypatch):
         monkeypatch.setattr(select_mod, "_interactive", lambda theme: False)
@@ -559,6 +578,18 @@ class TestAddingAndRemovingTheDecisionModel:
         # No decider question: input() would run out of answers.
         second, shown = self.run(monkeypatch, path, self.OFF, ["global"])
         assert "decision_providers" not in second
+        assert manager_of(second)["execution_mode"] == "agentic"
+        assert "the agent saves memories itself" in shown
+
+    def test_moving_to_shadow_makes_the_memory_agentic(self, tmp_path, monkeypatch):
+        path = tmp_path / "config.yaml"
+        self.run(monkeypatch, path, self.ON, ["global", MemoryDecider.MODEL])
+
+        shadow = self.ON.model_copy(update={"level": "shadow"})
+        # No decider question: the shadow level does not decide memory.
+        second, shown = self.run(monkeypatch, path, shadow, ["global"])
+        assert second["decision_providers"]
+        assert "memory" not in second["agents"][0]["decisions"]
         assert manager_of(second)["execution_mode"] == "agentic"
         assert "the agent saves memories itself" in shown
 

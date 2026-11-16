@@ -289,7 +289,7 @@ class TestTheMemory:
         assert memory["execution_mode"] == "agentic"
         assert memory["recency_limit"] == 7
         printed = " ".join(str(c.args[0]) for c in console.print.call_args_list if c.args)
-        assert "without a decision model the agent saves memories itself" in printed
+        assert "the agent saves memories itself" in printed
 
 
 def _with_decisions() -> dict[str, Any]:
@@ -391,6 +391,6 @@ class TestTheDecisionModel:
 
         assert result is not None
         assert ask_decisions.call_count == 0
+        # Asked at all because the kept level ("active") decides memory.
         assert ask_decider.call_count == 1
-        assert ask_decider.call_args.args[3].level == "active"
         assert result["agents"][0]["memory_manager"]["execution_mode"] == "automatic"

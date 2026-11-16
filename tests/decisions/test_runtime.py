@@ -136,6 +136,18 @@ class TestAUseCaseDeclaresTheQualityOfNumberItNeeds:
         warnings = [r for r in caplog.records if "staying in shadow" in r.getMessage()]
         assert len(warnings) <= 1
 
+    def test_without_a_shadow_mode_a_backend_below_the_bar_is_off(self):
+        rt = DecisionRuntime(
+            Fake(provenance=Provenance.NONE),
+            {"memory": UseCasePolicy(DecisionMode.ACTIVE, 0.5)},
+        )
+        assert rt.mode("memory") is DecisionMode.OFF
+        assert not rt.enabled("memory")
+
+    def test_without_a_shadow_mode_shadow_is_off(self):
+        rt = DecisionRuntime(Fake(), {"memory": UseCasePolicy(DecisionMode.SHADOW, 0.5)})
+        assert rt.mode("memory") is DecisionMode.OFF
+
     def test_skills_are_happy_with_a_stated_backend(self):
         rt = DecisionRuntime(
             Fake(provenance=Provenance.STATED),

@@ -116,10 +116,10 @@ class TestTheVerdict:
         assert await decide(runtime(None), user="I am vegan", assistant="") is Verdict.UNDECIDED
 
     @pytest.mark.asyncio
-    async def test_shadow_asks_and_does_not_act(self):
+    async def test_shadow_is_off(self):
         rt = runtime(0.99, mode=DecisionMode.SHADOW)
         assert await decide(rt, user="I am vegan", assistant="") is Verdict.UNDECIDED
-        assert rt.provider.asked == 1
+        assert rt.provider.asked == 0
 
     @pytest.mark.asyncio
     async def test_off_does_not_ask(self):

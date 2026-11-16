@@ -10,11 +10,13 @@ With a decision model the two halves are split. The model answers the yes/no —
 single ``noul``, asked alone, on the turn's own exchange — and the LLM is called
 only after a yes, to write the fact. A confident no skips the LLM altogether.
 
-**Unknown is today's behaviour.** No runtime, the use case ``off`` or in
-``shadow``, a timeout, an answer that is not confident either way: all of them
+**Unknown is today's behaviour.** No runtime, the use case ``off``, a timeout, an answer that is not confident either way: all of them
 return :attr:`Verdict.UNDECIDED`, and the caller takes the path it took before
 this existed, the LLM deciding and writing together. A decision model can only
 replace that path, never break it.
+
+There is no ``shadow``: an answer nobody acts on would only add a request to
+every turn, so the use case is ``off`` or ``active`` (``UseCase.has_shadow``).
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from domyn.agents.core import ExecutionEventType
 from domyn.agents.decisions.models import noul
-from domyn.agents.decisions.runtime import USE_CASES, DecisionMode
+from domyn.agents.decisions.runtime import USE_CASES
 from domyn.agents.logger import get_logger
 
 if TYPE_CHECKING:
@@ -94,11 +96,9 @@ async def decide(
         elif answer.is_false(threshold, minimum=minimum):
             verdict = Verdict.SKIP
 
-    mode = runtime.mode(USE_CASE)
     get_logger().info(
-        f"decisions[memory]: mode={mode.value} value={answer.value} "
+        f"decisions[memory]: value={answer.value} "
         f"confidence={answer.confidence:.2f} verdict={verdict.value}"
-        + (" (shadow: not acted on)" if mode is DecisionMode.SHADOW else "")
     )
     return verdict
 

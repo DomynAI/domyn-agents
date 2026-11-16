@@ -8,7 +8,8 @@ Two rules are enforced here and nowhere else:
 
 **A use case declares the quality of probability it needs.** Asking for
 ``active`` with a backend whose numbers are not good enough does not raise and
-does not silently do it anyway: it logs once and stays in ``shadow``. The
+does not silently do it anyway: it logs once and stays in ``shadow`` (``off``
+for a use case that has no shadow mode). The
 minimum is in the code, not in the config, because it is a safety property and
 not a preference — see :data:`USE_CASES`.
 
@@ -61,6 +62,12 @@ class UseCase(NamedTuple):
     an unnecessary refusal the user can override, and those two should not need
     the same evidence. ``None`` means the use case has no cautious direction and
     ``requires`` governs everything."""
+    has_shadow: bool = True
+    """Whether ``shadow`` means anything here. Where it does not, ``shadow`` is
+    refused in a config file, and wherever the runtime would fall back to it
+    (an ``active`` use case on a backend below its bar, one built in code) the
+    use case is ``off`` instead: asking costs a request and records nothing a
+    caller needs."""
 
     @property
     def speaks_at(self) -> Provenance:
@@ -140,8 +147,10 @@ USE_CASES: dict[str, UseCase] = {
             "so a stated number is no worse than what it stands in for. Either "
             "answer is recoverable: a missed fact can be said again, a wrong one "
             "is listed by /memory and forgotten. 0.5 lets every known answer "
-            "decide; raise it to send the uncertain ones back to the LLM."
+            "decide; raise it to send the uncertain ones back to the LLM. No "
+            "shadow: unacted on, the answer only adds a request to every turn."
         ),
+        has_shadow=False,
     ),
 }
 
@@ -184,7 +193,8 @@ class DecisionRuntime:
 
         An ``active`` use case whose provider cannot produce good enough
         probabilities is reported as ``shadow``: it still measures, it just does
-        not act. Logged once per use case, not once per turn.
+        not act; one without a shadow mode (`UseCase.has_shadow`) is ``off``.
+        Logged once per use case, not once per turn.
         """
         policy = self._policies.get(use_case)
         if policy is None or policy.mode is DecisionMode.OFF:
@@ -208,19 +218,29 @@ class DecisionRuntime:
             return DecisionMode.OFF
 
         if policy.mode is DecisionMode.SHADOW:
+            if not spec.has_shadow:
+                self._warn_once(
+                    use_case, f"decisions: '{use_case}' has no shadow mode; it will not be asked"
+                )
+                return DecisionMode.OFF
             return DecisionMode.SHADOW
 
         if not self.provider.provenance.at_least(spec.speaks_at):
-            if use_case not in self._warned:
-                self._warned.add(use_case)
-                get_logger().warning(
-                    f"decisions: '{use_case}' is configured active but the "
-                    f"{self.provider.type_name} backend only provides "
-                    f"'{self.provider.provenance.value}' probabilities and this use case "
-                    f"needs at least '{spec.speaks_at.value}'; staying in shadow. {spec.why}"
-                )
-            return DecisionMode.SHADOW
+            fallback = DecisionMode.SHADOW if spec.has_shadow else DecisionMode.OFF
+            self._warn_once(
+                use_case,
+                f"decisions: '{use_case}' is configured active but the "
+                f"{self.provider.type_name} backend only provides "
+                f"'{self.provider.provenance.value}' probabilities and this use case "
+                f"needs at least '{spec.speaks_at.value}'; staying {fallback.value}. {spec.why}",
+            )
+            return fallback
         return DecisionMode.ACTIVE
+
+    def _warn_once(self, use_case: str, message: str) -> None:
+        if use_case not in self._warned:
+            self._warned.add(use_case)
+            get_logger().warning(message)
 
     def enabled(self, use_case: str) -> bool:
         """Whether it is worth building a state for this use case at all."""

@@ -98,6 +98,8 @@ Every use case is `off`, `shadow` or `active`, set separately.
 
 An `active` use case whose backend cannot produce good enough probabilities stays in `shadow` and says so once.
 
+`memory` is the exception: it has no `shadow` mode, since an answer nobody acts on would only add a request to every turn. `mode: shadow` on it is refused when the file is loaded, the wizard's `shadow` level leaves it off, and an `active` one on a backend below its bar is `off` rather than `shadow`.
+
 ## Confidence, and where the number came from
 
 Each use case has a `min_confidence` and an answer below it is ignored. The default differs per use case because the cost of being wrong does.

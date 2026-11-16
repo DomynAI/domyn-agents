@@ -773,11 +773,11 @@ CLI_DEFAULT_DECISION_PROVIDER_NAME = "decision_model"
 #: is what hands the gate over.
 DECISION_LEVELS: dict[str, dict[str, Any]] = {
     "no": {},
+    # No memory: it has no shadow mode (`UseCase.has_shadow`).
     "shadow": {
         "approvals": {"mode": "shadow"},
         "skills": {"mode": "shadow"},
         "instructions": {"mode": "shadow"},
-        "memory": {"mode": "shadow"},
     },
     "active": {
         "approvals": {"mode": "shadow"},
@@ -825,6 +825,12 @@ class DecisionsChoice(BaseModel):
     @property
     def enabled(self) -> bool:
         return self.level != "no" and bool(self.base_url) and bool(self.model)
+
+    @property
+    def decides_memory(self) -> bool:
+        """Whether the decision model decides what to remember at this level."""
+        memory = DECISION_LEVELS.get(self.level, {}).get("memory", {})
+        return self.enabled and memory.get("mode") == "active"
 
 
 def decision_url_default(provider_type: str, url: str | None) -> str | None:
@@ -1289,17 +1295,18 @@ def memory_loses_its_decider(
     decisions: DecisionsChoice | None,
     memory: MemoryChoice | None,
 ) -> bool:
-    """Whether this run removes the decision model that decides what to remember.
+    """Whether this run takes deciding what to remember away from the decision model.
 
-    ``automatic`` memory without a decision model falls back to the agent's model
-    deciding after every turn: an extra call each turn, and a setting the wizard
-    cannot offer. So when the run that removes the decision model keeps a memory the
+    ``automatic`` memory without a decision model deciding for it falls back to the
+    agent's model deciding after every turn: an extra call each turn, and a setting
+    the wizard cannot offer. So when the run that removes the decision model, or
+    picks a level where it does not decide memory (``shadow``), keeps a memory the
     decision model decided for, the memory becomes ``agentic`` (the agent's
     ``remember`` tool), as a memory set up without a decision model is. An
     ``automatic`` written by hand into a file with no decision model is left alone:
     nothing is being removed there.
     """
-    if decisions is None or decisions.enabled or memory is None or not memory.enabled:
+    if decisions is None or decisions.decides_memory or memory is None or not memory.enabled:
         return False
     if not (existing or {}).get("decision_providers"):
         return False

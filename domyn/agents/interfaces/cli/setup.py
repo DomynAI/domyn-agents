@@ -30,7 +30,6 @@ from typing import IO, TYPE_CHECKING, Any, cast
 import yaml
 
 from domyn.agents.agents.agent import MAX_AGENT_NAME_LENGTH
-from domyn.agents.decisions.runtime import DecisionMode
 from domyn.agents.instructions.discovery import AUTODISCOVERY_DIRS, find_instruction_files
 from domyn.agents.integrations.domyn_platform_sdk import (
     SDK_REQUIREMENT,
@@ -411,29 +410,23 @@ def _ask_memory(console: Console, theme: Theme, current: MemoryChoice) -> Memory
 
 
 def _ask_memory_decider(
-    console: Console, theme: Theme, current: MemoryDecider | None, decisions: DecisionsChoice
+    console: Console, theme: Theme, current: MemoryDecider | None
 ) -> MemoryDecider:
     """Ask who decides what the memory keeps: the agent, or the decision model.
 
-    Asked only when a memory and a decision model were both chosen. The answer's
+    Asked only when a memory was chosen and a decision model at a level that
+    decides memory (`DecisionsChoice.decides_memory`). The answer's
     `MemoryDecider.mode` is the memory manager's ``execution_mode``. Opens on what
     the file says, and on the decision model for a memory that is new.
     """
     options: list[str] = list(MemoryDecider)
-    descriptions: dict[str, str] = dict(MEMORY_DECIDER_BLURB)
-    level = DECISION_LEVELS.get(decisions.level, {}).get("memory", {}).get("mode")
-    if level == DecisionMode.SHADOW:
-        descriptions[MemoryDecider.MODEL] = (
-            "after each reply the decision model is asked and its answer recorded, but "
-            "at the shadow level the agent's model still decides what is kept"
-        )
     chosen = _select(
         console,
         theme,
         "who decides what to remember",
         options,
         current=current if current in options else MemoryDecider.MODEL,
-        descriptions=descriptions,
+        descriptions=dict(MEMORY_DECIDER_BLURB),
     )
     if chosen is None:
         raise KeyboardInterrupt
@@ -1875,8 +1868,8 @@ def run_setup(
     def say_if_memory_loses_its_decider(d: _Draft) -> None:
         if memory_loses_its_decider(existing, d.decisions, d.memory):
             console.print(
-                "  without a decision model the agent saves memories itself, "
-                "with its remember tool",
+                "  with no decision model deciding what to remember, the agent "
+                "saves memories itself, with its remember tool",
                 style=theme.style("meta"),
                 highlight=False,
             )
@@ -1899,16 +1892,13 @@ def run_setup(
         return current_decisions if d.keep_decisions else d.decisions
 
     def ask_memory_decider(d: _Draft) -> None:
-        decisions = decisions_after(d)
-        assert d.memory is not None and decisions is not None
-        decided_by = _ask_memory_decider(
-            console, theme, current_memory_from(existing).decided_by, decisions
-        )
+        assert d.memory is not None
+        decided_by = _ask_memory_decider(console, theme, current_memory_from(existing).decided_by)
         d.memory = d.memory.model_copy(update={"decided_by": decided_by})
 
     def asks_memory_decider(d: _Draft) -> bool:
         decisions = decisions_after(d)
-        return bool(d.memory and d.memory.enabled and decisions and decisions.enabled)
+        return bool(d.memory and d.memory.enabled and decisions and decisions.decides_memory)
 
     def asks_model(d: _Draft) -> bool:
         return not d.keep_model
