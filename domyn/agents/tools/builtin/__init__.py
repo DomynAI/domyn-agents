@@ -19,11 +19,11 @@ at construction, so a tool physically cannot reach outside it — the root is no
 an argument the model can pass.
 
 Where commands run is a separate axis, the
-:class:`~domyn.agents.tools.builtin.backends.CommandBackend`. Only the local one
-exists today; :func:`bundle` accepts one and returns it via :class:`BuiltinTools`
-so the caller can shut it down, because the backend that will eventually need
-shutting down is a container and finding the end of a session later, under
-pressure, is how teardown gets forgotten.
+:class:`~domyn.agents.tools.builtin.backends.CommandBackend`. Two ship: the local
+machine, and a Docker container (``backend: docker``, ``backends/docker/``).
+:func:`bundle` accepts one and returns it via :class:`BuiltinTools` so the caller
+can shut it down, because a container has to be removed and finding the end of a
+session later, under pressure, is how teardown gets forgotten.
 
 The ``browser`` bundle runs on that same backend — every browser command is a
 shell line — so it goes wherever the shell goes. It is known but never on by
@@ -44,6 +44,8 @@ from domyn.agents.tools.builtin.backends import (
     BackendUnavailableError,
     CommandBackend,
     CommandResult,
+    DockerBackend,
+    DockerBackendOptions,
     LocalBackend,
     build_backend,
 )
@@ -145,7 +147,7 @@ def bundle(
         workspace: An already-built workspace, when several bundles share one.
         backend: Where commands run — a backend, or a name to resolve. An
             unknown *backend* name raises, unlike an unknown bundle name:
-            handing back a local backend to someone who asked to be sandboxed
+            handing back a local backend to someone who asked for a container
             gives them the illusion of a boundary, which is worse than none.
         allowed_env: Extra environment variable names ``run_command``'s
             subprocess may see, beyond the fixed safe set. Only used when
@@ -167,13 +169,13 @@ def bundle(
     sessions: BrowserSessions | None = None
     for name in names:
         if name == "files":
-            tools.extend(file_tools(space))
+            tools.extend(file_tools(space, host=resolved))
         elif name == "shell":
             resolved = resolved or LocalBackend(space, allowed_env=allowed_env)
             tools.extend(shell_tools(space, backend=resolved))
         elif name == "browser":
-            # The same backend as the shell, so the browser is wherever the
-            # commands are — on this machine, or in the sandbox.
+            # The same backend as the shell, so the browser is wherever the commands are:
+            # in a container image, agent-browser and Chrome are there too.
             resolved = resolved or LocalBackend(space, allowed_env=allowed_env)
             browser_list, sessions = browser_tools(backend=resolved, options=browser)
             tools.extend(browser_list)
@@ -204,7 +206,10 @@ class BuiltinBundleConfig(BaseModel):
     name: str
     bundles: list[str] = PydanticField(default_factory=lambda: list(DEFAULT_BUNDLES))
     workspace: str | None = None
-    sandbox: str = "local"
+    backend: str = "auto"
+    """Where ``run_command`` runs: ``auto`` (a Docker container when Docker can be
+    used, else this machine, with a warning), ``docker`` (a container, or refuse to
+    start) or ``local`` (this machine)."""
     isolate_environment: bool = True
     allowed_env: list[str] = PydanticField(default_factory=list)
     """Extra environment variable names ``run_command``'s subprocess may see,
@@ -214,6 +219,8 @@ class BuiltinBundleConfig(BaseModel):
     here."""
     browser: BrowserOptions = PydanticField(default_factory=BrowserOptions)
     """Options for the ``browser`` bundle; ignored unless it is listed."""
+    docker: DockerBackendOptions = PydanticField(default_factory=DockerBackendOptions)
+    """Options for the Docker backend; ignored when ``backend`` is ``local``."""
 
     def build(
         self,
@@ -237,10 +244,11 @@ class BuiltinBundleConfig(BaseModel):
         """
         space = Workspace.at(self.workspace, also=list(extra_roots))
         backend = build_backend(
-            self.sandbox,
+            self.backend,
             space,
             isolate_environment=self.isolate_environment,
             allowed_env=self.allowed_env,
+            docker=self.docker,
         )
         return bundle(*self.bundles, workspace=space, backend=backend, browser=self.browser)
 
@@ -257,6 +265,8 @@ __all__ = [
     "BuiltinTools",
     "CommandBackend",
     "CommandResult",
+    "DockerBackend",
+    "DockerBackendOptions",
     "LocalBackend",
     "Workspace",
     "WorkspaceError",

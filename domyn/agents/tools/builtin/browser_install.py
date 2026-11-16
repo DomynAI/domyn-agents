@@ -6,8 +6,9 @@ shipped: the first browser tool call that finds none downloads Chrome for Testin
 (Google's channel for automation, the one ``agent-browser install`` uses) into
 ``~/.domyn/browsers/``, once, and the browser is told where it is.
 
-Only for commands that run on this machine. A sandbox backend would need the
-download inside the sandbox, which this module cannot do from here.
+Only for commands that run on this machine. A container backend's image has both
+programs already (``docker/docker-backend.Dockerfile``), with ``AGENT_BROWSER_EXECUTABLE_PATH``
+naming Chrome.
 """
 
 import os

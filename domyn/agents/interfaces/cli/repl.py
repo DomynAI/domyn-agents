@@ -92,6 +92,7 @@ from domyn.agents.planner_strategy.context_management.budget import (
 from domyn.agents.runner import PushResult, Runner
 from domyn.agents.skills import LocalDirSkillSource, SkillNotFoundError, SkillsRuntime
 from domyn.agents.skills.integration import attach_skills
+from domyn.agents.tools.builtin.backends.docker import DockerBackend
 
 if TYPE_CHECKING:
     from domyn.agents.conversation_manager import ConversationInfo
@@ -99,6 +100,12 @@ if TYPE_CHECKING:
 _T = TypeVar("_T")
 
 APPLICATION_NAME = "domyn-cli"
+
+_BACKEND_WARM_UP_WAIT_SECONDS = 60
+"""How long leaving a session waits for a backend still starting in the background. A
+start can take longer than this on a machine that has to pull an image first, but a
+person who exits should not wait on it: what is left is removed by the backend's own
+``close``, which takes each conversation's lock."""
 USER_ID = "local-user"
 
 
@@ -319,6 +326,9 @@ class Repl:
         reload: Callable[[], Awaitable[tuple[Any, dict[str, Any]]]] | None = None,
     ) -> None:
         self._agent = agent
+        # Tasks started in the background (the backend's container); held so they are
+        # not collected while they run.
+        self._background: set[asyncio.Future[Any]] = set()
         self._route_browser_notices()
         # What the exit hint puts before `--resume <id>`: the agent file too, when
         # the session was started from one.
@@ -418,7 +428,7 @@ class Repl:
             return await self._loop(initial_prompt)
         finally:
             # In a finally, not after the loop: the session can also end by
-            # exception or by Ctrl-C, and the thing this releases is a sandbox
+            # exception or by Ctrl-C, and the thing this releases is a container
             # container. A container leaked on every crash is a container that
             # is still running tomorrow.
             await self.close()
@@ -427,6 +437,11 @@ class Repl:
         """Release what the tools hold. Safe to call more than once."""
         await self._say_what_survives_us()
         self._say_where_to_find_us()
+        if self._background:
+            # A container being started in the background finishes first: cancelling
+            # it would not stop the `docker run` already sent, and it would then
+            # outlive the session.
+            await asyncio.wait(set(self._background), timeout=_BACKEND_WARM_UP_WAIT_SECONDS)
         await self._agent.close()
 
     def _say_where_to_find_us(self) -> None:
@@ -463,6 +478,15 @@ class Repl:
             return
         if not running:
             return
+        docker = self._docker()
+        if docker is not None and docker.destroys_on_close:
+            # In a container backend they live in the container, which goes with the session.
+            self._console.print(
+                f"  {running}, and will be stopped: the container they run in ends with this session.",
+                style=self._theme.style("warning"),
+                highlight=False,
+            )
+            return
         self._console.print(
             f"  {running} and will keep going after this session. "
             "Resume this conversation to follow them.",
@@ -482,6 +506,7 @@ class Repl:
                 style=self._theme.style("auto_mode"),
                 highlight=False,
             )
+        await self._prepare_backend()
 
         while True:
             # Drained before asking, so nobody is prompted for something they have
@@ -1030,7 +1055,10 @@ class Repl:
         if name == "/help":
             self._render_help()
         elif name == "/clear":
+            left = self._state.conversation_id
             self._state.reset_conversation()
+            await self._end_backend_conversation(left)
+            self._warm_backend()
             # The screen holds the conversation just left: kept, it would read as
             # part of the new one. rich's clear() leaves the scrollback, so ESC[3J
             # erases that too, after it: some terminals move the cleared screen
@@ -1116,7 +1144,10 @@ class Repl:
             if info is None:
                 return
 
+        left = self._state.conversation_id
         self._state.resume_conversation(info)
+        await self._end_backend_conversation(left)
+        self._warm_backend()
         # The screen holds the conversation that was left, and the one resumed
         # is about to be drawn in full: below it, the two would read as one.
         self._console.clear()
@@ -1441,6 +1472,7 @@ class Repl:
             attach_decisions(reloaded, decisions_runtime)
         self._agent = reloaded
         self._route_browser_notices()
+        self._warm_backend()
         # Written by this command: not a change for `_reload_if_changed` to redo.
         self._config_content = self._read_config()
 
@@ -1653,6 +1685,8 @@ class Repl:
             )
             return False
         self._agent, self._config = agent, raw
+        self._route_browser_notices()
+        self._warm_backend()
         if announce:
             self._say(f"  Reloaded {self._config_file}: it changed since the last message.")
         return True
@@ -1751,11 +1785,65 @@ class Repl:
         return resolve_transcriber(configured or {"type": "local"})
 
     def _route_browser_notices(self) -> None:
-        """Have the browser tools say, on screen, what they download on first use."""
+        """Have the browser tools and the command backend say, on screen, what they
+        download or start on first use."""
         for built in getattr(self._agent, "builtin_tools", None) or []:
             browser = getattr(built, "browser", None)
             if browser is not None:
                 browser.on_notice = self._say
+            backend = getattr(built, "backend", None)
+            if isinstance(backend, DockerBackend):
+                backend.on_notice = self._say
+
+    def _docker(self) -> DockerBackend | None:
+        """The command backend, when it is or may become a container (not
+        this machine): an ``auto`` one decides when it is first prepared."""
+        backend = self._backend()
+        return backend if isinstance(backend, DockerBackend) else None
+
+    async def _prepare_backend(self) -> None:
+        """Get the backend ready before the first prompt, saying what it is doing.
+
+        The slow part — pulling or building the image — happens once, here, under a
+        spinner and a message, rather than inside the first command the user asks
+        for. The container itself is made in the background.
+        """
+        backend = self._docker()
+        if backend is None:
+            return
+        try:
+            with self._console.status("Preparing the backend…", spinner="dots"):
+                await backend.prepare()
+        except Exception as exc:
+            self._console.print(
+                f"  Backend unavailable: {exc}",
+                style=self._theme.style("warning"),
+                highlight=False,
+            )
+            return
+        self._warm_backend()
+
+    def _warm_backend(self) -> None:
+        """Start the conversation's container in the background."""
+        backend = self._docker()
+        if backend is None:
+            return
+        task = asyncio.ensure_future(backend.warm_up(self._state.conversation_id))
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+    async def _end_backend_conversation(self, conversation_id: str) -> None:
+        """A conversation is over: stop and destroy what it ran in."""
+        backend = self._docker()
+        if backend is None:
+            return
+        try:
+            await backend.end_conversation(conversation_id)
+        except Exception as exc:
+            get_logger().warning(
+                f"could not end the backend of a conversation: {type(exc).__name__}"
+            )
+            get_logger().debug(f"end_conversation detail: {exc}")
 
     def _say(self, message: str) -> None:
         self._console.print(message, style=self._theme.style("meta"), highlight=False)
