@@ -84,7 +84,7 @@ Every event is a `BaseEvent`. The fields an interface uses:
 | `action` | For tool and agent events, the call: `name`, `parameters`, `thought` (why the model made it), `call_id`, and on `tool_end` the `observation`, the result the model reads. |
 | `is_partial` | `True` for a piece of a longer output that more pieces will follow. |
 | `error_code`, `error_message` | Set on errors. |
-| `metadata` | Extra data, depending on the type: token counts on `llm_start`, the approval subject on `tool_needs_feedback`. |
+| `metadata` | Extra data, depending on the type: token counts on `llm_start`, what the call cost on `llm_end` (`token_usage`), the approval subject on `tool_needs_feedback`. |
 | `conversation_id`, `turn_id`, `interaction_id`, `event_id`, `timestamp` | Identifiers, for storing or correlating events. |
 
 ## Showing a turn to a user

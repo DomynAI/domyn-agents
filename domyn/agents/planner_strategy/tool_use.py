@@ -48,7 +48,15 @@ from domyn.agents.core import (
 )
 from domyn.agents.core.utils import extract_parts
 from domyn.agents.llm import DelegateLLMProvider
-from domyn.agents.llm.base import LLMMessage, LLMResponse, LLMToolCall, is_context_overflow
+from domyn.agents.llm.base import (
+    LLMMessage,
+    LLMResponse,
+    LLMToolCall,
+    TokenUsage,
+    add_token_usage,
+    is_context_overflow,
+    token_usage_metadata,
+)
 from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.base import BasePlannerStrategy
 from domyn.agents.planner_strategy.context_injection import (
@@ -549,6 +557,8 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
             # ── LLM invocation ────────────────────────────────────────────────
             response: LLMResponse | None = None
             parsed_tool_args: dict[str, dict[str, Any]] = {}
+            # What this LLM_END covers: every call made for it, retries included.
+            token_usage: TokenUsage | None = None
 
             if isinstance(agent.llm_provider, DelegateLLMProvider):
                 # Bidirectional: runner executes LLM, sends back LLMResponse via asend()
@@ -571,6 +581,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                     event_type=ExecutionEventType.LLM_END,
                     content=[Part(text="LLM response received via delegate")],
                     author=agent.name,
+                    metadata=token_usage_metadata(add_token_usage(None, response)),
                 )
                 parsed_tool_args, _ = _parse_tool_call_args(response.tool_calls)
             else:
@@ -632,6 +643,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                                 tools=tool_defs if tool_defs else None,
                             )
 
+                        token_usage = add_token_usage(token_usage, response)
                         if not response.content and not response.tool_calls:
                             logger.error("LLM response has no content and no tool calls")
                             messages.append(
@@ -724,6 +736,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                     event_type=ExecutionEventType.LLM_END,
                     content=[Part(text="LLM response received")],
                     author=agent.name,
+                    metadata=token_usage_metadata(token_usage),
                 )
 
                 if gave_up_on_malformed_json:

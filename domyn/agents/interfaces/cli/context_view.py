@@ -34,7 +34,7 @@ ATTENTION_FRACTION = 0.70
 WARNING_FRACTION = 0.90
 
 
-def _thousands(tokens: int) -> str:
+def thousands(tokens: int) -> str:
     """Tokens in readable form: nobody reads 184213 as a quantity."""
     if tokens < 1_000:
         return str(tokens)
@@ -70,12 +70,12 @@ def indicator(usage: ContextUsage | None) -> tuple[str, str] | None:
     remaining = usage.tokens_until_threshold
     if remaining is not None:
         # A compaction will happen: the useful thing is the distance to it.
-        text = f"context {share} · compaction in ~{_thousands(remaining)} tokens"
+        text = f"context {share} · compaction in ~{thousands(remaining)} tokens"
     else:
         # No compaction coming, so no distance to promise. The share remains,
         # which is what needs to be known anyway: this window will run out and
         # the request will be rejected.
-        text = f"context {share} of {_thousands(usage.context_window or 0)}"
+        text = f"context {share} of {thousands(usage.context_window or 0)}"
 
     return text, "warning" if fraction >= WARNING_FRACTION else "meta"
 
@@ -118,7 +118,7 @@ def render(
     for label, tokens in rows:
         share = f"{tokens / estimated:.0%}" if estimated else "—"
         console.print(
-            f"   {label:<22} {_thousands(tokens):>7}  {share:>4}",
+            f"   {label:<22} {thousands(tokens):>7}  {share:>4}",
             style=meta,
             highlight=False,
         )
@@ -127,12 +127,12 @@ def render(
         # the rows above are estimates, the total is anchored to the count.
         sign = "+" if usage.correction_tokens > 0 else "-"
         console.print(
-            f"   {'measured correction':<22} {sign + _thousands(abs(usage.correction_tokens)):>7}",
+            f"   {'measured correction':<22} {sign + thousands(abs(usage.correction_tokens)):>7}",
             style=meta,
             highlight=False,
         )
     console.print(
-        f"   {'total':<22} {_thousands(usage.total_tokens):>7}",
+        f"   {'total':<22} {thousands(usage.total_tokens):>7}",
         style=meta,
         highlight=False,
     )
@@ -140,14 +140,14 @@ def render(
     if usage.context_window:
         fraction = usage.fraction_used or 0.0
         console.print(
-            f"   {'model window':<22} {_thousands(usage.context_window):>7}  {fraction:>4.0%} used",
+            f"   {'model window':<22} {thousands(usage.context_window):>7}  {fraction:>4.0%} used",
             style=theme.style("warning" if fraction >= WARNING_FRACTION else meta),
             highlight=False,
         )
         remaining = usage.tokens_until_threshold
         if remaining is not None:
             console.print(
-                f"   {'until compaction':<22} {_thousands(remaining):>7}   ({usage.strategy})",
+                f"   {'until compaction':<22} {thousands(remaining):>7}   ({usage.strategy})",
                 style=meta,
                 highlight=False,
             )

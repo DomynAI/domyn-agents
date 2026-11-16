@@ -8,6 +8,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, model_validator
 
+from domyn.agents.core import TOKEN_USAGE_METADATA_KEY
 from domyn.agents.llm.context_window import models_url, window_from_models_listing
 
 
@@ -267,22 +268,156 @@ def reported_prompt_tokens(usage: dict[str, Any] | None) -> int | None:
     includes cached tokens, and so does `input_tokens` on OpenAI's Responses API.
     Anthropic's `input_tokens` does not: with a cache in play it is only the
     uncached tail — measured, 4 tokens of a prompt of 8,561 — and the two cache
-    counts are the rest.
+    counts are the rest. The rule itself is `TokenUsage.from_provider`'s.
+
+    A count of 0 is `None` here: a prompt has tokens, so 0 says nothing about its
+    size, and the context-window anchor (`Compactor.observe`) must not be set from it.
     """
-    if not usage:
-        return None
-    if prompt := _token_count(usage.get("prompt_tokens")):
-        return prompt
-    total = sum(
-        _token_count(usage.get(key))
-        for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+    tokens = TokenUsage.from_provider(usage)
+    return (tokens.input_tokens or None) if tokens is not None else None
+
+
+def _reported_count(usage: dict[str, Any], *paths: tuple[str, ...]) -> int | None:
+    """The first count one of `paths` leads to in `usage`, `None` when none does.
+
+    A path is a key, or keys into nested dicts (`prompt_tokens_details.cached_tokens`).
+    Zero is a count: a provider saying "no cached tokens" said something. Anything
+    that is not a non-negative `int` (a `bool`, a string, a dict) is not one.
+    """
+    for path in paths:
+        value: Any = usage
+        for key in path:
+            value = value.get(key) if isinstance(value, dict) else None
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+    return None
+
+
+_PROMPT_PART_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+"""The prompt's parts, when a provider reports no `prompt_tokens`; summed, the whole prompt.
+
+Anthropic sends all three: its `input_tokens` is only the uncached part. OpenAI's
+Responses API sends `input_tokens` alone, which already includes the cache, and keeps
+its cache count under `input_tokens_details`, which this sum does not read.
+"""
+
+
+def _add_counts(a: int | None, b: int | None) -> int | None:
+    """A sum in which a count nobody reported is absent rather than zero."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a + b
+
+
+class TokenUsage(BaseModel):
+    """What one or more LLM calls cost, in one shape whatever the provider.
+
+    Carried on `LLM_END` under `metadata["token_usage"]` (`as_metadata`). Every
+    provider reports usage in its own format: chat completions (vLLM, OpenAI,
+    Cerebras, OpenRouter, Domyn) as `prompt_tokens` / `completion_tokens` with
+    `*_tokens_details`, OpenAI's Responses API as `input_tokens` / `output_tokens`
+    with `*_tokens_details`, Anthropic as `input_tokens` — the uncached part only —
+    beside its two cache counts. A field is `None` when the provider did not report
+    it, never a guessed zero.
+    """
+
+    input_tokens: int | None = Field(
+        default=None, description="The whole prompt, cached tokens included"
     )
-    return total or None
+    output_tokens: int | None = Field(
+        default=None, description="The whole completion, reasoning tokens included"
+    )
+    total_tokens: int | None = Field(
+        default=None, description="As the provider reported it, else input + output"
+    )
+    cache_read_tokens: int | None = Field(
+        default=None, description="Prompt tokens read from the provider's cache"
+    )
+    cache_write_tokens: int | None = Field(
+        default=None, description="Prompt tokens written to the provider's cache"
+    )
+    reasoning_tokens: int | None = Field(
+        default=None, description="Completion tokens spent on reasoning"
+    )
+    requests: int = Field(default=1, description="LLM calls these counts add up")
+
+    @classmethod
+    def from_provider(cls, usage: dict[str, Any] | None) -> "TokenUsage | None":
+        """Normalize a provider's `usage`; `None` when it reports no count at all."""
+        if not isinstance(usage, dict) or not usage:
+            return None
+        # `prompt_tokens` (chat completions) is already the whole prompt, cache
+        # included, so it comes first: a gateway fronting Claude (LiteLLM) sends it
+        # beside Anthropic's cache counts, and adding those would count the cache twice.
+        input_tokens = _reported_count(usage, ("prompt_tokens",))
+        if input_tokens is None:
+            parts = [
+                count
+                for key in _PROMPT_PART_KEYS
+                if (count := _reported_count(usage, (key,))) is not None
+            ]
+            input_tokens = sum(parts) if parts else None
+        output_tokens = _reported_count(usage, ("completion_tokens",), ("output_tokens",))
+        total_tokens = _reported_count(usage, ("total_tokens",))
+        if total_tokens is None and input_tokens is not None and output_tokens is not None:
+            total_tokens = input_tokens + output_tokens
+        tokens = cls(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            cache_read_tokens=_reported_count(
+                usage,
+                ("cache_read_input_tokens",),
+                ("prompt_tokens_details", "cached_tokens"),
+                ("input_tokens_details", "cached_tokens"),
+            ),
+            cache_write_tokens=_reported_count(
+                usage,
+                ("cache_creation_input_tokens",),
+                ("prompt_tokens_details", "cache_write_tokens"),
+                ("input_tokens_details", "cache_write_tokens"),
+            ),
+            reasoning_tokens=_reported_count(
+                usage,
+                ("completion_tokens_details", "reasoning_tokens"),
+                ("output_tokens_details", "reasoning_tokens"),
+                ("reasoning_tokens",),
+            ),
+        )
+        counts = tokens.model_dump(exclude={"requests"}, exclude_none=True)
+        return tokens if counts else None
+
+    def __add__(self, other: "TokenUsage") -> "TokenUsage":
+        return TokenUsage(
+            input_tokens=_add_counts(self.input_tokens, other.input_tokens),
+            output_tokens=_add_counts(self.output_tokens, other.output_tokens),
+            total_tokens=_add_counts(self.total_tokens, other.total_tokens),
+            cache_read_tokens=_add_counts(self.cache_read_tokens, other.cache_read_tokens),
+            cache_write_tokens=_add_counts(self.cache_write_tokens, other.cache_write_tokens),
+            reasoning_tokens=_add_counts(self.reasoning_tokens, other.reasoning_tokens),
+            requests=self.requests + other.requests,
+        )
+
+    def as_metadata(self) -> dict[str, int]:
+        """The fields the provider reported, for an event's metadata."""
+        return self.model_dump(exclude_none=True)
 
 
-def _token_count(value: Any) -> int:
-    """A positive count, else 0. `bool` is an `int`, and is not a count."""
-    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+def add_token_usage(total: TokenUsage | None, response: "LLMResponse | None") -> TokenUsage | None:
+    """`total` plus what `response` reports; unchanged when it reports nothing."""
+    usage = TokenUsage.from_provider(response.usage if response is not None else None)
+    if usage is None:
+        return total
+    return usage if total is None else total + usage
+
+
+def token_usage_metadata(usage: TokenUsage | None) -> dict[str, Any]:
+    """`LLM_END` metadata for `usage`, empty when nothing was reported."""
+    if usage is None:
+        return {}
+    return {TOKEN_USAGE_METADATA_KEY: usage.as_metadata()}
 
 
 class BaseLLMProvider(BaseModel, ABC):
