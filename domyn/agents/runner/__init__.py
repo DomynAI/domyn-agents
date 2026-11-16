@@ -3647,6 +3647,10 @@ class Runner:
                 if isinstance(manager, ContextManager)
                 else None
             ),
+            # The call being executed, as the model made it (its `thought`
+            # included). A delegate tool (`DelegateTool`) forwards its own
+            # TOOL_START and has nothing else to take the thought from.
+            "tool_action": event.action,
         }
         """Execute a streamable tool and yield events."""
         tool_result: ToolResult | None = None
