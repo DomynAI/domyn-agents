@@ -143,35 +143,83 @@ def repair_control_characters(raw: str) -> str | None:
 
 
 def tool_batches(
-    agent: Any, tool_calls: list[LLMToolCall], handoffs: Collection[str] = ()
+    agent: Any,
+    tool_calls: list[LLMToolCall],
+    handoffs: Collection[str] = (),
+    *,
+    parallel_handoffs: bool = True,
+    parallel_tools: bool = True,
+    step_enders: Collection[str] = (),
 ) -> dict[str, dict[str, Any]]:
     """The ``METADATA_TOOL_BATCH`` of each call that belongs to a batch, by call id.
 
-    A batch is a run of two or more consecutive calls to tools the agent has: those
-    the planner yields one ``TOOL_START`` after another, with nothing in between
-    that ends or diverts the step (a hand-off, STOP, FORWARD_VERBATIM, an unknown
-    tool). The runner holds them until the last and runs them together; a call
-    outside any batch is run on arrival, as before. Calls with no id cannot be told
-    apart, so a response with one is not batched at all.
+    A batch is a run of two or more consecutive calls the planner yields one after
+    another, with nothing in between that ends the step (STOP, a question to the
+    user, FORWARD_VERBATIM: ``step_enders``). The runner holds them until the last
+    and runs them; a call outside any batch is run on arrival, as before. Calls
+    with no id cannot be told apart, so a response with one is not batched at all.
 
-    ``handoffs`` names the sub-agents that may join a batch, as their ``AGENT_CALL``:
-    given only under ``parallel_handoffs``, so without it a hand-off still ends one.
+    ``handoffs`` names the sub-agents the agent may call. A hand-off ends the
+    planner's step, so a call after one that is not in a batch with it is never
+    yielded, and the model is never told it did not run. Two kinds of batch keep
+    every call of a response that names a sub-agent:
+
+    * with ``parallel_handoffs``, the whole run is one batch and its sub-agents
+      run at the same time, like its tools;
+    * without it, the run from the first hand-off on is a batch marked
+      ``sequential``: its calls run one at a time, in order, each sub-agent to its
+      end before the next call starts. What comes before that hand-off is
+      batched as it always was (``parallel_tools``).
+
+    In a run with a sub-agent, a call to a tool the agent does not have joins it
+    too (the runner answers it as not found): it would otherwise split the run,
+    and what followed it would be lost. Without one it ends a run, as before.
     """
     if any(not tc.id for tc in tool_calls):
         return {}
-    runs: list[list[str]] = [[]]
-    for tc in tool_calls:
-        if agent.get_tool_by_name(tc.function.name) or tc.function.name in handoffs:
-            runs[-1].append(tc.id)
+
+    def kind(tc: LLMToolCall) -> str:
+        name = tc.function.name
+        if agent.get_tool_by_name(name):
+            return "tool"
+        if name in handoffs:
+            return "agent"
+        if name in step_enders:
+            return "end"
+        return "unknown"
+
+    kinds = [kind(tc) for tc in tool_calls]
+    names_an_agent = "agent" in kinds
+    runs: list[list[int]] = [[]]
+    for position, call_kind in enumerate(kinds):
+        if call_kind in ("tool", "agent") or (call_kind == "unknown" and names_an_agent):
+            runs[-1].append(position)
         elif runs[-1]:
             runs.append([])
+
     batches: dict[str, dict[str, Any]] = {}
-    for run in runs:
+
+    def stamp(run: list[int], sequential: bool = False) -> None:
         if len(run) < 2:
-            continue
+            return
         batch_id = uuid.uuid4().hex
-        for index, call_id in enumerate(run):
-            batches[call_id] = {"id": batch_id, "index": index, "size": len(run)}
+        for index, position in enumerate(run):
+            batches[tool_calls[position].id] = {
+                "id": batch_id,
+                "index": index,
+                "size": len(run),
+                **({"sequential": True} if sequential else {}),
+            }
+
+    for run in runs:
+        first_agent = next((i for i, p in enumerate(run) if kinds[p] == "agent"), None)
+        if first_agent is None or parallel_handoffs:
+            if parallel_tools:
+                stamp(run)
+            continue
+        if parallel_tools:
+            stamp(run[:first_agent])
+        stamp(run[first_agent:], sequential=True)
     return batches
 
 
@@ -473,14 +521,22 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
         self, agent: Any, tool_calls: list[LLMToolCall], context: InteractionContext
     ) -> dict[str, dict[str, Any]]:
         """``tool_batches`` for this planner's options, shared by both loops."""
-        if not self.parallel_tool_calls:
-            return {}
-        handoffs = (
-            {a.name for a in context.handoff_targets_description}
-            if self.parallel_handoffs
-            else set()
+        step_enders = set()
+        if self.use_stop:
+            step_enders |= {
+                self.context_manager.stop_tool_name,
+                self.context_manager.ask_user_tool_name,
+            }
+        if self.forward_verbatim_enabled:
+            step_enders.add(self.context_manager.forward_verbatim_tool_name)
+        return tool_batches(
+            agent,
+            tool_calls,
+            {a.name for a in context.handoff_targets_description},
+            parallel_handoffs=self.parallel_handoffs,
+            parallel_tools=self.parallel_tool_calls,
+            step_enders=step_enders,
         )
-        return tool_batches(agent, tool_calls, handoffs)
 
     @field_validator("context_manager", mode="wrap")
     @classmethod
@@ -1001,6 +1057,16 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             parameters=args,
                             observation=f"Tool '{tool_name}' not found",
                         )
+                        if tool_call.id in batches:
+                            # In a batch the runner answers it, after the last call
+                            # of the batch: a result here would split the response.
+                            yield BaseEvent(
+                                event_type=ExecutionEventType.TOOL_START,
+                                author=agent.name,
+                                action=action,
+                                metadata={METADATA_TOOL_BATCH: batches[tool_call.id]},
+                            )
+                            continue
                         yield BaseEvent(
                             event_type=ExecutionEventType.TOOL_START,
                             author=agent.name,

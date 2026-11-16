@@ -8,7 +8,8 @@
   and the caller resumes once the last has ended — after a restart too.
 - A new message instead of the answer closes what had not ended, so the caller's
   next request still has a result for every call it made.
-- Off, a response naming several runs the first only, as a hand-off always did.
+- Off, a response naming several runs them one after the other, each to its end;
+  one naming a single sub-agent and nothing else is a hand-off, as it always was.
 """
 
 # No `from __future__ import annotations`: builds real agents and tools.
@@ -31,6 +32,7 @@ from domyn.agents.conversation_manager import (
 )
 from domyn.agents.core import (
     METADATA_BRANCH,
+    METADATA_TOOL_BATCH,
     ApprovalType,
     BaseEvent,
     ExecutionEventType,
@@ -1207,15 +1209,173 @@ class TestAMessageInsteadOfTheAnswer:
         assert "never mind" in " ".join(str(m.content or "") for m in request)
 
 
-class TestOffIsAsBefore:
+def _look_tool(log: list[str]) -> FunctionTool:
+    async def look(what: str) -> str:
+        """Look something up.
+
+        Args:
+            what: the thing.
+        """
+        log.append(f"look {what}")
+        return f"looked at {what}"
+
+    return FunctionTool(func=look)
+
+
+def _caller(
+    planner: str,
+    calls: list[tuple[str, str]],
+    parallel: bool,
+    log: list[str],
+    alpha_writes: bool = False,
+) -> tuple[Agent, _Script]:
+    """A caller with a tool of its own (`look`) whose first response makes ``calls``."""
+    main = _Script(label="main", log=log, replies=[calls, "Done."])
+    subs = [
+        _sub("Alpha", planner, log, delay=0.2, writes=alpha_writes)[0],
+        _sub("Beta", planner, log, delay=0.2)[0],
+    ]
+    root = Agent(
+        name="MainAgent",
+        description="the agent",
+        instruction="delegate",
+        llm_provider=main,
+        planner=_planner(planner, parallel_handoffs=parallel),
+        sub_agents=subs,
+        tools=[_look_tool(log)],
+    )
+    return root, main
+
+
+def _every_call_answered(main: _Script, request: int) -> bool:
+    return sorted(main.calls(request)) == sorted(main.answered(request))
+
+
+ALPHA = ("Alpha", '{"task": "find a"}')
+BETA = ("Beta", '{"task": "find b"}')
+LOOK = ("look", '{"what": "x"}')
+NOPE = ("nope", "{}")
+
+
+class TestNoCallOfAResponseIsDropped:
+    """Every call of a response that names a sub-agent runs, and the caller's next
+    request has a result for each: a call after a hand-off used to be dropped, with
+    nothing telling the model it never ran."""
+
     @pytest.mark.parametrize("planner", PLANNERS)
     @pytest.mark.asyncio
-    async def test_only_the_first_sub_agent_runs(self, planner: str) -> None:
-        root, _, _ = _team(planner, parallel=False)
+    async def test_off_the_sub_agents_run_one_after_the_other(self, planner: str) -> None:
+        log: list[str] = []
+        root, main = _caller(planner, [ALPHA, BETA], parallel=False, log=log)
 
-        events = await _run(Runner(), root, f"c_off_{planner}")
+        events = await _run(Runner(), root, f"c_off_both_{planner}")
 
-        assert _of(events, ExecutionEventType.AGENT_START) == ["Alpha"]
+        assert _of(events, ExecutionEventType.AGENT_START) == ["Alpha", "Beta"]
+        assert log.index("end Alpha") < log.index("start Beta")
+        assert main.calls(1) == ["main_1_0", "main_1_1"]
+        assert _every_call_answered(main, 1)
+        assert _answered_by_main(events)
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_off_a_tool_after_a_sub_agent_runs_once_it_has_ended(self, planner: str) -> None:
+        log: list[str] = []
+        root, main = _caller(planner, [ALPHA, LOOK], parallel=False, log=log)
+
+        await _run(Runner(), root, f"c_off_tool_{planner}")
+
+        assert log.index("end Alpha") < log.index("look x")
+        assert _every_call_answered(main, 1)
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_off_one_at_a_time_has_no_depth_limit(self, planner: str) -> None:
+        root, main = _caller(planner, [ALPHA, BETA], parallel=False, log=[])
+
+        events = await _run(Runner(max_agent_depth=0), root, f"c_off_depth_{planner}")
+
+        assert _of(events, ExecutionEventType.AGENT_START) == ["Alpha", "Beta"]
+        assert _every_call_answered(main, 1)
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_off_one_sub_agent_alone_is_a_hand_off_as_before(self, planner: str) -> None:
+        root, main = _caller(planner, [ALPHA], parallel=False, log=[])
+
+        events = await _run(Runner(), root, f"c_off_one_{planner}")
+
+        [call] = [e for e in events if e.event_type == ExecutionEventType.AGENT_CALL]
+        assert METADATA_TOOL_BATCH not in call.metadata
+        assert _every_call_answered(main, 1)
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_off_the_calls_after_a_paused_sub_agent_wait_for_it(self, planner: str) -> None:
+        log: list[str] = []
+        root, main = _caller(planner, [ALPHA, BETA], parallel=False, log=log, alpha_writes=True)
+        runner = Runner()
+        conversation = f"c_off_pause_{planner}"
+
+        first = await _run(runner, root, conversation)
+        assert _of(first, ExecutionEventType.AGENT_START) == ["Alpha"]
+        assert "start Beta" not in log
+
+        second = await _run(runner, root, conversation, _approve())
+
+        assert "write alpha.txt" in log
+        assert log.index("write alpha.txt") < log.index("start Beta")
+        assert _of(second, ExecutionEventType.AGENT_START) == ["Beta"]
+        assert _every_call_answered(main, 1)
+        assert _answered_by_main(second)
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_on_a_tool_it_lacks_does_not_split_the_sub_agents(self, planner: str) -> None:
+        log: list[str] = []
+        root, main = _caller(planner, [ALPHA, NOPE, BETA], parallel=True, log=log)
+
+        events = await _run(Runner(), root, f"c_on_nope_{planner}")
+
+        assert _of(events, ExecutionEventType.AGENT_START) == ["Alpha", "Beta"]
+        assert log.index("start Beta") < log.index("end Alpha")
+        assert _every_call_answered(main, 1)
+        [result] = [m for m in main.shown[1] if m.tool_call_id == "main_1_1"]
+        assert "not found" in str(result.content)
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_on_the_calls_after_the_sub_agents_run_with_them(self, planner: str) -> None:
+        log: list[str] = []
+        root, main = _caller(planner, [ALPHA, BETA, NOPE, LOOK], parallel=True, log=log)
+
+        await _run(Runner(), root, f"c_on_after_{planner}")
+
+        assert "look x" in log
+        assert main.calls(1) == ["main_1_0", "main_1_1", "main_1_2", "main_1_3"]
+        assert _every_call_answered(main, 1)
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_a_tool_it_lacks_among_tools_only_is_answered_as_before(
+        self, planner: str
+    ) -> None:
+        log: list[str] = []
+        root, main = _caller(planner, [LOOK, NOPE, ("look", '{"what": "y"}')], True, log)
+
+        runner = Runner()
+        conversation = f"c_tools_nope_{planner}"
+        await _run(runner, root, conversation)
+
+        info = await runner.conversation_manager.get_conversation(APP, USER, conversation)
+        assert info is not None
+        [nope] = [
+            e
+            for e in info.events_history
+            if e.event_type == ExecutionEventType.TOOL_START and e.action.name == "nope"
+        ]
+        assert METADATA_TOOL_BATCH not in nope.metadata
+        assert {"look x", "look y"} <= set(log)
+        assert _every_call_answered(main, 1)
 
 
 class TestWhatRefusesIt:

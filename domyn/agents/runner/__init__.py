@@ -3263,7 +3263,10 @@ class Runner:
         record = branch_of(batch, action.call_id)
         if record is None:
             return
-        if state.depth >= self.max_agent_depth:
+        # The limit is on sub-agents running at once; one at a time (without
+        # `parallel_handoffs`) is a chain of hand-offs, which has none.
+        sequential = ((call.metadata or {}).get(METADATA_TOOL_BATCH) or {}).get("sequential")
+        if state.depth >= self.max_agent_depth and not sequential:
             record["status"] = DONE
             reason = f"sub-agents run in parallel at most {self.max_agent_depth} levels deep."
             for closed in await self._close_tool_calls([call], state, context, reason):
@@ -3515,40 +3518,55 @@ class Runner:
         TOOL_END/TOOL_ERROR, stored already; ``"event"`` for everything else."""
         group: list[tuple[BaseEvent, FunctionTool | DelegateTool | None]] = []
         for position, call in enumerate(calls):
+            batch_of_call = (call.metadata or {}).get(METADATA_TOOL_BATCH) or {}
+            # A batch without `parallel_handoffs` (`tool_batches`): one call at a time.
+            alone = bool(batch_of_call.get("sequential"))
             if call.event_type == ExecutionEventType.AGENT_CALL and isinstance(
                 call.action, AgentAction
             ):
                 # A sub-agent of a batch runs with the calls needing no approval:
                 # what it does that needs one is asked inside it.
                 group.append((call, None))
+                if alone:
+                    async for item in self._flush_group(
+                        group, calls[position + 1 :], state, context, outcome
+                    ):
+                        yield item
+                    group = []
+                    if outcome.paused or not outcome.should_continue:
+                        return
                 continue
             if not isinstance(call.action, ToolAction):
                 continue
             tool: FunctionTool | DelegateTool | None = state.current_agent.get_tool_by_name(
                 call.action.name
             )
+            if tool is None and batch_of_call:
+                # A tool the agent does not have, among sub-agents (`tool_batches`): its
+                # answer goes with the others, and the calls around it run as if it
+                # were not there.
+                yield "event", call
+                yield "result", await self._tool_not_found(call, state, context)
+                continue
             gated = tool is not None and (
                 bool(tool.approval_type) or (isinstance(tool, MCPTool) and tool.use_oauth)
             )
             if tool is not None and not gated:
                 group.append((call, tool))
+                if alone:
+                    async for item in self._flush_group(
+                        group, calls[position + 1 :], state, context, outcome
+                    ):
+                        yield item
+                    group = []
+                    if outcome.paused or not outcome.should_continue:
+                        return
                 continue
 
-            async for item in self._run_tool_group(group, state, context, outcome):
+            async for item in self._flush_group(group, calls[position:], state, context, outcome):
                 yield item
             group = []
-            if outcome.paused:
-                # A sub-agent waits for an answer: the calls from here on run once
-                # every branch waiting has returned (`_next_waiting_branch`).
-                waiting = (context.state.get(WAITING_BRANCHES_KEY) or {}).get(
-                    context.interaction_id
-                )
-                if waiting is not None:
-                    waiting["held"] = [c.model_dump(mode="json") for c in calls[position:]]
-                    await self._write_conversation_state(state, context)
-                return
-            if not outcome.should_continue:
-                await self._close_tool_calls(calls[position:], state, context, _STOPPED)
+            if outcome.paused or not outcome.should_continue:
                 return
 
             if tool is None:
@@ -3610,6 +3628,51 @@ class Runner:
 
         async for item in self._run_tool_group(group, state, context, outcome):
             yield item
+
+    async def _flush_group(
+        self,
+        group: list[tuple[BaseEvent, FunctionTool | DelegateTool | None]],
+        rest: list[BaseEvent],
+        state: RunnerState,
+        context: InteractionContext,
+        outcome: _ToolCallsOutcome,
+    ) -> AsyncGenerator[tuple[str, BaseEvent], None]:
+        """Run ``group``, then settle ``rest``, the calls of the response after it,
+        if the run stops there: a sub-agent waiting for an answer keeps them for
+        when every branch waiting has returned (`_next_waiting_branch`); a hook
+        stopping the turn closes them."""
+        async for item in self._run_tool_group(group, state, context, outcome):
+            yield item
+        if outcome.paused:
+            waiting = (context.state.get(WAITING_BRANCHES_KEY) or {}).get(context.interaction_id)
+            if waiting is not None:
+                waiting["held"] = [c.model_dump(mode="json") for c in rest]
+                await self._write_conversation_state(state, context)
+            return
+        if not outcome.should_continue:
+            await self._close_tool_calls(rest, state, context, _STOPPED)
+
+    async def _tool_not_found(
+        self, call: BaseEvent, state: RunnerState, context: InteractionContext
+    ) -> BaseEvent:
+        """The stored result of a call, in a batch, to a tool the agent does not have."""
+        # Any: mypy reads `BaseEvent.action`, an unresolved union, as None.
+        source: Any = call.action
+        action = source.model_copy()
+        action.observation = f"Tool '{action.name}' not found on agent '{state.current_agent.name}'"
+        error = self._ensure_event_identifiers(
+            state=state,
+            context=context,
+            event=BaseEvent(
+                event_type=ExecutionEventType.TOOL_ERROR,
+                author=call.author or state.current_agent.name,
+                action=action,
+                error_code="ToolNotFound",
+                error_message=action.observation,
+            ),
+        )
+        await self._add_event(state, error, context=context)
+        return error
 
     async def _run_tool_group(
         self,

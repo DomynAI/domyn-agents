@@ -613,6 +613,16 @@ class ToolUseWithThoughtPlannerStrategy(ToolUsePlannerStrategy):
                             parameters=args,
                             observation=f"Tool '{tool_name}' not found",
                         )
+                        if tool_call.id in batches:
+                            # In a batch the runner answers it, after the last call
+                            # of the batch: a result here would split the response.
+                            yield BaseEvent(
+                                event_type=ExecutionEventType.TOOL_START,
+                                author=agent.name,
+                                action=action,
+                                metadata={METADATA_TOOL_BATCH: batches[tool_call.id]},
+                            )
+                            continue
                         yield BaseEvent(
                             event_type=ExecutionEventType.TOOL_START,
                             author=agent.name,
