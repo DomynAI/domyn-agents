@@ -18,6 +18,9 @@ import copy
 import hashlib
 import os
 import re
+import stat
+import sys
+import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -560,6 +563,46 @@ def read_all_credentials() -> dict[str, str]:
 _credentials_in_environment: dict[str, str] = {}
 """What `load_credentials_into_environment` put in ``os.environ``, to take back."""
 
+CREDENTIAL_NAME_WORDS = ("KEY", "TOKEN", "SECRET", "PASSWORD")
+"""The words a name in a credentials file must contain to be put in the environment
+(`is_credential_name`)."""
+
+_CREDENTIAL_NAME_PATTERN = re.compile(r"(?:^|_)(?:" + "|".join(CREDENTIAL_NAME_WORDS) + r")(?:_|$)")
+"""`CREDENTIAL_NAME_WORDS` as whole words of a name: ``KEY`` in ``AWS_ACCESS_KEY_ID``
+and ``KEY_ID``, not in ``KEYBOARD_LAYOUT``."""
+
+_warned: set[str] = set()
+"""The credentials warnings already given in this process, so each is given once."""
+
+
+def is_credential_name(name: str) -> bool:
+    """Whether ``name`` is shaped like a secret's variable: ``OPENAI_API_KEY``,
+    ``GITHUB_TOKEN``, ``APP_SECRET``, ``DB_PASSWORD`` — and any name carrying one of
+    those words elsewhere, ``AWS_ACCESS_KEY_ID``, ``KEY_ID``, ``TOKEN_ENDPOINT``.
+
+    The credentials file holds API keys, and its entries go into the environment of
+    every program domyn starts. Only names containing one of `CREDENTIAL_NAME_WORDS`
+    are put there: a file that can set any name could set ``PYTHONPATH``,
+    ``LD_PRELOAD`` or ``BASH_ENV`` and change what those programs load or run. An
+    allowlist of shapes, not a list of dangerous names, so a variable nobody thought
+    of is refused too.
+
+    The word is looked for anywhere in the name, not only at its end: a suffix refused
+    the names that put it first or in the middle, and the ones a tool spells its own
+    way. It is matched as a whole word — start, end or ``_`` on either side — so
+    ``KEY_ID`` and ``TOKEN_ENDPOINT`` pass while a name that merely starts with the
+    letters (``KEYBOARD_LAYOUT``, ``TOKENIZER_PATH``) does not.
+    """
+    return _CREDENTIAL_NAME_PATTERN.search(name) is not None
+
+
+def _warn_once(message: str) -> None:
+    """Tell the user on stderr, once per process. Credentials are read before any
+    command has a console, and the library logger shows nothing by default."""
+    if message not in _warned:
+        _warned.add(message)
+        print(f"Warning: {message}", file=sys.stderr)
+
 
 def load_credentials_into_environment() -> None:
     """Expose the credentials files' entries (`read_all_credentials`) as environment
@@ -577,15 +620,32 @@ def load_credentials_into_environment() -> None:
             del os.environ[name]
     _credentials_in_environment.clear()
     for name, value in read_all_credentials().items():
+        if not is_credential_name(name):
+            _warn_once(
+                f"{name} in the credentials file was not loaded: only names containing "
+                f"{', '.join(CREDENTIAL_NAME_WORDS)} are. Set it in your shell or a .env "
+                "file instead, or rename it."
+            )
+            continue
         if name not in os.environ:
             os.environ[name] = value
             _credentials_in_environment[name] = value
 
 
 def read_credentials(path: Path | None = None) -> dict[str, str]:
-    """Read ``KEY=value`` pairs from a credentials file, the active one by default."""
+    """Read ``KEY=value`` pairs from a credentials file, the active one by default.
+
+    A file that is a link, or not a regular file, is read as empty, with a warning: a
+    project folder can be someone else's, and ``credentials -> ~/.aws/credentials``
+    would put another file's secrets in the environment."""
     path = path or credentials_path()
-    if not path.is_file():
+    try:
+        mode = path.lstat().st_mode
+    except OSError:
+        return {}
+    if not stat.S_ISREG(mode):
+        kind = "a link" if stat.S_ISLNK(mode) else "not a regular file"
+        _warn_once(f"{path} was not read: it is {kind}. Keep the keys in the file itself.")
         return {}
     values: dict[str, str] = {}
     try:
@@ -603,8 +663,10 @@ def read_credentials(path: Path | None = None) -> dict[str, str]:
 def write_credential(name: str, value: str) -> Path:
     """Store one secret, with owner-only permissions.
 
-    Kept out of the YAML on purpose (see module docstring). ``chmod`` is applied
-    before writing so the secret is never briefly world-readable.
+    Kept out of the YAML on purpose (see module docstring). The file is written whole
+    as a new 0600 file beside it and renamed into place, so the secret is never
+    briefly readable by others, and a ``credentials`` that is a link is replaced
+    rather than written through.
     """
     path = credentials_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -612,13 +674,18 @@ def write_credential(name: str, value: str) -> Path:
     existing = read_credentials()
     existing[name] = value
 
-    path.touch(mode=0o600, exist_ok=True)
-    os.chmod(path, 0o600)
-    path.write_text(
-        "# domyn credentials — keep private\n"
-        + "".join(f"{key}={val}\n" for key, val in sorted(existing.items())),
-        encoding="utf-8",
-    )
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(
+                "# domyn credentials — keep private\n"
+                + "".join(f"{key}={val}\n" for key, val in sorted(existing.items()))
+            )
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
     return path
 
 

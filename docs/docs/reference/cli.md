@@ -34,6 +34,8 @@ Given before the command: `domyn --log-level DEBUG run`.
 
 Before running any command, `domyn` reads a `.env` file from the current directory or the nearest parent directory that has one, then `~/.domyn/credentials`, where the setup wizard saves API keys. A variable already set in the environment is never replaced, and `.env` comes before the credentials file. These variables are what `${VAR}` in a [YAML configuration](../guides/configuration.md) refers to. With `--project`, the project's own `credentials` file is read first, and `~/.domyn/credentials` supplies only the keys the project does not set.
 
+The credentials file's entries go into the environment of every program `domyn` starts, so only names shaped like a secret's are loaded: those with `KEY`, `TOKEN`, `SECRET` or `PASSWORD` as a whole part of the name — separated by `_` or at either end — as in `OPENAI_API_KEY`, `GITHUB_TOKEN` or `AWS_ACCESS_KEY_ID`. Any other name is skipped with a warning — set it in your shell or a `.env` file instead, or rename it. That is what keeps an entry from setting `PYTHONPATH`, `LD_PRELOAD` or `BASH_ENV`.
+
 `run`, `setup`, `skills`, `skill` and `export` take `--project <name>` to work on a [project](../cli/configuration.md#projects), a separate configuration, instead of the default one in `~/.domyn`. A name means `~/.domyn/projects/<name>`; a value containing `/` or starting with `.` or `~` is the path of a project folder.
 
 ## `domyn run`
