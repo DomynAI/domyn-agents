@@ -17,13 +17,13 @@ from domyn.agents.core import (
     InteractionContext,
 )
 from domyn.agents.decisions import DecisionRuntime
-from domyn.agents.hooks import FunctionHook, HookFactory, HookPhase, HookType
+from domyn.agents.hooks import FunctionHook, HookFactory, HookPhase
+from domyn.agents.hooks.builtin.memory import memory_update_hook
 from domyn.agents.instructions import AgentInstructions, InstructionRuntime
 from domyn.agents.llm import BaseLLMProvider, LLMProviderFactory
 from domyn.agents.logger import get_logger
 from domyn.agents.memory.managers import (
     BaseMemoryManager,
-    MemoryAsset,
     MemoryExecutionMode,
 )
 from domyn.agents.planner_strategy import BasePlannerStrategy, PlannerStrategyFactory
@@ -179,15 +179,7 @@ class Agent(BaseAgent):
             if self.memory_manager.execution_mode == MemoryExecutionMode.AGENTIC:
                 self.tools.extend(memory_tools(self.memory_manager, self))
             elif self.memory_manager.execution_mode == MemoryExecutionMode.AUTOMATIC:
-                # Starts the update in the background and returns: the turn ends
-                # without waiting for the model calls that decide and write it.
-                memory_post_hook = FunctionHook(
-                    name=MemoryAsset.UPDATE_HOOK,
-                    fun=self.memory_manager.start_memory_update,  # type: ignore
-                    trigger=HookPhase.POST_AGENT_CALL,
-                    type=HookType.LISTENER,
-                )
-                self.hooks.append(memory_post_hook)
+                self.hooks.append(memory_update_hook(self.memory_manager))
 
     def _attach_skills(self) -> None:
         """Wire the lookup tools, ``skill_view`` and ``skill_search``.
