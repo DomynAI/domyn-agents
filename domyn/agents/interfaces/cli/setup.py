@@ -397,7 +397,7 @@ def _ask_memory(console: Console, theme: Theme, current: MemoryChoice) -> Memory
     chosen = _select(
         console,
         theme,
-        "long-term memory",
+        "Long-term memory: should the agent remember information across conversations?",
         list(scopes),
         current=current.scope if current.scope in scopes else MemoryScope.NONE,
         descriptions=MEMORY_SCOPE_BLURB,
