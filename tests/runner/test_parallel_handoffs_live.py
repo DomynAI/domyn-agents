@@ -363,7 +363,7 @@ class TestLive:
 
     @pytest.mark.parametrize("planner", PLANNERS)
     @pytest.mark.asyncio
-    async def test_a_message_instead_of_the_answer_reaches_the_one_waiting(
+    async def test_a_message_instead_of_the_answer_goes_to_the_coordinator(
         self, planner: str
     ) -> None:
         saved: list[str] = []
@@ -373,13 +373,73 @@ class TestLive:
         first = await _run(runner, root, conversation)
         _assert_no_error(first)
         _assert_called_together(first)
+        asked = len(historian.requests)
 
         second = await _run(
             runner, root, conversation, _ask("Do not save anything, just answer the question.")
         )
 
-        _assert_no_error(second)
+        # The one waiting is closed, not asked again; the coordinator answers.
+        [end] = [e for e in second if e.event_type == ExecutionEventType.AGENT_END and e.error_code]
+        assert (end.author, end.error_code) == ("Historian", "SubAgentInterrupted")
+        assert len(historian.requests) == asked
         assert not saved
         assert "Lisbon" in _answered(second)
         # The real endpoint accepted every request: the waiting call has one result.
+        _assert_paired(llm.requests + historian.requests + geographer.requests)
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_two_copies_of_one_specialist_and_nothing_left_behind(self, planner: str) -> None:
+        log = _Log()
+        root, llm, historian, _ = _team(planner, [_lookup(log, "Historian")], [])
+        runner = Runner()
+        conversation = f"live_copies_{planner}"
+
+        events = await _run(
+            runner,
+            root,
+            conversation,
+            _ask(
+                "Tell me one historical fact about Lisbon and one historical fact about "
+                "Rome. Ask the Historian separately for each city, both at once."
+            ),
+        )
+
+        _assert_no_error(events)
+        copies = [
+            e
+            for e in events
+            if e.event_type == ExecutionEventType.AGENT_CALL
+            and (e.metadata.get(METADATA_TOOL_BATCH) or {}).get("copy")
+        ]
+        assert len(copies) == 2, "the model did not call the Historian twice in one response"
+        answer = _answered(events)
+        assert "Lisbon" in answer and "Rome" in answer
+        info = await runner.conversation_manager.get_conversation(APP, USER, conversation)
+        assert info is not None
+        left = [
+            key
+            for table in ("compaction_records", "context_anchors")
+            for key in (info.state or {}).get(table) or {}
+            if "#copy:" in key
+        ]
+        assert not left, left
+        _assert_paired(llm.requests + historian.requests)
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_one_place_for_tools_still_runs_both_specialists(self, planner: str) -> None:
+        log = _Log()
+        root, llm, historian, geographer = _team(
+            planner, [_lookup(log, "Historian")], [_lookup(log, "Geographer")]
+        )
+
+        events = await _run(Runner(max_parallel_tool_calls=1), root, f"live_one_place_{planner}")
+
+        _assert_no_error(events)
+        _assert_called_together(events)
+        # The turn has one place: the lookups take turns, and the turn still ends.
+        assert not log.overlap("Historian", "Geographer")
+        assert "Lisbon" in _answered(events)
         _assert_paired(llm.requests + historian.requests + geographer.requests)

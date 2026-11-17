@@ -1088,10 +1088,11 @@ class Compactor(BaseModel):
     # --- for a planner to use ---------------------------------------------
     #
     # The `yield` has to live in the planner's generator, but everything else
-    # lives here. The reason is concrete: `ToolUseWithThoughtPlannerStrategy` is
-    # a full copy of its parent's loop, so any logic written inside one of them
-    # is silently missing from the other — which is exactly how this measurement
-    # came to not work on the planner the CLI actually uses.
+    # lives here. The reason is concrete: `ToolUseWithThoughtPlannerStrategy` was
+    # a full copy of its parent's loop, so logic written inside one of them was
+    # silently missing from the other — which is exactly how this measurement
+    # came to not work on the planner the CLI actually uses. They share one loop
+    # now; keeping the logic here still keeps it usable by any other planner.
 
     def start_event(self, plan: CompactionPlan, author: str) -> BaseEvent:
         """The announcement, to emit **before** acting.

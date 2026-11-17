@@ -27,7 +27,7 @@ from collections import Counter
 from collections.abc import AsyncGenerator, Collection
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import field_validator, model_validator
 
@@ -529,6 +529,44 @@ def _create_event(
     )
 
 
+def _extract_thought(
+    tool_call: LLMToolCall, response: LLMResponse | None, fallback_response: bool = False
+) -> str | None:
+    """Extract the thought/reasoning from an LLM response.
+
+    Priority:
+    1. ``reasoning_content`` — explicit reasoning field (DeepSeek R1, Kimi, etc.)
+    2. First ``thinking`` block from ``thinking_blocks`` — Anthropic extended thinking
+    3. ``content`` — plain text preamble emitted before tool calls (solicited via
+       the system prompt instruction in ``ToolUseWithThoughtContextManager``).
+       Only treated as thought when tool_calls are also present — otherwise it
+       is the response to the user.
+    """
+    # Reading the "reasoning" field requires parsing the tool-call arguments.
+    # Malformed arguments must NOT abort thought extraction — fall through to the
+    # other thought sources instead of raising. The caller defaults malformed
+    # arguments to {} on its own, so a parse failure here is not fatal and must
+    # not turn into an orphan tool-error event (empty call_id, no paired
+    # assistant tool_call) that strict providers reject with a 400.
+    if tool_call:
+        try:
+            reasoning = json.loads(tool_call.function.arguments).get("reasoning")
+        except json.JSONDecodeError:
+            reasoning = None
+        if reasoning:
+            return reasoning.strip()
+    if fallback_response and response:
+        if response.reasoning_content:
+            return response.reasoning_content.strip()
+        if response.thinking_blocks:
+            for block in response.thinking_blocks:
+                if block.get("type") == "thinking" and block.get("thinking"):
+                    return block.get("thinking", "").strip()
+        if response.content and response.tool_calls:
+            return response.content.strip()
+    return None
+
+
 class ToolUsePlannerStrategy(BasePlannerStrategy):
     """Native tool-calling planner strategy.
 
@@ -548,6 +586,12 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
     to be able to emit events — and only a generator can. With the default
     ``NoOpCompaction`` and no ``context_window`` on the provider it does
     nothing."""
+
+    carries_thought: ClassVar[bool] = False
+    """Whether the model's reasoning is carried with what it produced: on each
+    action (``thought``), streamed as it arrives, and on the ``LLM_END`` of a
+    direct answer. Set by ``ToolUseWithThoughtPlannerStrategy``; read by the one
+    loop both strategies run (``execute``)."""
 
     max_iterations: int = 25
     use_stop: bool = False
@@ -600,6 +644,16 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
         except Exception:
             return ToolUseContextManager()
 
+    def _thought_of(
+        self, tool_call: LLMToolCall, response: LLMResponse | None, *, first: bool
+    ) -> str | None:
+        """The reasoning behind ``tool_call``, when this strategy carries it
+        (``carries_thought``); the response's own reasoning goes on the first call."""
+        if not self.carries_thought:
+            return None
+        thought = _extract_thought(tool_call, response, fallback_response=first)
+        return thought.strip() if thought else None
+
     async def execute(
         self,
         agent: BaseAgent,
@@ -615,6 +669,11 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
         3. If LLM returns tool calls, yield TOOL_START events
         4. If LLM returns no tool calls, yield final RESPONSE and stop
         5. Repeat until max_iterations
+
+        The one loop of both tool-use strategies: what ``carries_thought`` adds
+        (``ToolUseWithThoughtPlannerStrategy``) is read where it applies, so a
+        change made here reaches both. It was a copy of this method once, and a
+        fix made to one was found missing from the other more than once.
         """
         logger = get_logger()
         iteration = 0
@@ -690,6 +749,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
             # ── LLM invocation ────────────────────────────────────────────────
             response: LLMResponse | None = None
             parsed_tool_args: dict[str, dict[str, Any]] = {}
+            gave_up_on_malformed_json = False
             # What this LLM_END covers: every call made for it, retries included.
             token_usage: TokenUsage | None = None
 
@@ -710,13 +770,8 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 if response is None:
                     logger.error("DelegateLLMProvider received None from runner — aborting")
                     break
-                yield _create_event(
-                    event_type=ExecutionEventType.LLM_END,
-                    content=[Part(text="LLM response received via delegate")],
-                    author=agent.name,
-                    metadata=token_usage_metadata(add_token_usage(None, response)),
-                )
                 parsed_tool_args, _ = _parse_tool_call_args(response.tool_calls)
+                token_usage = add_token_usage(None, response)
             else:
                 yield _create_event(
                     event_type=ExecutionEventType.LLM_START,
@@ -727,12 +782,13 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 try:
                     generation_complete = False
                     malformed_json_retries = 0
-                    gave_up_on_malformed_json = False
+                    empty_retries = 0
                     while not generation_complete:
                         if agent.stream:
                             streamed_text_parts: list[str] = []
                             response = None
                             last_chunk = None
+                            streamed_thought = False
                             # Stream content as it arrives. If tool_calls follow in
                             # the same turn, this content is a user-visible preamble,
                             # not internal thought; do not copy it onto the tool event.
@@ -740,6 +796,25 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                                 messages=messages, tools=tool_defs if tool_defs else None
                             ):
                                 last_chunk = chunk
+                                # A model with native thinking emits its reasoning
+                                # before the answer, and the provider surfaces it in
+                                # a chunk of its own the moment it is complete.
+                                # Forwarding it here keeps the order the user sees
+                                # the same as the order the model produced: think,
+                                # then answer. Waiting for LLM_END would put the
+                                # reasoning underneath the answer it explains.
+                                if (
+                                    self.carries_thought
+                                    and chunk.reasoning_content
+                                    and not streamed_thought
+                                ):
+                                    streamed_thought = True
+                                    yield BaseEvent(
+                                        event_type=ExecutionEventType.RESPONSE_TOKEN,
+                                        content=[Part(thought=chunk.reasoning_content.strip())],
+                                        author=agent.name,
+                                        is_partial=True,
+                                    )
                                 # Drop only no-op (None/empty) chunks. Whitespace-only
                                 # chunks (paragraph breaks, list separators) carry
                                 # semantic meaning and must reach the consumer; the
@@ -747,12 +822,15 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                                 # ``response.content`` keeps its formatting.
                                 if chunk.content:
                                     streamed_text_parts.append(chunk.content)
-                                    yield BaseEvent(
-                                        event_type=ExecutionEventType.RESPONSE_TOKEN,
-                                        content=[Part(text=chunk.content)],
-                                        author=agent.name,
-                                        is_partial=True,
-                                    )
+                                    # With thought, a sub-agent's text is its reasoning
+                                    # or its report to the caller, never shown as typed.
+                                    if not (self.carries_thought and self.use_stop):
+                                        yield BaseEvent(
+                                            event_type=ExecutionEventType.RESPONSE_TOKEN,
+                                            content=[Part(text=chunk.content)],
+                                            author=agent.name,
+                                            is_partial=True,
+                                        )
                                 if chunk.tool_calls:
                                     response = chunk.model_copy(
                                         update={"content": "".join(streamed_text_parts)}
@@ -779,6 +857,12 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                         token_usage = add_token_usage(token_usage, response)
                         if not response.content and not response.tool_calls:
                             logger.error("LLM response has no content and no tool calls")
+                            empty_retries += 1
+                            if empty_retries > MAX_TOOL_CALL_ARGS_RETRIES:
+                                # Asked enough: go on with the empty answer rather than
+                                # ask the same model the same thing for ever.
+                                generation_complete = True
+                                continue
                             messages.append(
                                 LLMMessage(
                                     role="system",
@@ -866,41 +950,6 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                     )
                     break
 
-                yield _create_event(
-                    event_type=ExecutionEventType.LLM_END,
-                    content=[Part(text="LLM response received")],
-                    author=agent.name,
-                    metadata=token_usage_metadata(token_usage),
-                )
-
-                if gave_up_on_malformed_json:
-                    response_tool_calls = getattr(response, "tool_calls", None) or []
-                    tool_names = [tc.function.name for tc in response_tool_calls]
-                    logger.error(
-                        "Tool-call arguments still malformed after "
-                        f"{MAX_TOOL_CALL_ARGS_RETRIES} retries, giving up: "
-                        f"tools={tool_names}"
-                    )
-                    logger.debug(f"Malformed tool-call arguments payload: {response_tool_calls!r}")
-                    yield BaseEvent(
-                        event_type=ExecutionEventType.ERROR_OCCURRED,
-                        event_id=str(uuid.uuid4()),
-                        timestamp=datetime.now(),
-                        author=agent.name,
-                        content=[
-                            Part(
-                                text="Tool-call arguments still malformed after "
-                                f"{MAX_TOOL_CALL_ARGS_RETRIES} retries"
-                            )
-                        ],
-                        error_message=(
-                            "Malformed tool-call arguments after "
-                            f"{MAX_TOOL_CALL_ARGS_RETRIES} retries"
-                        ),
-                        is_partial=False,
-                    )
-                    break
-
             # What the provider counted for this request: the base the next one is
             # measured from (see `Compactor.observe`).
             self.compactor.observe(
@@ -910,6 +959,53 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 record,
                 getattr(agent, "llm_provider", None),
             )
+
+            # With thought, reasoning is normally carried by the action it produced,
+            # and `test_react_strategy_doesnt_emit_thought_in_llm_end` pins that: on a
+            # tool-calling turn LLM_END stays empty so consumers see the thought
+            # once, on TOOL_START. A turn that answers directly has no action to carry
+            # it, so it is attached here, where it adds no duplication for anyone.
+            final_thought = (
+                _extract_thought(None, response, fallback_response=True)
+                if self.carries_thought and not getattr(response, "tool_calls", None)
+                else None
+            )
+            yield BaseEvent(
+                event_type=ExecutionEventType.LLM_END,
+                event_id=str(uuid.uuid4()),
+                timestamp=datetime.now(),
+                author=agent.name,
+                content=[Part(text="LLM response received", thought=final_thought)],
+                is_partial=False,
+                metadata=token_usage_metadata(token_usage),
+            )
+
+            if gave_up_on_malformed_json:
+                response_tool_calls = getattr(response, "tool_calls", None) or []
+                tool_names = [tc.function.name for tc in response_tool_calls]
+                logger.error(
+                    "Tool-call arguments still malformed after "
+                    f"{MAX_TOOL_CALL_ARGS_RETRIES} retries, giving up: "
+                    f"tools={tool_names}"
+                )
+                logger.debug(f"Malformed tool-call arguments payload: {response_tool_calls!r}")
+                yield BaseEvent(
+                    event_type=ExecutionEventType.ERROR_OCCURRED,
+                    event_id=str(uuid.uuid4()),
+                    timestamp=datetime.now(),
+                    author=agent.name,
+                    content=[
+                        Part(
+                            text="Tool-call arguments still malformed after "
+                            f"{MAX_TOOL_CALL_ARGS_RETRIES} retries"
+                        )
+                    ],
+                    error_message=(
+                        f"Malformed tool-call arguments after {MAX_TOOL_CALL_ARGS_RETRIES} retries"
+                    ),
+                    is_partial=False,
+                )
+                break
 
             response_text = (getattr(response, "content", "") or "").strip()
             has_tool_calls = bool(getattr(response, "tool_calls", []))
@@ -942,7 +1038,14 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
             # RESPONSE_TOKEN, so emit it as a partial RESPONSE before the tool
             # events. In streaming mode the tokens already flowed through
             # RESPONSE_TOKEN; skip the duplicate emission.
-            if response_text and has_tool_calls and not agent.stream and not self.use_stop:
+            # With thought, that text is the reasoning, carried by the first action.
+            if (
+                response_text
+                and has_tool_calls
+                and not agent.stream
+                and not self.use_stop
+                and not self.carries_thought
+            ):
                 yield BaseEvent(
                     event_type=ExecutionEventType.RESPONSE,
                     content=extract_parts(response_text),
@@ -957,6 +1060,11 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 )
                 for position, tool_call in enumerate(response.tool_calls):
                     args = parsed_tool_args.get(tool_call.id, {})
+                    # The reasoning behind this call, carried by the action it
+                    # produced (``carries_thought``). Extraction tolerates malformed
+                    # arguments: keeping the call's id intact through TOOL_START keeps
+                    # the assistant/tool pair valid for strict providers.
+                    thought = self._thought_of(tool_call, response, first=position == 0)
 
                     tool_name = tool_call.function.name
                     tool = agent.get_tool_by_name(tool_name)
@@ -966,6 +1074,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             call_id=tool_call.id,
                             name=tool_name,
                             parameters=args,
+                            thought=thought,
                         )
                         yield BaseEvent(
                             event_type=ExecutionEventType.TOOL_START,
@@ -984,6 +1093,8 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             call_id=tool_call.id,
                             name=tool_name,
                             parameters=args,
+                            thought=thought,
+                            message=thought,
                         )
                         yield BaseEvent(
                             event_type=ExecutionEventType.AGENT_CALL,
@@ -1009,8 +1120,10 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             event_type=ExecutionEventType.AGENT_END,
                             author=agent.name,
                             action=ToolAction(
+                                call_id=tool_call.id,
                                 name=tool_name,
                                 parameters=args,
+                                thought=thought,
                             ),
                             content=[
                                 Part(text=args.get("info"))
@@ -1030,7 +1143,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             content=extract_parts(args.get("text", "")),
                             author=agent.name,
                             need_feedback=True,
-                            action=ToolAction(name=tool_name, parameters=args),
+                            action=ToolAction(name=tool_name, parameters=args, thought=thought),
                         )
                         return
                     elif (

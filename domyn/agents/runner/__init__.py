@@ -329,6 +329,10 @@ RUNNING_TURN_KEY = "running_turn"
 _STOPPED_RUNNING = (
     "the turn was stopped while it ran, and what it did so far is not in this result."
 )
+_INTERRUPTED_BY_MESSAGE = (
+    "The agent was interrupted: the user sent a new message instead of answering "
+    "what it was waiting for, so it did not finish."
+)
 _SUPERSEDED = (
     "the user sent a new message instead of answering the approval it was waiting "
     "for, so it did not run. Ask again if it is still needed."
@@ -434,6 +438,11 @@ class RunnerState:
     # the ones below, `_run_tool_group` among them, are closed whenever they are
     # collected, with their calls still running meanwhile.
     on_stop: list[Callable[[], Awaitable[None]]] = field(default_factory=list)
+    # The places for tool calls running at once in the whole turn
+    # (`max_parallel_tool_calls`): one for the turn, shared by every branch, taken
+    # by each tool call while it runs and never by a branch, so a sub-agent waiting
+    # for its own calls holds none.
+    tool_slots: asyncio.Semaphore | None = None
 
 
 class ContextBuilder:
@@ -1254,6 +1263,7 @@ class Runner:
         )
         if on_stop is not None:
             state.on_stop = on_stop
+        state.tool_slots = asyncio.Semaphore(self.max_parallel_tool_calls)
         state.steering_reaches_subagents = self.steering_reaches_subagents
 
         # Only when the store answered with an id the caller did not supply — one
@@ -1276,6 +1286,13 @@ class Runner:
             metadata = {}
 
         state.metadata = metadata
+
+        # A new message goes to the entrypoint, also where a sub-agent was waiting for
+        # an answer: what waited is closed first, so the message is read by the agent
+        # the user talks to, not acted on by one it delegated to.
+        if user_input.event_type == ExecutionEventType.USER_INPUT:
+            async for interrupted in self._close_waiting_sub_agents(state, user_input):
+                yield interrupted
 
         # Set up IDs; AGENT_START is built after hooks so hooks can modify user_input first
         is_new_conversation, _ = await self._setup_conversation_turn(state, user_input)
@@ -3747,16 +3764,16 @@ class Runner:
         for call, _ in group:
             yield "event", call
         queue: asyncio.Queue[tuple[str, BaseEvent] | None] = asyncio.Queue()
-        limit = asyncio.Semaphore(self.max_parallel_tool_calls)
         outcomes = [_ToolCallsOutcome() for _ in group]
 
         async def pump(
             tool: FunctionTool | DelegateTool | None, call: BaseEvent, own: _ToolCallsOutcome
         ) -> None:
+            # No limit here: each tool call takes one of the turn's places as it
+            # runs (`_run_one_tool`), and a sub-agent takes none.
             try:
-                async with limit:
-                    async for item in self._run_call(tool, call, state, context, own, batch):
-                        await queue.put(item)
+                async for item in self._run_call(tool, call, state, context, own, batch):
+                    await queue.put(item)
             finally:
                 await queue.put(None)
 
@@ -3870,6 +3887,21 @@ class Runner:
             yield item
 
     async def _run_one_tool(
+        self,
+        tool: FunctionTool | DelegateTool,
+        call: BaseEvent,
+        state: RunnerState,
+        context: InteractionContext,
+        outcome: _ToolCallsOutcome,
+    ) -> AsyncGenerator[tuple[str, BaseEvent], None]:
+        """Execute one call that is cleared to run, holding one of the turn's places
+        (``tool_slots``) while it does: at most ``max_parallel_tool_calls`` tool
+        calls run at once in the whole turn, however many sub-agents run together."""
+        async with state.tool_slots or contextlib.nullcontext():
+            async for item in self._run_cleared_tool(tool, call, state, context, outcome):
+                yield item
+
+    async def _run_cleared_tool(
         self,
         tool: FunctionTool | DelegateTool,
         call: BaseEvent,
@@ -4087,6 +4119,74 @@ class Runner:
                 if call_id:
                     calls.add(call_id)
         return calls, interactions
+
+    async def _close_waiting_sub_agents(
+        self, state: RunnerState, user_input: BaseEvent
+    ) -> AsyncGenerator[BaseEvent, None]:
+        """Close the sub-agents a new message finds waiting for an answer, so it
+        reaches the entrypoint.
+
+        A sub-agent is on top of the conversation's stack at the start of a turn
+        only when the last one paused in it. Its waiting call and the calls held
+        after it get a result saying they did not run (``_drop_held_tool_calls``);
+        then every agent above the entrypoint ends as interrupted, top first, with
+        the branches of a batch still waiting and the calls held after that batch.
+        Each AGENT_END is the result its caller reads for the call that started it.
+        """
+        entrypoint = state.entrypoint_agent.name
+        trunk = self._stack(state)
+        top = await trunk.last()
+        if top is None or top.agent_name == entrypoint:
+            return
+        await self._refresh_state(state)
+        state.current_agent = next(
+            (a for a in state.available_agents if a.name == top.agent_name), state.current_agent
+        )
+        state.interaction_id = top.interaction_id
+        state.turn_id = top.turn_id
+        context = ContextBuilder.create_context(state, user_input, top)
+        # The one dict every step below changes, and the one written at the end.
+        context.state = state.conversation_info.state
+        await self._drop_held_tool_calls(state, context)
+        waiting_branches = context.state.get(WAITING_BRANCHES_KEY) or {}
+        while top is not None and top.agent_name != entrypoint:
+            end = BaseEvent(
+                event_type=ExecutionEventType.AGENT_END,
+                author=top.agent_name,
+                interaction_id=top.interaction_id,
+                turn_id=top.turn_id,
+                content=[Part(text=_INTERRUPTED_BY_MESSAGE)],
+                error_code="SubAgentInterrupted",
+                error_message=f"The agent {top.agent_name} was interrupted",
+            )
+            await self._add_event(state, end, context=None)
+            yield end
+            forget_copy(context.state, top.agent_name, top.interaction_id)
+            await trunk.pop()
+            top = await trunk.last()
+            if top is None:
+                break
+            # The rest of the batch this agent ran in, if its caller ran one.
+            mine = waiting_branches.pop(top.interaction_id, None)
+            if mine is None:
+                continue
+            for record in mine["branches"]:
+                first = record["interactions"][0] if record["interactions"] else None
+                yield await self._end_branch(
+                    state,
+                    record,
+                    first,
+                    text=_INTERRUPTED_BY_MESSAGE,
+                    code="SubAgentInterrupted",
+                    message=f"The agent {record['agent']} was interrupted",
+                    conversation_state=context.state,
+                )
+            held = [BaseEvent.model_validate(raw) for raw in mine["held"]]
+            await self._close_tool_calls(held, state, context, _SUPERSEDED)
+        if not waiting_branches:
+            context.state.pop(WAITING_BRANCHES_KEY, None)
+        await self._write_conversation_state(state, context)
+        state.current_agent = state.entrypoint_agent
 
     async def _drop_held_tool_calls(self, state: RunnerState, context: InteractionContext) -> None:
         """Close the calls of a pause the user did not answer: see ``run()``."""

@@ -6,9 +6,9 @@ Resolution moved out: the runner loads a turn's skills
 the real loop can show — that the payload survives every iteration of it, and
 that the planner does not go looking for skills on the agent behind its back.
 
-Both tool-use planners are parametrized. ``ToolUseWithThoughtPlannerStrategy.execute``
-is a verbatim copy of its parent's loop rather than an extension, so a change
-applied to one and not the other is a shipping bug, not a style issue.
+Both tool-use planners are parametrized. They run one loop now, but
+``ToolUseWithThoughtPlannerStrategy.execute`` was a verbatim copy of its parent's
+for long, and a change applied to one and not the other shipped as a bug.
 """
 
 from unittest.mock import AsyncMock, MagicMock

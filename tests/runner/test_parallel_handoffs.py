@@ -407,7 +407,7 @@ class TestASubAgentWaitingForApproval:
 
     @pytest.mark.parametrize("planner", PLANNERS)
     @pytest.mark.asyncio
-    async def test_a_new_message_goes_to_it_as_to_any_sub_agent_waiting(self, planner: str) -> None:
+    async def test_a_new_message_goes_to_the_caller_and_closes_it(self, planner: str) -> None:
         log: list[str] = []
         root, main, (alpha, _) = _team(planner, log, delays=(0.0, 0.0), writes=(True, False))
         runner = Runner()
@@ -416,11 +416,17 @@ class TestASubAgentWaitingForApproval:
 
         events = await _run(runner, root, conversation, _ask("never mind"))
 
-        # Alpha, on top of the stack, is the one the message reaches; its call to
-        # write is closed as not run; it ends and the caller resumes.
+        # The entrypoint is the one the message reaches: Alpha is not asked again,
+        # its call to write is closed as not run, and it ends as interrupted.
         assert "write alpha.txt" not in log
-        assert len(alpha.shown) == 2
-        assert "never mind" in " ".join(str(m.content or "") for m in alpha.shown[1])
+        assert len(alpha.shown) == 1
+        [end] = [
+            e
+            for e in events
+            if e.event_type == ExecutionEventType.AGENT_END and e.author == "Alpha"
+        ]
+        assert end.error_code == "SubAgentInterrupted"
+        assert "never mind" in " ".join(str(m.content or "") for m in main.shown[1])
         assert _answered_by_main(events)
         assert sorted(main.answered(1)) == ["main_1_0", "main_1_1"]
 
@@ -1184,17 +1190,25 @@ class TestAfterTheProcessDied:
         assert RUNNING_TURN_KEY not in (info.state or {})
 
 
+async def _stored(manager: BaseConversationManager, conversation_id: str) -> list[BaseEvent]:
+    info = await manager.get_conversation(APP, USER, conversation_id)
+    assert info is not None
+    return list(info.events_history)
+
+
 class TestAMessageInsteadOfTheAnswer:
-    """A sub-agent paused on its own call and given a new message instead of the
-    answer: its next request closes that call once, with the result saying it did
-    not run. Its new start used to close it too, so the call had two results."""
+    """A new message where a sub-agent waits for an answer goes to the entrypoint,
+    as every message does: what waited is closed, each call once, with a result
+    saying it did not run, and each sub-agent with an AGENT_END saying it was
+    interrupted. It used to reach the sub-agent on top of the stack, which then
+    acted on it before its caller saw it."""
 
     @pytest.mark.parametrize("parallel", [False, True])
     @pytest.mark.parametrize("planner", PLANNERS)
     @pytest.mark.asyncio
     async def test_the_waiting_call_has_one_result(self, planner: str, parallel: bool) -> None:
         log: list[str] = []
-        root, _, (alpha, _) = _team(
+        root, main, (alpha, _) = _team(
             planner, log, parallel=parallel, delays=(0.0, 0.0), writes=(True, False)
         )
         runner = Runner()
@@ -1203,12 +1217,55 @@ class TestAMessageInsteadOfTheAnswer:
 
         await _run(runner, root, conversation, _ask("never mind"))
 
-        assert alpha.answered(1) == ["Alpha_1_0"]
-        request = alpha.shown[1]
-        position = next(i for i, m in enumerate(request) if m.tool_calls)
-        assert request[position + 1].tool_call_id == "Alpha_1_0"
-        assert "was not executed" in str(request[position + 1].content)
-        assert "never mind" in " ".join(str(m.content or "") for m in request)
+        results = [
+            e
+            for e in await _stored(runner.conversation_manager, conversation)
+            if e.event_type in (ExecutionEventType.TOOL_END, ExecutionEventType.TOOL_ERROR)
+            and getattr(e.action, "call_id", None) == "Alpha_1_0"
+        ]
+        assert len(results) == 1
+        assert "was not executed" in str(results[0].action.observation)
+        assert len(alpha.shown) == 1
+        assert _every_call_answered(main, len(main.shown) - 1)
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_a_single_sub_agent_handed_off_to_is_closed_too(self, planner: str) -> None:
+        log: list[str] = []
+        root, main = _caller(planner, [ALPHA], parallel=False, log=log, alpha_writes=True)
+        alpha = next(a for a in root.sub_agents if a.name == "Alpha")
+        runner = Runner()
+        conversation = f"c_single_{planner}"
+        first = await _run(runner, root, conversation)
+        assert first[-1].event_type == ExecutionEventType.TOOL_NEEDS_FEEDBACK
+
+        events = await _run(runner, root, conversation, _ask("never mind"))
+
+        assert len(alpha.llm_provider.shown) == 1
+        assert _of(events, ExecutionEventType.AGENT_END) == ["Alpha"]
+        assert "never mind" in " ".join(str(m.content or "") for m in main.shown[1])
+        assert _answered_by_main(events)
+        assert _every_call_answered(main, 1)
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_every_sub_agent_waiting_is_closed(self, planner: str) -> None:
+        log: list[str] = []
+        root, main, (alpha, beta) = _team(planner, log, delays=(0.0, 0.0), writes=(True, True))
+        runner = Runner()
+        conversation = f"c_every_waiting_{planner}"
+        await _run(runner, root, conversation)
+
+        events = await _run(runner, root, conversation, _ask("never mind"))
+
+        assert sorted(_of(events, ExecutionEventType.AGENT_END)) == ["Alpha", "Beta"]
+        assert len(alpha.shown) == len(beta.shown) == 1
+        assert not [x for x in log if x.startswith("write")]
+        assert _answered_by_main(events)
+        assert sorted(main.answered(1)) == ["main_1_0", "main_1_1"]
+        assert not (await _state(runner.conversation_manager, conversation)).get(
+            WAITING_BRANCHES_KEY
+        )
 
 
 def _look_tool(log: list[str]) -> FunctionTool:
@@ -1709,3 +1766,84 @@ class TestCallsAfterTheStepEnds:
 
         assert [x for x in log if x.startswith("look")] == ["look x"]
         assert _every_call_answered(main, 1)
+
+
+class _Gauge:
+    """How many tool calls run at once, at most."""
+
+    def __init__(self) -> None:
+        self.now = 0
+        self.most = 0
+
+    def tool(self, log: list[str]) -> FunctionTool:
+        async def slow(what: str) -> str:
+            """Take a while.
+
+            Args:
+                what: the thing.
+            """
+            self.now += 1
+            self.most = max(self.most, self.now)
+            log.append(f"slow {what}")
+            await asyncio.sleep(0.05)
+            self.now -= 1
+            return what
+
+        return FunctionTool(func=slow)
+
+
+def _busy_team(planner: str, gauge: _Gauge, log: list[str]) -> Agent:
+    """Two sub-agents run together, each asking for three slow calls at once."""
+
+    def worker(name: str) -> Agent:
+        calls = [("slow", f'{{"what": "{name.lower()}{i}"}}') for i in range(3)]
+        return Agent(
+            name=name,
+            description=f"works on {name.lower()}",
+            instruction="work",
+            llm_provider=_Script(label=name, log=log, replies=[calls, f"{name} done"]),
+            planner=_planner(planner),
+            tools=[gauge.tool(log)],
+        )
+
+    return Agent(
+        name="MainAgent",
+        description="the agent",
+        instruction="delegate",
+        llm_provider=_Script(label="main", log=log, replies=[[ALPHA, BETA], "Done."]),
+        planner=_planner(planner, parallel_handoffs=True),
+        sub_agents=[worker("Alpha"), worker("Beta")],
+    )
+
+
+class TestOneLimitForTheTurn:
+    """``max_parallel_tool_calls`` is the most tool calls running at once in the
+    whole turn, sub-agents running together included; a sub-agent takes no place
+    of its own, so one waiting for its calls never holds up another's."""
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_sub_agents_together_share_it(self, planner: str) -> None:
+        gauge, log = _Gauge(), []
+        root = _busy_team(planner, gauge, log)
+
+        events = await _run(Runner(max_parallel_tool_calls=2), root, f"c_limit_{planner}")
+
+        assert len([x for x in log if x.startswith("slow")]) == 6
+        assert gauge.most == 2
+        assert _answered_by_main(events)
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_with_one_place_the_sub_agents_still_run_together(self, planner: str) -> None:
+        gauge, log = _Gauge(), []
+        root = _busy_team(planner, gauge, log)
+
+        events = await asyncio.wait_for(
+            _run(Runner(max_parallel_tool_calls=1), root, f"c_one_place_{planner}"), timeout=10
+        )
+
+        assert gauge.most == 1
+        # Beta is not held back until Alpha's calls are done: it holds no place.
+        assert log.index("start Beta") < log.index("slow alpha2")
+        assert _answered_by_main(events)

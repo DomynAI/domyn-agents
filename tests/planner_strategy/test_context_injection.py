@@ -142,7 +142,16 @@ class TestAllPlannersUseIt:
     planner keeping its own copy, or losing the call in a refactor.
     """
 
-    @pytest.mark.parametrize("module", ["react", "tool_use", "tool_use_thought"])
+    def test_the_thought_strategy_runs_the_tool_use_loop(self) -> None:
+        """It has no loop of its own to lose the call in: it runs its parent's."""
+        from domyn.agents.planner_strategy.tool_use import ToolUsePlannerStrategy
+        from domyn.agents.planner_strategy.tool_use_thought import (
+            ToolUseWithThoughtPlannerStrategy,
+        )
+
+        assert ToolUseWithThoughtPlannerStrategy.execute is ToolUsePlannerStrategy.execute
+
+    @pytest.mark.parametrize("module", ["react", "tool_use"])
     def test_planner_takes_the_payload_and_never_resolves_it(self, module: str) -> None:
         from pathlib import Path
 
