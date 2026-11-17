@@ -263,6 +263,9 @@ async def start_session(
             _fallback_text(fallback, config_file), style=theme.style("warning"), highlight=False
         )
 
+    if _runs_from_home_in_a_container(agent):
+        console.print(_home_text(config_file), style=theme.style("warning"), highlight=False)
+
     # Read once, for the status line and for the warning below: each listed skill file
     # is parsed here once and not once per use.
     index = await _startup_index(agent)
@@ -429,6 +432,24 @@ def _fallback_text(problem: BackendUnavailableError, config_file: Path | None) -
         f"in the cli tools bundle{_where(config_file)}.\n"
     )
     return "\n".join(lines)
+
+
+def _runs_from_home_in_a_container(agent: Any) -> bool:
+    """Whether a container is in use with the user's home folder as its workspace."""
+    home = Path.home().resolve()
+    return any(
+        b.is_isolated and getattr(b, "workspace_root", None) == home
+        for b in _docker_backends(agent)
+    )
+
+
+def _home_text(config_file: Path | None) -> str:
+    return (
+        "\n  Running in a container from your home folder: its content is mounted, so extra"
+        " permissions might be needed\n  for files to be readable. To avoid this, run from a"
+        " less restricted folder. To run commands on this\n  machine instead, set"
+        f" `backend: local` in the cli tools bundle{_where(config_file)}.\n"
+    )
 
 
 def _lacks_chosen_skills(config: dict[str, Any] | None, config_file: Path | None) -> bool:

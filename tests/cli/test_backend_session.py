@@ -291,6 +291,31 @@ class TestStartingWithAutoBackend:
         assert "tools: this machine" in flat
 
     @pytest.mark.asyncio
+    async def test_a_container_on_the_home_folder_warns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from domyn.agents.cli.commands.run import command as run_command
+
+        class _Repl:
+            def __init__(self, *a: Any, **k: Any) -> None: ...
+
+            async def run(self, prompt: Any) -> int:
+                return 0
+
+        class _InHome(FakeDockerBackend):
+            workspace_root = Path.home().resolve()
+
+        monkeypatch.setattr(run_command, "Repl", _Repl)
+        _, text = await self._start(_InHome(), show_status=True)
+        flat = " ".join(text.split())
+        assert "from your home folder" in flat and "backend: local" in flat
+        assert "macOS" not in flat
+        assert "/x/config.yaml" in flat
+
+        _, quiet = await self._start(FakeDockerBackend(), show_status=True)
+        assert "home folder" not in quiet
+
+    @pytest.mark.asyncio
     async def test_a_usable_docker_shows_docker_and_no_warning(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
