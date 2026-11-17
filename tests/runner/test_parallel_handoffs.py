@@ -49,7 +49,8 @@ from domyn.agents.llm.base import (
     LLMToolCall,
     ToolCallFunction,
 )
-from domyn.agents.planner_strategy import PlannerStrategyFactory
+from domyn.agents.planner_strategy import HeuristicEstimator, PlannerStrategyFactory
+from domyn.agents.planner_strategy.context_management.budget import CONTEXT_USAGE_METADATA_KEY
 from domyn.agents.runner import RUNNING_TURN_KEY, Runner
 from domyn.agents.runner.branches import WAITING_BRANCHES_KEY
 from domyn.agents.runner.transport import RunnerTransport
@@ -1387,3 +1388,154 @@ class TestWhatRefusesIt:
     def test_it_does_not_load_without_the_batch_it_needs(self, planner: str) -> None:
         with pytest.raises(ValueError, match="parallel_tool_calls"):
             _planner(planner, parallel_handoffs=True, parallel_tool_calls=False)
+
+
+class _Counting(_Script):
+    """A sub-agent whose provider counts each request as a multiple of the estimate,
+    a different one per task, so a correction says which request it was measured on."""
+
+    writes: bool = False
+
+    async def generate(self, messages: list[LLMMessage], **kwargs: Any) -> LLMResponse:
+        self.shown.append(list(messages))
+        said = " ".join(str(m.content or "") for m in messages)
+        factor = 3.0 if "task one" in said else 2.0 if "task two" in said else 1.5
+        estimator = HeuristicEstimator()
+        estimated = estimator.estimate_messages(messages) + estimator.estimate_tool_definitions(
+            kwargs.get("tools") or []
+        )
+        usage = {"prompt_tokens": int(estimated * factor)}
+        if self.writes and "task one" in said and not any(m.role == "tool" for m in messages):
+            return LLMResponse(
+                content="",
+                generated_tokens=1,
+                execution_time=0.0,
+                usage=usage,
+                tool_calls=[
+                    LLMToolCall(
+                        id=f"w{len(self.shown)}",
+                        type="function",
+                        function=ToolCallFunction(name="write", arguments='{"path": "x"}'),
+                    )
+                ],
+            )
+        return LLMResponse(content="done", generated_tokens=1, execution_time=0.0, usage=usage)
+
+
+def _corrections(events: list[BaseEvent]) -> list[int]:
+    """The measured correction each request of a copy of Alpha went out with."""
+    return [
+        e.metadata[CONTEXT_USAGE_METADATA_KEY]["correction_tokens"]
+        for e in events
+        if e.event_type == ExecutionEventType.LLM_START and e.author == "Alpha"
+    ]
+
+
+def _copies(
+    planner: str, replies: list[Any], writes: bool = False, parallel: bool = False
+) -> tuple[Agent, _Counting]:
+    provider = _Counting(label="Alpha", writes=writes)
+    alpha = Agent(
+        name="Alpha",
+        description="does tasks",
+        instruction="do the task",
+        llm_provider=provider,
+        planner=_planner(planner),
+        tools=[_write_tool([])] if writes else [],
+    )
+    root = Agent(
+        name="MainAgent",
+        description="the agent",
+        instruction="delegate",
+        llm_provider=_Script(label="main", replies=replies),
+        planner=_planner(planner, parallel_handoffs=parallel),
+        sub_agents=[alpha],
+    )
+    return root, provider
+
+
+TWO_COPIES = [("Alpha", '{"task": "task one"}'), ("Alpha", '{"task": "task two"}')]
+
+
+class TestCopiesCompactApart:
+    """Two copies of one agent see different histories, so what compaction
+    measured or decided on one must not be applied to the other."""
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_a_copy_is_not_measured_on_the_other_s_request(self, planner: str) -> None:
+        root, _ = _copies(planner, [TWO_COPIES, "Done."])
+
+        events = await _run(Runner(), root, f"c_measured_{planner}")
+
+        # Alpha had never run: neither copy has a count to start from.
+        assert _corrections(events) == [0, 0]
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_copies_start_from_what_the_agent_had_and_leave_it_as_it_was(
+        self, planner: str
+    ) -> None:
+        root, _ = _copies(
+            planner, [[("Alpha", '{"task": "prepare"}')], "Ready.", TWO_COPIES, "Done."]
+        )
+        runner = Runner()
+        conversation = f"c_inherited_{planner}"
+        await _run(runner, root, conversation)
+        before = (await _state(runner.conversation_manager, conversation))["context_anchors"]
+        anchor = before["Alpha"]
+        measured = anchor["reported"] - anchor["estimated"]
+        assert measured > 0
+
+        events = await _run(runner, root, conversation)
+
+        assert _corrections(events) == [measured, measured]
+        after = (await _state(runner.conversation_manager, conversation))["context_anchors"]
+        assert after["Alpha"] == anchor
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_a_copy_resumed_after_its_approval_is_measured_on_its_own_request(
+        self, planner: str
+    ) -> None:
+        root, _ = _copies(planner, [TWO_COPIES, "Done."], writes=True, parallel=True)
+        runner = Runner()
+        conversation = f"c_resumed_{planner}"
+        await _run(runner, root, conversation)
+        anchors = (await _state(runner.conversation_manager, conversation))["context_anchors"]
+        # Task one is counted at three times the estimate, task two at two.
+        [own] = [a for a in anchors.values() if a["reported"] > 2.5 * a["estimated"]]
+
+        events = await _run(runner, root, conversation, _approve())
+
+        # The copy that waited goes on from its own count, not from the other's.
+        assert _corrections(events) == [own["reported"] - own["estimated"]]
+
+
+class TestTheBranchesShareTheConversationState:
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_what_a_sub_agent_writes_there_is_kept(self, planner: str) -> None:
+        """Each branch used to get its own copy of the state: a key it added was
+        never seen by its siblings or its caller, and was lost."""
+        beta = _Counting(label="Beta")
+        root, _ = _copies(
+            planner,
+            [[("Alpha", '{"task": "a"}'), ("Beta", '{"task": "b"}')], "Done."],
+            parallel=True,
+        )
+        root.sub_agents.append(
+            Agent(
+                name="Beta",
+                description="does other tasks",
+                instruction="do the task",
+                llm_provider=beta,
+                planner=_planner(planner),
+            )
+        )
+        runner = Runner()
+        conversation = f"c_shared_state_{planner}"
+        await _run(runner, root, conversation)
+
+        anchors = (await _state(runner.conversation_manager, conversation)).get("context_anchors")
+        assert set(anchors or {}) == {"Alpha", "Beta"}

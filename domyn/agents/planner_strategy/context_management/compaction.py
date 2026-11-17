@@ -22,7 +22,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from domyn.agents.core import BaseEvent, ExecutionEventType, Part
+from domyn.agents.core import METADATA_TOOL_BATCH, BaseEvent, ExecutionEventType, Part
 from domyn.agents.llm.base import LLMMessage, context_limit_from_error, reported_prompt_tokens
 from domyn.agents.llm.context_window import deployment_key, remember_stated_window
 from domyn.agents.logger import get_logger
@@ -57,6 +57,49 @@ time. A compaction since carries it over to the rendering it produced, with the 
 the correction that belongs to the text it kept (``_rescale``); a record changed any
 other way retires it, and so does another deployment, whose tokenizer counts the same
 text differently."""
+
+_COPY_MARK = "#copy:"
+"""Between an agent's name and an interaction id in the key of a copy's record and
+anchor (``compaction_key``)."""
+
+
+def compaction_key(agent_name: str, context: Any) -> str:
+    """Where an agent's record and anchor are kept in ``state``: under its name, or,
+    for one of several copies of it called by one response, under a key of its own.
+
+    Copies share a name but never see each other's work (the runner hides it), so
+    what one decides or measures describes a history the other does not have: a
+    summary of its own task, a count of its own request. A copy is told by its
+    AGENT_START, whose batch the planner marks ``copy`` (``tool_batches``). It
+    starts from what the agent had before (``_lookup``) and writes only its own.
+    """
+    interaction = getattr(context, "interaction_id", None)
+    if not interaction:
+        return agent_name
+    candidates = [
+        getattr(context, "agent_input", None),
+        *(getattr(context, "interaction_history", None) or []),
+        *(getattr(context, "conversation_history", None) or []),
+    ]
+    for event in candidates:
+        if (
+            getattr(event, "event_type", None) == ExecutionEventType.AGENT_START
+            and getattr(event, "interaction_id", None) == interaction
+        ):
+            batch = (event.metadata or {}).get(METADATA_TOOL_BATCH) or {}
+            return f"{agent_name}{_COPY_MARK}{interaction}" if batch.get("copy") else agent_name
+    return agent_name
+
+
+def _lookup(table: dict[str, Any] | None, key: str) -> Any:
+    """``table[key]``; for a copy that has nothing yet, what its agent has."""
+    table = table or {}
+    if key in table:
+        return table[key]
+    if _COPY_MARK in key:
+        return table.get(key.split(_COPY_MARK, 1)[0])
+    return None
+
 
 _ANCHOR_RATIO = (0.25, 4.0)
 """Bounds on reported/estimated beyond which a count is ignored. Measured on real
@@ -153,7 +196,7 @@ def read_record(state: dict[str, Any] | None, agent_name: str) -> CompactionReco
     """Never raises and never returns `None`: an absent record is an empty one."""
     if not state:
         return CompactionRecord()
-    raw = (state.get(_RECORDS_KEY) or {}).get(agent_name)
+    raw = _lookup(state.get(_RECORDS_KEY), agent_name)
     if not raw:
         return CompactionRecord()
     try:
@@ -666,6 +709,7 @@ class Compactor(BaseModel):
         tool_defs: list[dict[str, Any]] | None = None,
         turn_context: list[LLMMessage] | None = None,
         state: dict[str, Any] | None = None,
+        key: str | None = None,
     ) -> CompactionPlan:
         """Synchronous and cheap: it calls nobody.
 
@@ -687,7 +731,9 @@ class Compactor(BaseModel):
         if window is None:
             return CompactionPlan(needed=False, reason="model context window unknown")
 
-        budget = self._budget(messages, tool_defs, turn_context, state, agent, window=window)
+        budget = self._budget(
+            messages, tool_defs, turn_context, state, agent, window=window, key=key
+        )
         provider = getattr(agent, "llm_provider", None)
         if not budget.over_threshold:
             return CompactionPlan(
@@ -712,6 +758,7 @@ class Compactor(BaseModel):
         turn_context: list[LLMMessage] | None = None,
         state: dict[str, Any] | None = None,
         error: BaseException | None = None,
+        key: str | None = None,
     ) -> CompactionPlan | None:
         """The compaction to run after the provider rejected a request as too long.
 
@@ -731,7 +778,7 @@ class Compactor(BaseModel):
             return None
         if error is not None:
             _adopt_window(agent, context_limit_from_error(error))
-        budget = self._budget(messages, tool_defs, turn_context, state, agent, window=None)
+        budget = self._budget(messages, tool_defs, turn_context, state, agent, window=None, key=key)
         return CompactionPlan(
             needed=True,
             budget=budget,
@@ -749,6 +796,7 @@ class Compactor(BaseModel):
         agent: Any,
         *,
         window: int | None,
+        key: str | None = None,
     ) -> Budget:
         """The request measured: estimated, plus the correction the provider's last
         count gives it. ``window`` ``None`` after a rejection: not the model's window
@@ -757,7 +805,7 @@ class Compactor(BaseModel):
         conversation = int(self.estimator.estimate_messages(messages))
         fixed = int(self.estimator.estimate_messages(turn_context or []))
         fixed += int(self.estimator.estimate_tool_definitions(tool_defs or []))
-        correction, base = self._anchor(state, agent)
+        correction, base = self._anchor(state, agent, key)
         current = conversation + fixed + correction
         reserve = self.policy.reserve_tokens
         return Budget(
@@ -813,15 +861,17 @@ class Compactor(BaseModel):
             "deployment": _deployment(provider),
         }
 
-    def _anchor(self, state: dict[str, Any] | None, agent: Any) -> tuple[int, int]:
+    def _anchor(
+        self, state: dict[str, Any] | None, agent: Any, key: str | None = None
+    ) -> tuple[int, int]:
         """``(correction, the estimate it was measured on)`` for the history as it
         renders now. ``(0, 0)`` without a count, after a change to the record that
         did not carry it, or when another deployment counted it: a ``/model``, a
         conversation resumed on another model, a model the gateway replaced."""
-        name = getattr(agent, "name", None)
+        name = key or getattr(agent, "name", None)
         if not state or not name:
             return 0, 0
-        anchor = (state.get(_ANCHORS_KEY) or {}).get(name)
+        anchor = _lookup(state.get(_ANCHORS_KEY), name)
         if not isinstance(anchor, dict):
             return 0, 0
         if anchor.get("generation") != read_record(state, name).generation:
@@ -847,8 +897,9 @@ class Compactor(BaseModel):
         same number until the next response counts again. Only a count that described
         the rendering before the compaction (``generation``) is carried.
         """
-        anchors = (state or {}).get(_ANCHORS_KEY) or {}
-        anchor = anchors.get(agent_name)
+        if state is None:
+            return 0
+        anchor = _lookup(state.get(_ANCHORS_KEY), agent_name)
         now = read_record(state, agent_name).generation
         if not isinstance(anchor, dict) or anchor.get("generation") != generation:
             return 0
@@ -859,7 +910,7 @@ class Compactor(BaseModel):
         except (KeyError, TypeError, ValueError):
             return 0
         correction, base = _rescale(reported - estimated, estimated, dropped)
-        anchors[agent_name] = {
+        state.setdefault(_ANCHORS_KEY, {})[agent_name] = {
             **anchor,
             "reported": base + correction,
             "estimated": base,
@@ -943,6 +994,7 @@ class Compactor(BaseModel):
         state: dict[str, Any] | None,
         agent_name: str,
         rendered: list[LLMMessage] | None = None,
+        key: str | None = None,
     ) -> BaseEvent:
         """Compact on request, working on the history rather than on messages.
 
@@ -958,8 +1010,10 @@ class Compactor(BaseModel):
         the share of the measured correction that went with it (``_carry_anchor``).
 
         Returns the event to show, always: "nothing to compact" is an answer, and
-        a command that stays silent looks broken.
+        a command that stays silent looks broken. The record is ``key``'s
+        (``compaction_key``), ``agent_name``'s when not given.
         """
+        author, agent_name = agent_name, key or agent_name
         candidates = [
             event
             for event in events
@@ -1006,7 +1060,7 @@ class Compactor(BaseModel):
         get_logger().info(f"manual compaction for {agent_name}: {len(chosen)} events recorded")
         return BaseEvent(
             event_type=ExecutionEventType.CONTEXT_COMPACTED,
-            author=agent_name,
+            author=author,
             content=[Part(text=note)],
             metadata=metadata,
         )
@@ -1046,8 +1100,11 @@ class Compactor(BaseModel):
         plan: CompactionPlan,
         state: dict[str, Any] | None,
         author: str,
+        key: str | None = None,
     ) -> tuple[list[LLMMessage], BaseEvent]:
-        """Apply and return ``(messages, closing event)``."""
+        """Apply and return ``(messages, closing event)``; the record and anchor are
+        ``key``'s (``compaction_key``), ``author``'s when not given."""
+        key = key or author
         before = plan.current_tokens
         outcome = await self.apply(messages, plan, state)
         after = (
@@ -1055,24 +1112,24 @@ class Compactor(BaseModel):
             if plan.budget is not None
             else self.tokens_after(outcome.messages)
         )
-        generation = read_record(state, author).generation
+        generation = read_record(state, key).generation
         if outcome.pruned_event_ids:
             # Recorded so the automatic path is monotonic too: without this the
             # same decision is recomputed every turn and reverses itself the
             # moment the conversation dips back below the threshold.
-            add_to_record(state, author, outcome.pruned_event_ids)
+            add_to_record(state, key, outcome.pruned_event_ids)
         if outcome.summary and outcome.summarized_event_ids:
             # The expensive one. Recorded so it is paid for once: re-summarizing
             # every render would cost a request per turn and hand the model a
             # different context each time for the same history.
-            record_summary(state, author, outcome.summary, outcome.summarized_event_ids)
+            record_summary(state, key, outcome.summary, outcome.summarized_event_ids)
         if plan.budget is not None:
             # The next request is measured on the rendering this produced: carried,
             # the count keeps the share of its correction that belongs to the text
             # kept, which is the share `after` was computed with.
             self._carry_anchor(
                 state,
-                author,
+                key,
                 generation,
                 plan.budget.message_tokens - self.tokens_after(outcome.messages),
             )
@@ -1120,6 +1177,7 @@ class Compactor(BaseModel):
         agent: Any,
         state: dict[str, Any] | None = None,
         turn_context: list[LLMMessage] | None = None,
+        key: str | None = None,
     ) -> dict[str, Any]:
         """The context measurement, ready for ``LLM_START`` metadata.
 
@@ -1152,7 +1210,7 @@ class Compactor(BaseModel):
                 else None
             ),
             strategy=self.strategy_name,
-            correction_tokens=self._anchor(state, agent)[0],
+            correction_tokens=self._anchor(state, agent, key)[0],
         )
         get_logger().debug(
             f"context usage: {usage.total_tokens} tokens "

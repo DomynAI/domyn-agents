@@ -23,6 +23,7 @@ Response contract
 import json
 import traceback
 import uuid
+from collections import Counter
 from collections.abc import AsyncGenerator, Collection
 from dataclasses import dataclass
 from datetime import datetime
@@ -63,7 +64,10 @@ from domyn.agents.planner_strategy.context_injection import (
     insert_turn_context,
     turn_context_messages,
 )
-from domyn.agents.planner_strategy.context_management.compaction import Compactor
+from domyn.agents.planner_strategy.context_management.compaction import (
+    Compactor,
+    compaction_key,
+)
 from domyn.agents.planner_strategy.context_management.tool_use import ToolUseContextManager
 from domyn.agents.planner_strategy.utils import (
     FORWARD_VERBATIM_FEEDBACK_AGENT_END_SOURCE_KEY,
@@ -203,12 +207,17 @@ def tool_batches(
         if len(run) < 2:
             return
         batch_id = uuid.uuid4().hex
+        agents = Counter(tool_calls[p].function.name for p in run if kinds[p] == "agent")
         for index, position in enumerate(run):
+            name = tool_calls[position].function.name
             batches[tool_calls[position].id] = {
                 "id": batch_id,
                 "index": index,
                 "size": len(run),
                 **({"sequential": True} if sequential else {}),
+                # One of several calls to the same sub-agent: the copies never see
+                # each other's work, so each keeps its own compaction record.
+                **({"copy": True} if kinds[position] == "agent" and agents[name] > 1 else {}),
             }
 
     for run in runs:
@@ -613,18 +622,21 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
             # conversation is compacted.
             tool_defs = self.context_manager.get_tool_definitions(agent, interaction_context)
             turn_context = await turn_context_messages(agent, interaction_context, skills_payload)
-            messages = self.compactor.replay(messages, interaction_context.state, agent.name)
+            # A copy of the agent called alongside another keeps its own.
+            record = compaction_key(agent.name, interaction_context)
+            messages = self.compactor.replay(messages, interaction_context.state, record)
             compaction_plan = self.compactor.assess(
                 messages,
                 agent,
                 tool_defs=tool_defs,
                 turn_context=turn_context,
                 state=interaction_context.state,
+                key=record,
             )
             if compaction_plan.needed:
                 yield self.compactor.start_event(compaction_plan, agent.name)
                 messages, compaction_done = await self.compactor.run(
-                    messages, compaction_plan, interaction_context.state, agent.name
+                    messages, compaction_plan, interaction_context.state, agent.name, record
                 )
                 yield compaction_done
             conversation = messages
@@ -633,7 +645,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
             # The context measurement for LLM_START metadata: a front-end has no
             # other way to know it without rebuilding the context itself.
             usage_metadata = self.compactor.usage_metadata(
-                messages, tool_defs, agent, interaction_context.state, turn_context
+                messages, tool_defs, agent, interaction_context.state, turn_context, key=record
             )
 
             # ── LLM invocation ────────────────────────────────────────────────
@@ -787,6 +799,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             turn_context=turn_context,
                             state=interaction_context.state,
                             error=e,
+                            key=record,
                         )
                     )
                     if recovery is not None:
@@ -794,7 +807,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                         logger.warning("request rejected as too long: compacting, then retrying")
                         yield self.compactor.start_event(recovery, agent.name)
                         _, compaction_done = await self.compactor.run(
-                            conversation, recovery, interaction_context.state, agent.name
+                            conversation, recovery, interaction_context.state, agent.name, record
                         )
                         yield compaction_done
                         continue
@@ -855,7 +868,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 getattr(response, "usage", None),
                 usage_metadata,
                 interaction_context.state,
-                agent.name,
+                record,
                 getattr(agent, "llm_provider", None),
             )
 

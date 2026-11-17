@@ -262,7 +262,10 @@ class ToolUseContextManager(ContextManager):
                 case ExecutionEventType.TOOL_FEEDBACK:
                     if event.action:
                         observation = str(event.action.observation or "")
-                        messages.append(LLMMessage(role=self.user_role, content=observation))
+                        # A plain approval carries no text: an empty user turn
+                        # would tell the model nothing, after every approval.
+                        if observation:
+                            messages.append(LLMMessage(role=self.user_role, content=observation))
 
                 case ExecutionEventType.EXTERNAL_PART:
                     # Externally-injected content (e.g. from a channel) only

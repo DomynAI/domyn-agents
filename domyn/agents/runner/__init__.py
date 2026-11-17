@@ -77,6 +77,7 @@ from domyn.agents.llm.context_window import resolve_context_window
 from domyn.agents.llm.delegate import DelegateLLMProvider
 from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.context_management.base import ContextManager
+from domyn.agents.planner_strategy.context_management.compaction import compaction_key
 from domyn.agents.registry.agents import get_agent_registry
 from domyn.agents.runner.branches import (
     DONE,
@@ -559,7 +560,7 @@ class ContextBuilder:
                 if agents_calls:
                     interaction_history = [agents_calls[-1]]
 
-        return InteractionContext(
+        context = InteractionContext(
             conversation_id=state.conversation_id,
             user_id=state.user_id,
             agent_input=user_input,
@@ -575,14 +576,15 @@ class ContextBuilder:
             visible_agent_names=[
                 agent.name for agent in context_agents if agent != state.current_agent
             ],
-            state=(
-                state.shared_state
-                if state.shared_state is not None
-                else state.conversation_info.state or {}
-            ),
+            state=state.conversation_info.state or {},
             run_config=state.run_config,
             is_subagent=state.current_agent is not state.entrypoint_agent,
         )
+        if state.shared_state is not None:
+            # Assigned, not passed: validation copies a dict, and a branch writing a
+            # key its siblings and its caller never see loses it at the next write.
+            context.state = state.shared_state
+        return context
 
     @staticmethod
     def _get_context_visibility(
@@ -1886,7 +1888,11 @@ class Runner:
         # is counted on the text the model reads rather than guessed from events.
         rendered = await planner.context_manager.get_context(context=context, agent=agent)
         done = compactor.request_from_history(
-            context.conversation_history, context.state, agent.name, rendered=rendered
+            context.conversation_history,
+            context.state,
+            agent.name,
+            rendered=rendered,
+            key=compaction_key(agent.name, context),
         )
 
         # Persisted explicitly: the usual write-back rides along with events
