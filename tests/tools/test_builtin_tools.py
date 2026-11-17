@@ -295,6 +295,23 @@ class TestReadingAndSearching:
         assert "app.py" in out
         assert "/private" not in out and "/tmp" not in out
 
+    @pytest.mark.asyncio
+    async def test_an_entry_the_system_refuses_to_describe_does_not_fail_the_listing(
+        self, tools: dict, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """macOS answers `Operation not permitted` for `.Trash` in a home folder a
+        container was not let into: the rest of the folder is still listed."""
+        real = Path.is_dir
+
+        def is_dir(self: Path) -> bool:
+            if self.name == "app.py":
+                raise PermissionError(1, "Operation not permitted")
+            return real(self)
+
+        monkeypatch.setattr(Path, "is_dir", is_dir)
+        out = await _call(tools, "list_dir", path=".")
+        assert re.search(r"^\?\s+app\.py$", out, re.M) and "src" in out
+
 
 class TestSearchStaysInsideTheWorkspace:
     """`glob_files` and `grep` hand a pattern to `Path.glob`, which knows nothing about

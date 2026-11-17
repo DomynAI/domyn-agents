@@ -37,35 +37,33 @@ on:
       - pyproject.toml
       - .github/workflows/docker-backend-image.yml
 
+# Each architecture is built on a runner of its own (no emulation), pushed by digest, and a
+# last job joins the two into the one tag people pull.
 permissions:
   contents: read
 
 jobs:
-  image:
+  # What is built and under which tags: the same for every architecture.
+  prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    permissions:
-      contents: read
-      packages: write  # the image
+    outputs:
+      tags: ${{ steps.tag.outputs.tags }}
+      name: ${{ steps.tag.outputs.name }}
+      push: ${{ steps.push.outputs.push }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # hatch-vcs reads the version from the tag.
-          fetch-depth: 0
+          sparse-checkout: |
+            scripts/agents_docker_backend_image.py
+            domyn/agents/tools/builtin/backends/docker/images.py
+          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       # The image and tag names are defined in the code the CLI pulls them by, and read
       # from there: IMAGE_REPOSITORY and LATEST_TAG.
       - name: Image names
         run: python3 scripts/agents_docker_backend_image.py >> "$GITHUB_ENV"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-
-      # The wheel the image installs: the version in it is the tag's on a release.
-      - name: Build the wheel
-        run: uv build --wheel
 
       # `0.1.1` for the tag v0.1.1 (a stable release is also `latest`); the input of a
       # manual run; `pr` for a pull request, which is not pushed.
@@ -85,6 +83,10 @@ jobs:
               echo "::error::tag '$name' is reserved for releases"
               exit 1
             fi
+          fi
+          if ! echo "$name" | grep -Eq '^[A-Za-z0-9_.-]+$'; then
+            echo "::error::'$name' is not a valid tag"
+            exit 1
           fi
           {
             echo "tags<<EOF"
@@ -109,32 +111,140 @@ jobs:
             echo "push=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            suffix: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            suffix: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write  # the image
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # hatch-vcs reads the version from the tag.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Image names
+        run: python3 scripts/agents_docker_backend_image.py >> "$GITHUB_ENV"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+
+      # The wheel the image installs: the version in it is the tag's on a release.
+      - name: Build the wheel
+        run: uv build --wheel
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to ghcr.io
-        if: steps.push.outputs.push == 'true'
+        if: needs.prepare.outputs.push == 'true'
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Build and push
+      # Pushed by digest, with no tag: the last job tags the two together. Without a push
+      # the image is built and thrown away.
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: docker/docker-backend.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ steps.push.outputs.push == 'true' }}
-          tags: ${{ steps.tag.outputs.tags }}
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          sbom: false
+          outputs: ${{ needs.prepare.outputs.push == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE_REPOSITORY) || 'type=cacheonly' }}
           # Links the package to this repository, so its visibility and access follow it.
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.tag.outputs.name }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.name }}
             org.opencontainers.image.revision=${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.suffix }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.suffix }}
+
+      - name: Export the digest
+        if: needs.prepare.outputs.push == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - name: Upload the digest
+        if: needs.prepare.outputs.push == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digest-${{ matrix.suffix }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # One tag over the two architectures: what `docker pull` resolves for the machine.
+  merge:
+    if: needs.prepare.outputs.push == 'true'
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # the image
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            scripts/agents_docker_backend_image.py
+            domyn/agents/tools/builtin/backends/docker/images.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Image names
+        run: python3 scripts/agents_docker_backend_image.py >> "$GITHUB_ENV"
+
+      - name: Download the digests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Create the manifest
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          TAGS: ${{ needs.prepare.outputs.tags }}
+        run: |
+          tag_args=()
+          while read -r tag; do
+            [ -n "$tag" ] && tag_args+=(-t "$tag")
+          done <<< "$TAGS"
+          docker buildx imagetools create "${tag_args[@]}" \
+            $(printf "${IMAGE_REPOSITORY}@sha256:%s " *)
+
+      - name: Inspect
+        env:
+          TAGS: ${{ needs.prepare.outputs.tags }}
+        run: docker buildx imagetools inspect "$(echo "$TAGS" | head -n1)"

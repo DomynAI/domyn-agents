@@ -559,9 +559,12 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
         resolved = workspace.resolve(path, must_exist=True)
         if not resolved.is_dir():
             raise WorkspaceError(f"'{path}' is not a directory.")
-        entries = sorted(resolved.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        # One entry the system will not describe (macOS refuses `.Trash`, `Library`… in a
+        # home folder a container was not allowed into) must not fail the whole listing.
+        kinds = {entry: _kind(entry) for entry in resolved.iterdir()}
+        entries = sorted(kinds, key=lambda p: (kinds[p] != "dir ", p.name.lower()))
         lines = [
-            f"{'dir ' if entry.is_dir() else 'file'}  {workspace.display(entry)}"
+            f"{kinds[entry]}  {workspace.display(entry)}"
             for entry in entries[:MAX_LISTED]
             if not is_ignored(entry, workspace.root)
         ]
@@ -583,7 +586,7 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
         found = [
             workspace.display(p)
             for p in _matches(workspace, base, pattern, "pattern")
-            if p.is_file()
+            if _is_file(p)
         ]
         if not found:
             return f"No files match {pattern!r}."
@@ -762,6 +765,21 @@ def _hosted(
     hosted.__doc__ = func.__doc__
     hosted.__annotations__ = {**func.__annotations__, "conversation_id": str}
     return hosted
+
+
+def _kind(entry: Path) -> str:
+    """``dir ``, ``file`` or ``?   `` for an entry the system will not describe."""
+    try:
+        return "dir " if entry.is_dir() else "file"
+    except OSError:
+        return "?   "
+
+
+def _is_file(entry: Path) -> bool:
+    try:
+        return entry.is_file()
+    except OSError:
+        return False
 
 
 def file_tools(workspace: Workspace, host: "CommandBackend | None" = None) -> list[Any]:

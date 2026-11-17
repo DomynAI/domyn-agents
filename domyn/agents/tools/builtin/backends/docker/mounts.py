@@ -23,17 +23,34 @@ from domyn.agents.logger import get_logger
 from domyn.agents.tools.builtin.backends.base import BackendUnavailableError
 from domyn.agents.tools.builtin.backends.docker.containers import CONTAINER_HOME
 from domyn.agents.tools.builtin.backends.docker.state import StateFolder
+from domyn.agents.tools.builtin.session import HOME_DIRNAME
 from domyn.agents.tools.builtin.workspace import Workspace
 
 
 def refuse_unsafe_workspace(root: Path) -> None:
-    """Mounting the home folder, or ``/``, would hand the container everything in it."""
+    """Mounting ``/``, or a folder above the home folder, would hand the container
+    everything in it. The home folder itself is allowed, with ``~/.domyn`` (credentials,
+    approvals, history) hidden: see ``build_mounts``."""
     home = Path.home().resolve()
-    if root == Path(root.anchor) or root == home or root in home.parents:
+    if root == Path(root.anchor) or root in home.parents:
         raise BackendUnavailableError(
             f"The workspace is {root}: mounting it would hand the container everything in it.",
             fix="Run domyn from a project folder, or set `backend: local`.",
         )
+
+
+def _hidden_global_home(root: Path, state: StateFolder) -> Path | None:
+    """``~/.domyn`` when the workspace contains it and the session does not run on it.
+
+    It holds the credentials, the approvals and the whole history, and a workspace that
+    is the home folder (or holds ``.domyn``) would mount it with the rest. The session's
+    own folder, when it is that one, is already an empty scratch folder over it.
+    """
+    hidden = Path.home().absolute() / HOME_DIRNAME
+    inside = root == hidden or root in hidden.parents
+    if not inside or hidden == state.project_dir or "," in str(hidden):
+        return None
+    return hidden
 
 
 def skill_roots(workspace: Workspace) -> list[Path]:
@@ -51,6 +68,10 @@ def build_mounts(workspace: Workspace, state: StateFolder, conversation: str) ->
     state.prepare(conversation)
     mounts = _Mounts()
     mounts.add(root, readonly=False)
+    if (hidden := _hidden_global_home(root, state)) is not None:
+        # An empty folder where the global `~/.domyn` is: nothing of it is reachable.
+        # A project of the session, which lives below it, is mounted over this one.
+        mounts.arguments += ["--tmpfs", f"{hidden}:rw,size=1m,mode=0755"]
     if (scratch := state.scratch_home(conversation)) is not None and state.project_dir:
         mounts.add(scratch, readonly=False, target=state.project_dir)
         # A `domyn` run without `--project` reads `~/.domyn`, which is here the

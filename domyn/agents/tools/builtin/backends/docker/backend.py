@@ -173,6 +173,11 @@ class DockerBackend(CommandBackend):
     async def start(self) -> None:
         await self.prepare()
 
+    @property
+    def workspace_root(self) -> Path:
+        """The folder mounted read-write in the container."""
+        return self._workspace.root
+
     async def prepare(self) -> None:
         """Check Docker and make sure the image exists. The slow, first-time part.
 
