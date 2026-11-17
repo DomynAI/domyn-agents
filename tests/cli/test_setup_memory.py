@@ -246,34 +246,38 @@ class TestTheQuestion:
             shown.append(buffer.getvalue())
         return chosen
 
+    GLOBAL_YES = "Yes (global memory - shared with all projects)"
+    INFORM = "Yes, and inform other projects too (writes to global memory)"
+    SCOPED = "Yes, scoped only to this project"
+
     def test_enter_keeps_what_is_there(self):
         assert self.ask(MemoryChoice(scope="global"), "").scope == "global"
         assert self.ask(MemoryChoice(), "").scope == "no"
 
     def test_it_can_be_turned_on_and_off(self):
-        assert self.ask(MemoryChoice(), "global").scope == "global"
-        assert self.ask(MemoryChoice(scope="global"), "no").scope == "no"
+        assert self.ask(MemoryChoice(), "2").scope == "global"
+        assert self.ask(MemoryChoice(scope="global"), "1").scope == "no"
 
-    def test_the_projects_own_memory_is_offered_only_inside_a_project(self):
-        assert self.ask(MemoryChoice(), "project", project=True).scope == "project"
-        # Outside one, "project" is not a choice, so it is not accepted.
+    def test_inside_a_project_there_are_three_choices_and_global_is_always_read(self):
+        assert self.ask(MemoryChoice(), "2", project=True).scope is MemoryScope.BOTH_WRITING_GLOBAL
+        assert self.ask(MemoryChoice(), "3", project=True).scope is MemoryScope.BOTH_WRITING_PROJECT
         with pytest.raises(Exception):  # noqa: B017
-            self.ask(MemoryChoice(), "project", project=False)
+            self.ask(MemoryChoice(), "4", project=True)
 
-    @pytest.mark.parametrize(
-        "scope", [MemoryScope.BOTH_WRITING_GLOBAL, MemoryScope.BOTH_WRITING_PROJECT]
-    )
-    def test_reading_both_is_offered_only_inside_a_project(self, scope):
-        assert self.ask(MemoryChoice(), str(scope), project=True).scope is scope
+    def test_outside_a_project_there_are_two(self):
         with pytest.raises(Exception):  # noqa: B017
-            self.ask(MemoryChoice(), str(scope), project=False)
+            self.ask(MemoryChoice(), "3", project=False)
 
-    def test_every_choice_says_what_follows_from_it(self):
+    def test_enter_keeps_a_scope_no_longer_offered_exactly(self):
+        for scope in (MemoryScope.PROJECT, MemoryScope.GLOBAL):
+            assert self.ask(MemoryChoice(scope=scope), "", project=True).scope is scope
+
+    def test_the_choices_are_short(self):
         shown = []
         self.ask(MemoryChoice(), "", project=True, shown=shown)
         printed = " ".join(shown[0].split())
-        for scope in MemoryScope:
-            assert f"{scope} — {cfg.MEMORY_SCOPE_BLURB[scope]}" in printed
+        for label in (self.INFORM, self.SCOPED):
+            assert label in printed
 
     @pytest.mark.parametrize(
         ("scope", "lines"),
@@ -298,11 +302,16 @@ class TestTheQuestion:
         ],
     )
     def test_once_chosen_it_names_the_files(self, scope, lines):
+        assert cfg.memory_files_shown(scope, Path("/work/p")) == lines
+
+    @pytest.mark.parametrize(
+        ("answer", "line"),
+        [("2", "learns into ~/.domyn/memory.md"), ("3", "learns into /work/p/memory.md")],
+    )
+    def test_the_choice_names_where_it_learns(self, answer, line):
         shown = []
-        self.ask(MemoryChoice(), str(scope), project=True, shown=shown)
-        # The first follows the prompt the answer was typed at, on its line.
-        printed = [line.split(": ")[-1].strip() for line in shown[0].splitlines()]
-        assert [line for line in printed if line.startswith(("learns", "also reads"))] == lines
+        self.ask(MemoryChoice(), answer, project=True, shown=shown)
+        assert line in shown[0]
 
 
 class TestTheRemeberedLine:
@@ -389,7 +398,7 @@ class TestInTheWizard:
 
     def test_the_answer_is_saved(self, tmp_path):
         # provider, model, url, api key, max tokens, context window, memory
-        result = self.run(["openai", "m", "", "", "", "", "global"], tmp_path)
+        result = self.run(["openai", "m", "", "", "", "", "2"], tmp_path)
 
         assert manager_of(result)["file_path"].endswith("memory.md")
 
@@ -397,7 +406,7 @@ class TestInTheWizard:
         from domyn.agents.interfaces.cli.prompt import GoBack
 
         # Back from memory to the context window, typed this time, then memory again.
-        answers = ["openai", "m", "", "", "", "", GoBack(), "64000", "global"]
+        answers = ["openai", "m", "", "", "", "", GoBack(), "64000", "2"]
 
         result = self.run(answers, tmp_path)
 
@@ -484,7 +493,7 @@ class TestWhoDecidesWhatToRemember:
             monkeypatch.delenv(name, raising=False)
         console = Console(file=io.StringIO(), width=100, force_terminal=False)
         # provider, model, url, api key, max tokens, context window, memory: no "who decides"
-        answers = ["openai", "m", "", "", "", "", "global"]
+        answers = ["openai", "m", "", "", "", "", "2"]
         with patch("builtins.input", side_effect=answers):
             result = setup.run_setup(
                 console, Theme.build(allow_animation=False), path=tmp_path / "config.yaml"
@@ -507,7 +516,7 @@ class TestWhoDecidesWhatToRemember:
             monkeypatch.delenv(name, raising=False)
         console = Console(file=io.StringIO(), width=100, force_terminal=False)
         # provider, model, url, api key, max tokens, context window, memory, who decides
-        answers = ["openai", "m", "", "", "", "", "global", MemoryDecider.MODEL]
+        answers = ["openai", "m", "", "", "", "", "2", MemoryDecider.MODEL]
         with patch("builtins.input", side_effect=answers):
             result = setup.run_setup(
                 console, Theme.build(allow_animation=False), path=tmp_path / "config.yaml"
@@ -530,7 +539,7 @@ class TestWhoDecidesWhatToRemember:
             monkeypatch.delenv(name, raising=False)
         console = Console(file=io.StringIO(), width=100, force_terminal=False)
         # A further answer would be left over: input() raises StopIteration if asked.
-        with patch("builtins.input", side_effect=["openai", "m", "", "", "", "", "no"]):
+        with patch("builtins.input", side_effect=["openai", "m", "", "", "", "", "1"]):
             result = setup.run_setup(
                 console, Theme.build(allow_animation=False), path=tmp_path / "config.yaml"
             )
@@ -572,22 +581,22 @@ class TestAddingAndRemovingTheDecisionModel:
 
     def test_removing_it_makes_the_memory_agentic(self, tmp_path, monkeypatch):
         path = tmp_path / "config.yaml"
-        first, _ = self.run(monkeypatch, path, self.ON, ["global", MemoryDecider.MODEL])
+        first, _ = self.run(monkeypatch, path, self.ON, ["2", MemoryDecider.MODEL])
         assert manager_of(first)["execution_mode"] == "automatic"
 
         # No decider question: input() would run out of answers.
-        second, shown = self.run(monkeypatch, path, self.OFF, ["global"])
+        second, shown = self.run(monkeypatch, path, self.OFF, ["2"])
         assert "decision_providers" not in second
         assert manager_of(second)["execution_mode"] == "agentic"
         assert "the agent saves memories itself" in shown
 
     def test_moving_to_shadow_makes_the_memory_agentic(self, tmp_path, monkeypatch):
         path = tmp_path / "config.yaml"
-        self.run(monkeypatch, path, self.ON, ["global", MemoryDecider.MODEL])
+        self.run(monkeypatch, path, self.ON, ["2", MemoryDecider.MODEL])
 
         shadow = self.ON.model_copy(update={"level": "shadow"})
         # No decider question: the shadow level does not decide memory.
-        second, shown = self.run(monkeypatch, path, shadow, ["global"])
+        second, shown = self.run(monkeypatch, path, shadow, ["2"])
         assert second["decision_providers"]
         assert "memory" not in second["agents"][0]["decisions"]
         assert manager_of(second)["execution_mode"] == "agentic"
@@ -595,10 +604,10 @@ class TestAddingAndRemovingTheDecisionModel:
 
     def test_adding_it_to_an_agentic_memory_asks_who_decides(self, tmp_path, monkeypatch):
         path = tmp_path / "config.yaml"
-        first, _ = self.run(monkeypatch, path, self.OFF, ["global"])
+        first, _ = self.run(monkeypatch, path, self.OFF, ["2"])
         assert manager_of(first)["execution_mode"] == "agentic"
 
-        second, shown = self.run(monkeypatch, path, self.ON, ["global", MemoryDecider.MODEL])
+        second, shown = self.run(monkeypatch, path, self.ON, ["2", MemoryDecider.MODEL])
         assert "who decides what to remember" in shown
         assert manager_of(second)["execution_mode"] == "automatic"
 

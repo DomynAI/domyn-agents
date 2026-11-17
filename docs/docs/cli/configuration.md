@@ -175,17 +175,17 @@ The setting is read when voice is turned on, so a change takes effect at the nex
 
 The agent can remember facts about you between conversations: your name, how you like things done, what you are working on. It is off until you turn it on in `domyn setup`.
 
-There are two memories, each a `memory.md` file: the **global** one, `~/.domyn/memory.md`, shared by every configuration that uses it, and a **project**'s own, in the project's folder. A configuration reads one or both, and learns (writes what it remembers) into one of them. Setup offers:
+There are two memories, each a `memory.md` file: the **global** one, `~/.domyn/memory.md`, shared by every configuration that uses it, and a **project**'s own, in the project's folder. A [project](#projects) always reads the global memory too, so setup only asks where the agent learns (writes what it remembers):
 
-| Choice | Reads | Learns into | What follows |
-|---|---|---|---|
-| **`no`** | nothing | nothing | The agent remembers nothing between conversations, even when your default configuration has a memory. |
-| **`global`** | the global memory | the global memory | What it learns here is known in every configuration that uses the global memory, and the other way round. |
-| **`project`** | the project's memory | the project's memory | Nothing learned elsewhere comes in, nothing learned here goes out. |
-| **`project + global, writes to global`** | both | the global memory | What it learns in this project is known in other projects too. The project's memory is only read. |
-| **`project + global, writes to project`** | both | the project's memory | It knows what was learned in your other configurations, but what it learns here stays in the project. The global memory is only read. |
+| Choice | Learns into | What follows |
+|---|---|---|
+| **No** | nothing | The agent remembers nothing between conversations, even when your default configuration has a memory. |
+| **Yes, and inform other projects too (writes to global memory)** | the global memory | What it learns here is known in other projects too. The project's own memory is only read. |
+| **Yes, scoped only to this project** | the project's memory | It knows what was learned in your other configurations, but what it learns here stays in the project. The global memory is only read. |
 
-Outside a [project](#projects) only `no` and `global` are offered. Once you choose, setup prints the files: the one it learns into, and the one it only reads. Nothing is read that the choice does not name: a project set to `project` does not read the global memory.
+Outside a project the choices are **No** and **Yes (global memory - shared with all projects)**, which learns into the global memory. Once you choose, setup prints the file it learns into and, in a project, the one it only reads.
+
+A config written by hand can still have a memory that reads only the global or only the project file; setup keeps it as written when you press Enter on that question.
 
 A memory that is only read is never changed by the agent: a fact found there is not stored again, `/memory` marks its entries `(read only)`, and `/memory forget` and `/memory clear` leave them alone, saying so. To change one, edit its file, or run `/memory` in a configuration that learns into it.
 

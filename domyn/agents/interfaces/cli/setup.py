@@ -46,7 +46,6 @@ from domyn.agents.interfaces.cli.config import (
     DEFAULT_DECISION_KEY_ENV,
     LOCAL_SKILLS_DIRS,
     MEMORY_DECIDER_BLURB,
-    MEMORY_SCOPE_BLURB,
     PROVIDER_HINTS,
     REQUIRES_URL,
     AgentConfig,
@@ -382,28 +381,49 @@ def _ask_decision_key(
 
 
 def _ask_memory(console: Console, theme: Theme, current: MemoryChoice) -> MemoryChoice:
-    """Offer long-term memory, and say what is read and what is written.
+    """Offer long-term memory in as few words as possible.
 
     Off unless chosen: what the agent writes down about the user stays on this
     machine, in a file you can read and edit, but it is still something to opt into.
-    Outside a project there is one memory to offer, the global one; inside one, its
-    own memory too, alone or with the global one, the agent learning into one of the
-    two and only reading the other (`MemoryScope`, `MEMORY_SCOPE_BLURB`). Once chosen,
-    the files are named (`memory_files_shown`), so what the choice does is on screen.
+    A project always reads the global memory too, so the choices are only where the
+    agent learns: nowhere, into the global memory (other projects learn it), or into
+    this project's own. Outside a project the one memory is the global one. Once
+    chosen, the files are named (`memory_files_shown`).
     """
     project = active_project()
-    scopes = [s for s in MemoryScope if project is not None or not s.needs_project]
+    no = "No"
+    if project is None:
+        choices = {
+            no: MemoryScope.NONE,
+            "Yes (global memory - shared with all projects)": MemoryScope.GLOBAL,
+        }
+    else:
+        choices = {
+            no: MemoryScope.NONE,
+            "Yes, and inform other projects too (writes to global memory)": (
+                MemoryScope.BOTH_WRITING_GLOBAL
+            ),
+            "Yes, scoped only to this project": MemoryScope.BOTH_WRITING_PROJECT,
+        }
+    # A hand-written scope the wizard no longer offers opens on its nearest choice.
+    nearest = {
+        MemoryScope.GLOBAL: list(choices.values())[-1 if project is None else 1],
+        MemoryScope.PROJECT: MemoryScope.BOTH_WRITING_PROJECT,
+    }
+    opening = nearest.get(current.scope, current.scope)
+    opening_label = next((k for k, v in choices.items() if v is opening), no)
     chosen = _select(
         console,
         theme,
         "Long-term memory: should the agent remember information across conversations?",
-        list(scopes),
-        current=current.scope if current.scope in scopes else MemoryScope.NONE,
-        descriptions=MEMORY_SCOPE_BLURB,
+        list(choices),
+        current=opening_label,
     )
     if chosen is None:
         raise KeyboardInterrupt
-    scope = MemoryScope(chosen)
+    scope = choices[chosen]
+    if chosen == opening_label and current.scope.enabled and current.scope not in choices.values():
+        scope = current.scope  # Enter on an unoffered scope keeps it exactly as written
     for line in memory_files_shown(scope, project):
         console.print(f"  {line}", style=theme.style("meta"), highlight=False, markup=False)
     return MemoryChoice(scope=scope)
@@ -485,7 +505,7 @@ def _ask_decisions(
         chosen = _select(
             console,
             theme,
-            "decision model",
+            "Add a decision model to support? Select modality:",
             list(DECISION_LEVELS),
             current=current.level,
             descriptions=DECISION_LEVEL_BLURB,
@@ -612,7 +632,7 @@ def _choose_provider(console: Console, theme: Theme, current: str) -> str:
     chosen = _select(
         console,
         theme,
-        "Provider",
+        "Select a model provider:",
         options,
         current=current,
         descriptions=_PROVIDER_BLURB,
@@ -1659,7 +1679,11 @@ def run_setup(
 
     def choose_provider(d: _Draft) -> None:
         recall = _recall.get()
-        before = recall.answers.get(("provider", "select", "Provider")) if recall else None
+        before = (
+            recall.answers.get(("provider", "select", "Select a model provider:"))
+            if recall
+            else None
+        )
         chosen = _choose_provider(console, theme, d.provider.type)
         if recall is not None and before not in (None, chosen):
             # What was typed for another provider is not this one's.
@@ -1797,7 +1821,7 @@ def run_setup(
         d.agent.instruction = _ask(
             console,
             theme,
-            "Extra instructions for the agent, be concise and accurate (empty = none)",
+            'Optional extra instruction for the agent (e.g. "Be concise and accurate")',
             d.agent.instruction,
         )
 
