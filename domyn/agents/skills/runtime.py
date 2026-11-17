@@ -348,7 +348,10 @@ class SkillsRuntime(BaseModel):
 
     def render_index(self, layout: IndexLayout) -> str:
         """The index block, in the form ``layout`` decided."""
-        header = "Available skills (call skill_view to read one in full):"
+        header = (
+            "Available skills. Before starting a task, check which of them are relevant to it, "
+            "and read each relevant one in full with skill_view before doing anything else:"
+        )
         lines: list[str] = []
         names: list[str] = []
         for skill in layout.listed:

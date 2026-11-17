@@ -35,9 +35,9 @@ from domyn.agents.tools.base import FunctionDeclaration, Param
 
 _VIEW_DESCRIPTION = (
     "Read one of the available skills in full. The list of skills, with a short "
-    "description of each, is provided in the conversation. Call this when a skill "
-    "looks relevant to the task, before acting. Pass 'section' to read only one "
-    "section of a long skill."
+    "description of each, is in the system prompt. Before starting a task, call this "
+    "for every skill relevant to it. Pass 'section' to read only one section of a "
+    "long skill."
 )
 
 

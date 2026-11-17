@@ -34,7 +34,11 @@ from tests.planner_strategy.test_tool_use import (
 
 PLANNERS = [ToolUsePlannerStrategy, ToolUseWithThoughtPlannerStrategy]
 
-PAYLOAD = "Available skills (call skill_view to read one in full):\n- sql-style: how we write sql"
+PAYLOAD = (
+    "Available skills. Before starting a task, check which of them are relevant to it, "
+    "and read each relevant one in full with skill_view before doing anything else:\n"
+    "- sql-style: how we write sql"
+)
 
 
 class TripwireSource(SkillSource):
