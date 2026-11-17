@@ -280,8 +280,9 @@ class SkillsRuntime(BaseModel):
     def build_payload(self, selection: Selection, contents: list[SkillContent]) -> str:
         """Render the block handed to the model.
 
-        Delivered as a message rather than folded into the system prompt: it keeps
-        the prompt prefix stable across the iterations of a turn.
+        The planner puts it at the end of the system prompt
+        (``planner_strategy.context_injection.with_skills``): it is resolved once per
+        agent entry, so it is the same on every iteration of a turn.
         """
         blocks: list[str] = []
 

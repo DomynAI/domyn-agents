@@ -125,8 +125,11 @@ class TestThePayloadItWasHanded:
 
         assert len(message_lists) == 2, "expected a two-iteration turn"
         for i, messages in enumerate(message_lists):
-            joined = " ".join(m.content or "" for m in messages)
-            assert "sql-style" in joined, f"iteration {i} lost the skills block"
+            assert messages[0].role == "system"
+            assert (messages[0].content or "").endswith(PAYLOAD), (
+                f"iteration {i} lost the skills block from the end of the system prompt"
+            )
+            assert all("sql-style" not in (m.content or "") for m in messages[1:])
 
     @pytest.mark.asyncio
     async def test_no_payload_injects_nothing(self, planner_cls) -> None:

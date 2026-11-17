@@ -136,7 +136,7 @@ Skill files are read again on every turn, so an edited skill applies from the ne
 
 ## How a skill reaches the model
 
-On every model call of a turn, the agent's skills are added to the request as a message right after the system prompt. By default it is the index:
+On every model call of a turn, the agent's skills are added at the end of the system prompt. By default it is the index:
 
 ```text
 Available skills (call skill_view to read one in full):
