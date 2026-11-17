@@ -291,7 +291,7 @@ class TestTheImportedProjectsSetup:
     ) -> None:
         dest, _ = _export(tmp_path, _config(f"{P}/memory.md"))
 
-        self._wizard(tmp_path, monkeypatch, dest, answer="no")
+        self._wizard(tmp_path, monkeypatch, dest, answer="1")
 
         assert _memory_of(self._saved(tmp_path)) is None
 

@@ -942,30 +942,6 @@ class MemoryScope(StrEnum):
         return MemoryScope.PROJECT in (self.writes, self.only_reads)
 
 
-#: Shown beside each choice of the wizard's memory question: what is read, what is
-#: written, and what follows from it. Nothing is read that the choice does not name.
-MEMORY_SCOPE_BLURB: dict[str, str] = {
-    MemoryScope.NONE: "the agent remembers nothing between conversations",
-    MemoryScope.GLOBAL: (
-        "reads and writes ~/.domyn/memory.md: what it learns here is known in every "
-        "configuration that uses the global memory, and the other way round"
-    ),
-    MemoryScope.PROJECT: (
-        "reads and writes this project's memory.md alone: nothing learned elsewhere "
-        "comes in, nothing learned here goes out"
-    ),
-    MemoryScope.BOTH_WRITING_GLOBAL: (
-        "reads both, learns into the global memory: what it learns here is known in "
-        "other projects too; this project's memory.md is only read"
-    ),
-    MemoryScope.BOTH_WRITING_PROJECT: (
-        "reads both, learns into this project's memory.md: it knows what was learned "
-        "elsewhere, but what it learns here stays in the project; the global memory is "
-        "only read"
-    ),
-}
-
-
 class MemoryDecider(StrEnum):
     """Who decides what goes into the memory, asked only when a decision model is set up.
 

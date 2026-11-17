@@ -164,7 +164,7 @@ def _approvals_off_the_real_home(
     real_ask = cli_setup._ask
 
     def ask(console: Any, theme: Any, label: str, current: str = "", **kwargs: Any) -> str:
-        if label.startswith(("Agent name", "Extra instructions for the agent")):
+        if label.startswith(("Agent name", "Optional extra instruction for the agent")):
             return current
         return real_ask(console, theme, label, current, **kwargs)
 
