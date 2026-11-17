@@ -152,8 +152,8 @@ def tool_batches(
     tool_calls: list[LLMToolCall],
     handoffs: Collection[str] = (),
     *,
-    parallel_handoffs: bool = True,
-    parallel_tools: bool = True,
+    parallel_handoffs: bool,
+    parallel_tools: bool,
     step_enders: Collection[str] = (),
 ) -> dict[str, dict[str, Any]]:
     """The ``METADATA_TOOL_BATCH`` of each call that belongs to a batch, by call id.
@@ -604,9 +604,13 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
     @model_validator(mode="after")
     def refuse_parallel_handoffs_alone(self) -> "ToolUsePlannerStrategy":
         # The batch is what runs sub-agents together: without it the option would
-        # do nothing, silently.
+        # do nothing, silently. Left at its default, it follows parallel_tool_calls,
+        # so a configuration turning batches off keeps loading; asked for, it is
+        # refused.
         if self.parallel_handoffs and not self.parallel_tool_calls:
-            raise ValueError("parallel_handoffs needs parallel_tool_calls")
+            if "parallel_handoffs" in self.model_fields_set:
+                raise ValueError("parallel_handoffs needs parallel_tool_calls")
+            self.parallel_handoffs = False
         return self
 
     def batches(

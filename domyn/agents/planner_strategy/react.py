@@ -121,6 +121,8 @@ class ReactPlannerStrategy(BasePlannerStrategy):
     stream: bool = False
     context_manager: ContextManager = Field(default_factory=_default_context_manager)
     name: str = "react"
+    # One action per step: there is never a batch to run, so off, and refused on.
+    parallel_handoffs: bool = False
     _disable_structured_outputs: bool = False
 
     @field_validator("parallel_handoffs")

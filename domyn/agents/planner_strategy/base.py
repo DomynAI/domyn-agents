@@ -30,15 +30,16 @@ class BasePlannerStrategy(BaseModel):
     max_iterations: int = 25
     verbose: bool = False
     forward_verbatim_enabled: bool = True
-    parallel_handoffs: bool = False
+    parallel_handoffs: bool = True
     """Whether the sub-agents asked for in one response run at the same time.
 
-    Off, a response that names several runs the first and drops the rest, one agent
-    at a time as a hand-off always was. On, they are marked as a batch with the
-    tools around them (``METADATA_TOOL_BATCH`` on their ``AGENT_CALL``) and the
-    runner runs each sub-agent as a branch of the same conversation, resuming this
-    agent once all of them have ended. Needs ``parallel_tool_calls``, which is what
-    marks a batch; the ``react`` planner refuses it."""
+    On (the default), they are marked as a batch with the tools around them
+    (``METADATA_TOOL_BATCH`` on their ``AGENT_CALL``) and the runner runs each
+    sub-agent as a branch of the same conversation, resuming this agent once all of
+    them have ended. Off, they run one after the other, each to its end, in the order
+    called. Needs ``parallel_tool_calls``, which is what marks a batch: with that off
+    and this left unset, this is off too. The ``react`` planner refuses it, and
+    defaults it to off."""
 
     @abstractmethod
     async def execute(

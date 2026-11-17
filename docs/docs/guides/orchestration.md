@@ -63,7 +63,7 @@ The main agent decides whom to call only from the sub-agents' names and descript
 
 ## Several sub-agents at once
 
-A model may call several sub-agents in one response, for example `OrderAgent` and `PaymentAgent` for a question about both. By default they run one after the other, in the order called, each to its end before the next starts, since a handoff gives the conversation to one agent at a time; the calls of the same response after them run too, so none is lost. To run them all at the same time, set `parallel_handoffs` on the calling agent's planner:
+A model may call several sub-agents in one response, for example `OrderAgent` and `PaymentAgent` for a question about both. They run at the same time (`parallel_handoffs`, on by default). To have them run one after the other instead, in the order called and each to its end before the next starts, as a handoff that gives the conversation to one agent at a time, turn it off on the calling agent's planner; the calls of the same response after them still run, so none is lost:
 
 ```python
 from domyn.agents.planner_strategy.tool_use_thought import ToolUseWithThoughtPlannerStrategy
@@ -71,11 +71,11 @@ from domyn.agents.planner_strategy.tool_use_thought import ToolUseWithThoughtPla
 main_agent = Agent(
     ...,
     sub_agents=[order_agent, payment_agent],
-    planner=ToolUseWithThoughtPlannerStrategy(parallel_handoffs=True),
+    planner=ToolUseWithThoughtPlannerStrategy(parallel_handoffs=False),
 )
 ```
 
-It is an option of `tool_use` and `tool_use_thought`, and needs `parallel_tool_calls` (on by default); `react` refuses it. Everything else works as it does for a single handoff: the same events, the same conversation, the same `context_visibility` and `handoff_scope`. What changes:
+It is an option of `tool_use` and `tool_use_thought`, and needs `parallel_tool_calls` (on by default): turning that off turns this off too, unless it is set. `react` has it off and refuses it. When they run together, everything else works as it does for a single handoff: the same events, the same conversation, the same `context_visibility` and `handoff_scope`. What changes:
 
 - **They run together.** The sub-agents called in the response, and the tools called with them that need no approval, start at the same time. At most `max_parallel_tool_calls` tool calls run at once in the whole turn, however many sub-agents are running (a `Runner` option, 8 by default); a sub-agent takes no place of its own, so one waiting for its tools never holds up another. The calling agent resumes once all of them have finished, and reads their answers in the order it called them, whichever finished first.
 - **They do not see each other at work.** A sub-agent does not read what another one of the same response is doing; once that one has finished, its work is visible as usual, according to `context_visibility`.

@@ -1552,6 +1552,37 @@ class TestNoCallOfAResponseIsDropped:
         assert _every_call_answered(main, 1)
 
 
+class TestItsDefault:
+    """On by default for the tool-use planners; off where it cannot work, without
+    refusing a configuration that never asked for it."""
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    def test_on_unless_asked_otherwise(self, planner: str) -> None:
+        assert _planner(planner).parallel_handoffs is True
+        assert _planner(planner, parallel_handoffs=False).parallel_handoffs is False
+
+    def test_off_for_react(self) -> None:
+        assert _planner("react").parallel_handoffs is False
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    def test_off_with_batches_off_when_not_asked_for(self, planner: str) -> None:
+        assert _planner(planner, parallel_tool_calls=False).parallel_handoffs is False
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_an_agent_that_names_no_option_runs_them_together(self, planner: str) -> None:
+        log: list[str] = []
+        root, _, _ = _team(planner, log)
+        root.planner = _planner(planner)
+
+        events = await _run(Runner(), root, f"c_default_{planner}")
+
+        calls = [e for e in events if e.event_type == ExecutionEventType.AGENT_CALL]
+        assert all(METADATA_TOOL_BATCH in c.metadata for c in calls)
+        assert not (calls[0].metadata[METADATA_TOOL_BATCH]).get("sequential")
+        assert log.index("start Beta") < log.index("end Alpha")
+
+
 class TestWhatRefusesIt:
     def test_react_with_parallel_handoffs_does_not_load(self) -> None:
         with pytest.raises(ValueError, match="parallel_handoffs"):
