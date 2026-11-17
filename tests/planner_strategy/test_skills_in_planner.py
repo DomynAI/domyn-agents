@@ -35,8 +35,8 @@ from tests.planner_strategy.test_tool_use import (
 PLANNERS = [ToolUsePlannerStrategy, ToolUseWithThoughtPlannerStrategy]
 
 PAYLOAD = (
-    "Available skills. Before starting a task, check which of them are relevant to it, "
-    "and read each relevant one in full with skill_view before doing anything else:\n"
+    "Available skills. They hold instructions for kinds of work, and you must use them. Before starting a task, check this list and read every skill relevant to the task in full with skill_view, before doing anything else. "
+    "While working, whenever a step might make use of a skill (a kind of work comes up that one of them covers), read it before taking that step. Follow every skill you read:\n"
     "- sql-style: how we write sql"
 )
 
