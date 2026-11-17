@@ -1847,3 +1847,72 @@ class TestOneLimitForTheTurn:
         # Beta is not held back until Alpha's calls are done: it holds no place.
         assert log.index("start Beta") < log.index("slow alpha2")
         assert _answered_by_main(events)
+
+
+class TestTheRequestContextReachesEveryBranch:
+    """What a host binds to the request — log fields, the trace a gateway started —
+    lives in context variables, and a branch runs in a task of its own: asyncio
+    copies the context into a task when it creates it, so every sub-agent running
+    together sees the caller's, and the calls it makes carry the same trace."""
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_log_fields_and_trace_reach_the_tools_of_both(self, planner: str) -> None:
+        # The `tracing` extra: without it there is no trace to follow.
+        pytest.importorskip("opentelemetry.sdk.trace")
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+
+        from domyn.agents.logger import bind_log_context, get_log_context
+
+        seen: dict[str, tuple[dict[str, Any], int]] = {}
+
+        def probe(owner: str) -> FunctionTool:
+            async def probe_context(what: str) -> str:
+                """Note what this call runs under.
+
+                Args:
+                    what: anything.
+                """
+                span = trace.get_current_span().get_span_context()
+                seen[owner] = (dict(get_log_context()), span.trace_id)
+                return "noted"
+
+            probe_context.__name__ = probe_context.__qualname__ = f"probe_{owner.lower()}"
+            return FunctionTool(func=probe_context)
+
+        def worker(name: str) -> Agent:
+            return Agent(
+                name=name,
+                description=f"works on {name.lower()}",
+                instruction="work",
+                llm_provider=_Script(
+                    label=name,
+                    replies=[[(f"probe_{name.lower()}", '{"what": "x"}')], f"{name} done"],
+                ),
+                planner=_planner(planner),
+                tools=[probe(name)],
+            )
+
+        root = Agent(
+            name="MainAgent",
+            description="the agent",
+            instruction="delegate",
+            llm_provider=_Script(label="main", replies=[[ALPHA, BETA], "Done."]),
+            planner=_planner(planner, parallel_handoffs=True),
+            sub_agents=[worker("Alpha"), worker("Beta")],
+        )
+        tracer = TracerProvider().get_tracer("test")
+
+        with (
+            tracer.start_as_current_span("request") as request,
+            bind_log_context(conversation_id="c_ctx", request_id="r1"),
+        ):
+            events = await _run(Runner(), root, f"c_ctx_{planner}")
+
+        assert _answered_by_main(events)
+        trace_id = request.get_span_context().trace_id
+        for name in ("Alpha", "Beta"):
+            fields, seen_trace = seen[name]
+            assert fields["request_id"] == "r1"
+            assert seen_trace == trace_id

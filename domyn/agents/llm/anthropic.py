@@ -32,6 +32,19 @@ _CACHE_USAGE_KEYS = ("cache_read_input_tokens", "cache_creation_input_tokens")
 """Counted apart from `input_tokens`: see `reported_prompt_tokens` in `llm/base.py`."""
 
 
+def _holds_tool_results(messages: list[dict[str, Any]]) -> bool:
+    """Whether the last message is the user message carrying tool results."""
+    if not messages or messages[-1]["role"] != "user":
+        return False
+    content = messages[-1]["content"]
+    return (
+        isinstance(content, list)
+        and bool(content)
+        and isinstance(content[0], dict)
+        and content[0].get("type") == "tool_result"
+    )
+
+
 class AnthropicProvider(BaseLLMProvider):
     """Provider for Anthropic Claude models"""
 
@@ -166,15 +179,16 @@ class AnthropicProvider(BaseLLMProvider):
                     "tool_use_id": msg.tool_call_id,
                     "content": content_str,
                 }
-                # Merge consecutive tool results into a single user message
-                if (
-                    anthropic_messages
-                    and anthropic_messages[-1]["role"] == "user"
-                    and isinstance(anthropic_messages[-1]["content"], list)
-                    and anthropic_messages[-1]["content"]
-                    and anthropic_messages[-1]["content"][0].get("type") == "tool_result"
-                ):
-                    anthropic_messages[-1]["content"].append(tool_result_block)
+                # Merge consecutive tool results into a single user message, each
+                # after the results already there and before any text: Anthropic
+                # wants the results first.
+                if _holds_tool_results(anthropic_messages):
+                    blocks = anthropic_messages[-1]["content"]
+                    first_text = next(
+                        (i for i, b in enumerate(blocks) if b.get("type") != "tool_result"),
+                        len(blocks),
+                    )
+                    blocks.insert(first_text, tool_result_block)
                 else:
                     anthropic_messages.append(
                         {
@@ -189,7 +203,18 @@ class AnthropicProvider(BaseLLMProvider):
                     anthropic_messages.append({"role": msg.role, "content": msg.content})
                 else:
                     content_str = (msg.content or "").strip()
-                    if content_str:
+                    if (
+                        content_str
+                        and msg.role == "user"
+                        and _holds_tool_results(anthropic_messages)
+                    ):
+                        # Text following the results of one turn (a sub-agent's
+                        # outcome, a message that arrived meanwhile): into the same
+                        # user message, after them, not a second user message.
+                        anthropic_messages[-1]["content"].append(
+                            {"type": "text", "text": content_str}
+                        )
+                    elif content_str:
                         anthropic_messages.append({"role": msg.role, "content": content_str})
 
         return system_prompt, anthropic_messages

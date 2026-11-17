@@ -126,6 +126,79 @@ class TestAnthropicToolConversion:
         assert converted[3] == {"role": "assistant", "content": "Based on search: AI is amazing."}
 
 
+class TestTextAfterToolResults:
+    """What follows the results of one assistant turn (a sub-agent's outcome, a
+    message that arrived meanwhile) goes into the user message holding them, after
+    them: Anthropic wants the results first in the user message right after the
+    tool_use turn, and a second user message in a row is not a shape to rely on."""
+
+    def setup_method(self):
+        self.provider = AnthropicProvider(model_name="claude-sonnet-4-5", api_key="test-key")
+
+    def _calls(self) -> LLMMessage:
+        return LLMMessage(
+            role="assistant",
+            tool_calls=[
+                LLMToolCall(
+                    id=name, type="function", function=ToolCallFunction(name=name, arguments="{}")
+                )
+                for name in ("Alpha", "Beta")
+            ],
+        )
+
+    def test_it_joins_the_results_after_them(self):
+        messages = [
+            LLMMessage(role="user", content="find a and b"),
+            self._calls(),
+            LLMMessage(role="tool", tool_call_id="Alpha", content="Task assigned: a"),
+            LLMMessage(role="tool", tool_call_id="Beta", content="Task assigned: b"),
+            LLMMessage(role="user", content="Agent: Alpha ended. Information: a"),
+            LLMMessage(role="user", content="Agent: Beta ended. Information: b"),
+        ]
+
+        _, converted = self.provider._convert_messages(messages)
+
+        assert [m["role"] for m in converted] == ["user", "assistant", "user"]
+        assert [b["type"] for b in converted[2]["content"]] == [
+            "tool_result",
+            "tool_result",
+            "text",
+            "text",
+        ]
+        assert converted[2]["content"][2]["text"] == "Agent: Alpha ended. Information: a"
+
+    def test_a_result_after_text_still_goes_first(self):
+        messages = [
+            self._calls(),
+            LLMMessage(role="tool", tool_call_id="Alpha", content="a"),
+            LLMMessage(role="user", content="a message meanwhile"),
+            LLMMessage(role="tool", tool_call_id="Beta", content="b"),
+        ]
+
+        _, converted = self.provider._convert_messages(messages)
+
+        assert [b["type"] for b in converted[1]["content"]] == [
+            "tool_result",
+            "tool_result",
+            "text",
+        ]
+
+    def test_a_user_message_on_its_own_stays_a_string(self):
+        messages = [
+            LLMMessage(role="user", content="hello"),
+            LLMMessage(role="assistant", content="hi"),
+            LLMMessage(role="user", content="again"),
+        ]
+
+        _, converted = self.provider._convert_messages(messages)
+
+        assert converted == [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+            {"role": "user", "content": "again"},
+        ]
+
+
 class TestAnthropicGenerateWithTools:
     def setup_method(self):
         self.provider = AnthropicProvider(
