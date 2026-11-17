@@ -922,7 +922,8 @@ class TestChoosingTheSkills:
         assert paths is not None
         install_dir = cfg.skills_install_dir()
         assert all(Path(p).is_absolute() and Path(p).is_dir() for p in paths)
-        assert all(Path(p).parent.parent == install_dir for p in paths)
+        # `<category>/<skill>`, or `<skill>` for one in no category.
+        assert all(install_dir in Path(p).parents for p in paths)
         assert sorted(Path(p).name for p in paths) == sorted(_skill_names())
 
     def test_the_skills_are_where_the_config_says(

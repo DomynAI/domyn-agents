@@ -38,6 +38,7 @@ class TestTheManifest:
             "interactive-charts",
             "documents",
             "domyn-docs",
+            "coding",
         } <= skills.keys()
         assert all(skill.description for skill in skills.values())
 
@@ -282,11 +283,11 @@ class TestWhatTheWizardNamesMatchesWhatIsWritten:
 
 
 class TestTheGroups:
-    def test_every_skill_is_in_exactly_one_group_named_after_its_category_folder(self) -> None:
+    def test_every_skill_in_a_category_is_in_exactly_one_group_named_after_it(self) -> None:
         groups = skill_groups()
         names = [name for members in groups.values() for name in members]
 
-        assert sorted(names) == sorted(skill.name for skill in list_builtin_skills())
+        assert sorted(names) == sorted(s.name for s in list_builtin_skills() if s.category)
         assert len(names) == len(set(names))
         for group, members in groups.items():
             assert (BUILTIN_SKILLS_ROOT / group).is_dir()
@@ -300,6 +301,13 @@ class TestTheGroups:
             "documents",
             "presentations",
         ]
+
+    def test_a_skill_directly_under_builtin_is_in_no_group(self) -> None:
+        coding = next(skill for skill in list_builtin_skills() if skill.name == "coding")
+
+        assert coding.category == ""
+        assert coding.skill_file == BUILTIN_SKILLS_ROOT / "coding" / "SKILL.md"
+        assert all("coding" not in members for members in skill_groups().values())
 
     def test_a_group_never_has_the_name_of_a_skill(self) -> None:
         """The picker keys rows by label, so the two cannot share one."""
@@ -369,6 +377,20 @@ class TestInstalling:
         assert (dest / "resources" / "typography.json").is_file()
         assert list((dest / "resources" / "assets" / "fonts").glob("*.ttf"))
         assert (dest / "data" / "data_utils.py").is_file()
+
+    def test_a_skill_in_no_category_is_installed_at_the_top(self, tmp_path: Path) -> None:
+        dest = tmp_path / "skills"
+
+        paths = install_skills(["coding"], dest)
+
+        assert paths == [dest / "coding"]
+        assert sorted(p.relative_to(dest).as_posix() for p in dest.rglob("*") if p.is_file()) == [
+            "coding/SKILL.md",
+            "coding/templates/ARCHITECTURE.md",
+            "coding/templates/PLAN.md",
+            "coding/templates/REQUIREMENTS.md",
+        ]
+        assert unrecognized_entries(dest) == []
 
     def test_only_what_the_chosen_skills_need_is_copied(self, tmp_path: Path) -> None:
         dest = tmp_path / "skills"
