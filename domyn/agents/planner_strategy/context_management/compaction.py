@@ -91,6 +91,23 @@ def compaction_key(agent_name: str, context: Any) -> str:
     return agent_name
 
 
+def forget_copy(state: dict[str, Any] | None, agent_name: str, interaction_id: str | None) -> bool:
+    """Drop the record and anchor a copy of ``agent_name`` kept under its own key,
+    once it has ended, and say whether there was any. The key names the copy's
+    interaction, so nothing reads them again; kept, they would pile up in the
+    conversation state with every batch. Nothing to drop for an agent that was
+    not a copy."""
+    if state is None or not interaction_id:
+        return False
+    key = f"{agent_name}{_COPY_MARK}{interaction_id}"
+    dropped = False
+    for table in (state.get(_RECORDS_KEY), state.get(_ANCHORS_KEY)):
+        if table and key in table:
+            del table[key]
+            dropped = True
+    return dropped
+
+
 def _lookup(table: dict[str, Any] | None, key: str) -> Any:
     """``table[key]``; for a copy that has nothing yet, what its agent has."""
     table = table or {}

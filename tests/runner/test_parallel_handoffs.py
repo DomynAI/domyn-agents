@@ -14,6 +14,7 @@
 
 # No `from __future__ import annotations`: builds real agents and tools.
 import asyncio
+import re
 import sqlite3
 import time
 from collections.abc import AsyncGenerator
@@ -1512,6 +1513,47 @@ class TestCopiesCompactApart:
         assert _corrections(events) == [own["reported"] - own["estimated"]]
 
 
+def _copy_keys(state: dict[str, Any]) -> set[str]:
+    """The compaction records and anchors filed under a copy's own key."""
+    return {
+        key
+        for table in ("compaction_records", "context_anchors")
+        for key in state.get(table) or {}
+        if "#copy:" in key
+    }
+
+
+class TestCopiesLeaveNothingBehind:
+    """A copy's record and anchor are never read again once it ends (its key
+    names its own interaction), so they are dropped then, not kept forever."""
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_copies_that_end_drop_their_keys(self, planner: str) -> None:
+        root, _ = _copies(planner, [TWO_COPIES, "Done."], parallel=True)
+        runner = Runner()
+        conversation = f"c_dropped_{planner}"
+
+        await _run(runner, root, conversation)
+
+        assert _copy_keys(await _state(runner.conversation_manager, conversation)) == set()
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_a_copy_waiting_keeps_its_key_until_it_ends(self, planner: str) -> None:
+        root, _ = _copies(planner, [TWO_COPIES, "Done."], writes=True, parallel=True)
+        runner = Runner()
+        conversation = f"c_kept_{planner}"
+
+        await _run(runner, root, conversation)
+        waiting = _copy_keys(await _state(runner.conversation_manager, conversation))
+        events = await _run(runner, root, conversation, _approve())
+
+        assert len(waiting) == 1
+        assert _answered_by_main(events)
+        assert _copy_keys(await _state(runner.conversation_manager, conversation)) == set()
+
+
 class TestTheBranchesShareTheConversationState:
     @pytest.mark.parametrize("planner", PLANNERS)
     @pytest.mark.asyncio
@@ -1539,3 +1581,131 @@ class TestTheBranchesShareTheConversationState:
 
         anchors = (await _state(runner.conversation_manager, conversation)).get("context_anchors")
         assert set(anchors or {}) == {"Alpha", "Beta"}
+
+
+class _NoIds(_Script):
+    """A provider whose tool calls carry no id, as some endpoints send them."""
+
+    async def generate(self, messages: list[LLMMessage], **kwargs: Any) -> LLMResponse:
+        response = await super().generate(messages, **kwargs)
+        for call in response.tool_calls or []:
+            call.id = ""
+        return response
+
+
+def _ids_sent(provider: _Script, request: int) -> list[str]:
+    """Every call id the request carried, on the calls and on their results."""
+    return provider.calls(request) + [
+        m.tool_call_id or "" for m in provider.shown[request] if m.role == "tool"
+    ]
+
+
+def _well_formed(call_id: str) -> bool:
+    # What the strictest providers accept: OpenAI at most 40 characters, Anthropic
+    # letters, digits, `_` and `-` only.
+    return 0 < len(call_id) <= 40 and re.fullmatch(r"[A-Za-z0-9_-]+", call_id) is not None
+
+
+class TestCallsWithoutAnId:
+    """A response whose calls have no id: each gets one, so none is lost, no call
+    runs with another's arguments, and the provider is never sent an empty id."""
+
+    @pytest.mark.parametrize("parallel", [True, False])
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_both_sub_agents_run_with_their_own_task(
+        self, planner: str, parallel: bool
+    ) -> None:
+        log: list[str] = []
+        root, _ = _caller(planner, [ALPHA, BETA], parallel=parallel, log=log)
+        main = _NoIds(label="main", log=log, replies=[[ALPHA, BETA], "Done."])
+        root.llm_provider = main
+
+        events = await _run(Runner(), root, f"c_no_ids_{planner}_{parallel}")
+
+        tasks = {
+            e.author: e.action.parameters.get("task")
+            for e in events
+            if e.event_type == ExecutionEventType.AGENT_START and e.author != "MainAgent"
+        }
+        assert tasks == {"Alpha": "find a", "Beta": "find b"}
+        assert _answered_by_main(events)
+        assert _every_call_answered(main, 1)
+        assert all(_well_formed(call_id) for call_id in _ids_sent(main, 1))
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_two_tools_keep_their_own_arguments(self, planner: str) -> None:
+        log: list[str] = []
+        root, _ = _caller(planner, [], parallel=True, log=log)
+        main = _NoIds(
+            label="main",
+            log=log,
+            replies=[[("look", '{"what": "x"}'), ("look", '{"what": "y"}')], "Done."],
+        )
+        root.llm_provider = main
+
+        await _run(Runner(), root, f"c_no_ids_tools_{planner}")
+
+        assert sorted(x for x in log if x.startswith("look")) == ["look x", "look y"]
+        sent = _ids_sent(main, 1)
+        assert len(set(main.calls(1))) == 2
+        assert all(_well_formed(call_id) for call_id in sent)
+        assert sorted(main.calls(1)) == sorted(main.answered(1))
+
+
+def _ending(planner: str, first: list[tuple[str, str]], log: list[str]) -> tuple[Agent, _Script]:
+    """An agent ending its step (``use_stop``) in a response that asks for ``first``."""
+    main = _Script(label="main", log=log, replies=[first, "Done."])
+    root = Agent(
+        name="MainAgent",
+        description="the agent",
+        instruction="do it",
+        llm_provider=main,
+        planner=_planner(planner, use_stop=True),
+        tools=[_look_tool(log)],
+    )
+    return root, main
+
+
+class TestCallsAfterTheStepEnds:
+    """Calls a response makes after the one that ends the step (STOP, a question to
+    the user) do not run, but each gets a result saying so: the model is told,
+    instead of believing they ran."""
+
+    @pytest.mark.parametrize(
+        "ender",
+        [("STOP", '{"info": "done"}'), ("ASK_USER_MISSING_INFO", '{"text": "which one?"}')],
+    )
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_they_do_not_run_and_the_model_is_told(
+        self, planner: str, ender: tuple[str, str]
+    ) -> None:
+        log: list[str] = []
+        root, main = _ending(planner, [ender, LOOK, LOOK], log)
+        runner = Runner()
+        conversation = f"c_after_{planner}_{ender[0]}"
+
+        await _run(runner, root, conversation)
+        await _run(runner, root, conversation, _ask("go on"))
+
+        assert not [x for x in log if x.startswith("look")]
+        results = [str(m.content) for m in main.shown[1] if m.role == "tool" and m.name == "look"]
+        assert len(results) == 2
+        assert all("was not executed" in r and ender[0] in r for r in results)
+        assert _every_call_answered(main, 1)
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_the_calls_before_it_still_run(self, planner: str) -> None:
+        log: list[str] = []
+        root, main = _ending(planner, [LOOK, ("STOP", '{"info": "done"}'), LOOK], log)
+        runner = Runner()
+        conversation = f"c_before_{planner}"
+
+        await _run(runner, root, conversation)
+        await _run(runner, root, conversation, _ask("go on"))
+
+        assert [x for x in log if x.startswith("look")] == ["look x"]
+        assert _every_call_answered(main, 1)

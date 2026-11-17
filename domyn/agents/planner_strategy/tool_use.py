@@ -37,6 +37,7 @@ from domyn.agents.core import (
     METADATA_FORWARD_VERBATIM,
     METADATA_FORWARD_VERBATIM_SOURCE_ID,
     METADATA_FORWARD_VERBATIM_SOURCE_KEY,
+    METADATA_NOT_RUN,
     METADATA_TOOL_BATCH,
     AgentAction,
     BaseAgent,
@@ -161,7 +162,8 @@ def tool_batches(
     another, with nothing in between that ends the step (STOP, a question to the
     user, FORWARD_VERBATIM: ``step_enders``). The runner holds them until the last
     and runs them; a call outside any batch is run on arrival, as before. Calls
-    with no id cannot be told apart, so a response with one is not batched at all.
+    are told apart by id, which ``ensure_call_ids`` gives the ones a provider sent
+    without; should one still have none, nothing is batched.
 
     ``handoffs`` names the sub-agents the agent may call. A hand-off ends the
     planner's step, so a call after one that is not in a batch with it is never
@@ -232,6 +234,42 @@ def tool_batches(
     return batches
 
 
+def ensure_call_ids(tool_calls: list[LLMToolCall] | None) -> None:
+    """Give an id to each call of a response that has none, as some endpoints send
+    them. Everything after keys a call by its id — its arguments, its batch, its
+    result — so calls without one were read as one call: each ran with the last
+    one's arguments, and a response naming two sub-agents lost the second. The id
+    is ours, and goes back to the provider with the call and its result."""
+    for tc in tool_calls or []:
+        if not tc.id:
+            tc.id = f"call_{uuid.uuid4().hex}"
+
+
+def calls_not_run(
+    agent_name: str,
+    after: list[LLMToolCall],
+    parsed: dict[str, dict[str, Any]],
+    ender: str,
+) -> list[BaseEvent]:
+    """The calls a response makes after the one ending the step (``ender``): they
+    do not run, but each is yielded marked ``METADATA_NOT_RUN`` and the runner gives
+    it a result saying so. Left out, the model believed they had run."""
+    reason = (
+        f"the response ended with {ender} before this call. Call it again if it is still needed."
+    )
+    return [
+        BaseEvent(
+            event_type=ExecutionEventType.TOOL_START,
+            author=agent_name,
+            action=ToolAction(
+                call_id=tc.id, name=tc.function.name, parameters=parsed.get(tc.id, {})
+            ),
+            metadata={METADATA_NOT_RUN: reason},
+        )
+        for tc in after
+    ]
+
+
 def parse_tool_call_args_with_errors(
     tool_calls: list[LLMToolCall] | None,
 ) -> tuple[dict[str, dict[str, Any]], bool, list[str]]:
@@ -242,6 +280,7 @@ def parse_tool_call_args_with_errors(
     of knowing it made — and it duly makes it again, three times, for thirty
     seconds. The error is the only thing that gives the retry a reason to differ.
     """
+    ensure_call_ids(tool_calls)
     parsed: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
     all_valid = True
@@ -916,7 +955,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 batches = self.batches(
                     agent, getattr(response, "tool_calls", None) or [], interaction_context
                 )
-                for tool_call in response.tool_calls:
+                for position, tool_call in enumerate(response.tool_calls):
                     args = parsed_tool_args.get(tool_call.id, {})
 
                     tool_name = tool_call.function.name
@@ -959,6 +998,13 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                         if tool_call.id not in batches:
                             return
                     elif tool_name == self.context_manager.stop_tool_name and self.use_stop:
+                        for not_run in calls_not_run(
+                            agent.name,
+                            (getattr(response, "tool_calls", None) or [])[position + 1 :],
+                            parsed_tool_args,
+                            tool_name,
+                        ):
+                            yield not_run
                         yield BaseEvent(
                             event_type=ExecutionEventType.AGENT_END,
                             author=agent.name,
@@ -972,6 +1018,13 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                         )
                         return
                     elif tool_name == self.context_manager.ask_user_tool_name and self.use_stop:
+                        for not_run in calls_not_run(
+                            agent.name,
+                            (getattr(response, "tool_calls", None) or [])[position + 1 :],
+                            parsed_tool_args,
+                            tool_name,
+                        ):
+                            yield not_run
                         yield BaseEvent(
                             event_type=ExecutionEventType.RESPONSE,
                             content=extract_parts(args.get("text", "")),
@@ -998,6 +1051,13 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             stop_tool_name=self.context_manager.stop_tool_name,
                         )
                         if isinstance(fv_result, BaseEvent):
+                            for not_run in calls_not_run(
+                                agent.name,
+                                (getattr(response, "tool_calls", None) or [])[position + 1 :],
+                                parsed_tool_args,
+                                tool_name,
+                            ):
+                                yield not_run
                             yield fv_result
                             return
                         # Miss path. Sub-agents (use_stop=True) skip soft retry

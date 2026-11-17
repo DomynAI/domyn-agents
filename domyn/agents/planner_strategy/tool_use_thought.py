@@ -61,6 +61,7 @@ from domyn.agents.planner_strategy.tool_use import (
     _handle_forward_verbatim,
     _hard_miss_event,
     _parse_tool_call_args,
+    calls_not_run,
     malformed_args_feedback,
     parse_tool_call_args_with_errors,
 )
@@ -519,6 +520,13 @@ class ToolUseWithThoughtPlannerStrategy(ToolUsePlannerStrategy):
                         if tool_call.id not in batches:
                             return
                     elif tool_name == self.context_manager.stop_tool_name and self.use_stop:
+                        for not_run in calls_not_run(
+                            agent.name,
+                            (getattr(response, "tool_calls", None) or [])[i + 1 :],
+                            parsed_tool_args,
+                            tool_name,
+                        ):
+                            yield not_run
                         yield BaseEvent(
                             event_type=ExecutionEventType.AGENT_END,
                             author=agent.name,
@@ -534,6 +542,13 @@ class ToolUseWithThoughtPlannerStrategy(ToolUsePlannerStrategy):
                         )
                         return
                     elif tool_name == self.context_manager.ask_user_tool_name and self.use_stop:
+                        for not_run in calls_not_run(
+                            agent.name,
+                            (getattr(response, "tool_calls", None) or [])[i + 1 :],
+                            parsed_tool_args,
+                            tool_name,
+                        ):
+                            yield not_run
                         yield BaseEvent(
                             event_type=ExecutionEventType.RESPONSE,
                             content=extract_parts(args.get("text", "")),
@@ -555,6 +570,13 @@ class ToolUseWithThoughtPlannerStrategy(ToolUsePlannerStrategy):
                             stop_tool_name=self.context_manager.stop_tool_name,
                         )
                         if isinstance(fv_result, BaseEvent):
+                            for not_run in calls_not_run(
+                                agent.name,
+                                (getattr(response, "tool_calls", None) or [])[i + 1 :],
+                                parsed_tool_args,
+                                tool_name,
+                            ):
+                                yield not_run
                             yield fv_result
                             return
                         if not self.use_stop and fv_soft_miss_remaining > 0:

@@ -39,6 +39,7 @@ from domyn.agents.core import (
     METADATA_FORWARD_VERBATIM,
     METADATA_FORWARD_VERBATIM_SOURCE_ID,
     METADATA_FORWARD_VERBATIM_SOURCE_KEY,
+    METADATA_NOT_RUN,
     METADATA_STEERING,
     METADATA_TOOL_BATCH,
     METADATA_VISIBILITY_ONLY,
@@ -77,7 +78,10 @@ from domyn.agents.llm.context_window import resolve_context_window
 from domyn.agents.llm.delegate import DelegateLLMProvider
 from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.context_management.base import ContextManager
-from domyn.agents.planner_strategy.context_management.compaction import compaction_key
+from domyn.agents.planner_strategy.context_management.compaction import (
+    compaction_key,
+    forget_copy,
+)
 from domyn.agents.registry.agents import get_agent_registry
 from domyn.agents.runner.branches import (
     DONE,
@@ -3389,9 +3393,10 @@ class Runner:
         text: str,
         code: str,
         message: str,
+        conversation_state: dict[str, Any] | None = None,
     ) -> BaseEvent:
         """An AGENT_END for a branch that will not end on its own, stored: the
-        result its caller reads for the call."""
+        result its caller reads for the call. A copy's compaction keys go with it."""
         end = BaseEvent(
             event_type=ExecutionEventType.AGENT_END,
             author=record["agent"],
@@ -3404,6 +3409,11 @@ class Runner:
         await self._add_event(state, end, context=None)
         record["stack"].clear()
         record["status"] = DONE
+        forget_copy(
+            conversation_state if conversation_state is not None else state.shared_state,
+            record["agent"],
+            first,
+        )
         return end
 
     async def _end_batch(
@@ -3524,6 +3534,14 @@ class Runner:
         TOOL_END/TOOL_ERROR, stored already; ``"event"`` for everything else."""
         group: list[tuple[BaseEvent, FunctionTool | DelegateTool | None]] = []
         for position, call in enumerate(calls):
+            not_run = (call.metadata or {}).get(METADATA_NOT_RUN)
+            if not_run:
+                # Made after the call that ended the model's step: never run, but
+                # answered, so the model is told (`calls_not_run`).
+                yield "event", call
+                for closed in await self._close_tool_calls([call], state, context, not_run):
+                    yield "result", closed
+                continue
             batch_of_call = (call.metadata or {}).get(METADATA_TOOL_BATCH) or {}
             # A batch without `parallel_handoffs` (`tool_batches`): one call at a time.
             alone = bool(batch_of_call.get("sequential"))
@@ -3825,6 +3843,7 @@ class Runner:
                     text=f"The agent was interrupted before it finished: {_STOPPED_RUNNING}",
                     code="SubAgentInterrupted",
                     message=f"The agent {record['agent']} was interrupted",
+                    conversation_state=context.state,
                 )
             else:
                 call = calls.get(record["call_id"])
@@ -4796,6 +4815,8 @@ class Runner:
         if stopped_by_hook:
             # break_execution wins over continue_with: when a hook asks for two
             # contradictory things, stopping is the safer reading.
+            if forget_copy(context.state, *self._copy_of(state, context)):
+                await self._write_conversation_state(state, context)
             await self._stack(state).empty()
             return
 
@@ -4807,6 +4828,12 @@ class Runner:
             if transition.iterator is not None:
                 return
             # Cap reached: fall through and end the turn normally.
+
+        # The agent has ended: as a copy of one called alongside it, its own
+        # compaction record and anchor are read no more. Written now: the caller's
+        # context is read back from the store.
+        if forget_copy(context.state, *self._copy_of(state, context)):
+            await self._write_conversation_state(state, context)
 
         if should_continue is False:
             yield event
@@ -5239,6 +5266,14 @@ class Runner:
             state.user_id,
             state.conversation_id,
         )
+
+    @staticmethod
+    def _copy_of(state: RunnerState, context: InteractionContext) -> tuple[str, str | None]:
+        """The agent ending and its interaction, when it ran as a copy (``compaction_key``
+        files its records under both); its interaction None when it did not."""
+        name = state.current_agent.name
+        is_copy = compaction_key(name, context) != name
+        return name, context.interaction_id if is_copy else None
 
     def _store(self, state: RunnerState, context: InteractionContext) -> dict[str, Any]:
         """Where the current agent's held calls and batch of sub-agents are kept."""

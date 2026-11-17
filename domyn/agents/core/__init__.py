@@ -308,6 +308,11 @@ METADATA_TOOL_BATCH = "tool_batch"
 # sub-agent the batch started, which may have handed off to the one asking. Lets
 # a front-end say which of the agents working at once is asking.
 METADATA_BRANCH = "branch"
+# Set on a TOOL_START the runner must not run, with the reason: a call the model
+# made after the one that ended its step (STOP, a question to the user, a
+# FORWARD_VERBATIM). It is stored with a result giving the reason, so the model
+# is told rather than left believing it ran.
+METADATA_NOT_RUN = "not_run"
 # Set on an EXTERNAL_PART event to say whether its content should be rendered
 # into the messages sent to the model. Defaults to False when absent: an
 # externally-injected part is for display/history only unless explicitly
