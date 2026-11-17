@@ -139,7 +139,7 @@ Skill files are read again on every turn, so an edited skill applies from the ne
 On every model call of a turn, the agent's skills are added at the end of the system prompt. By default it is the index:
 
 ```text
-Available skills (call skill_view to read one in full):
+Available skills. Before starting a task, check which of them are relevant to it, and read each relevant one in full with skill_view before doing anything else:
 - release-notes: How to write release notes. Use when preparing a release.
 - user-journeys: How to write a user journey document. Use when asked to draft or review one.
 ```
