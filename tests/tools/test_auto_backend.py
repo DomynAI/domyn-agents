@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from domyn.agents.resources import LocalDirResource
 from domyn.agents.tools.builtin import (
     BuiltinBundleConfig,
     DockerBackend,
@@ -187,13 +188,16 @@ class TestWhatIsExplicit:
         assert isinstance(build_backend("local", Workspace.at(tmp_path)), LocalBackend)
 
     def test_a_bundle_entry_defaults_to_auto(self, tmp_path: Path) -> None:
-        entry = BuiltinBundleConfig(name="x", bundles=["shell"], workspace=str(tmp_path))
+        entry = BuiltinBundleConfig(name="x", bundles=["shell"])
         assert entry.backend == "auto"
-        assert isinstance(entry.build().backend, AutoBackend)
+        assert isinstance(
+            entry.build(resource=LocalDirResource(id="w", paths=[str(tmp_path)])).backend,
+            AutoBackend,
+        )
 
     def test_the_browser_goes_where_the_commands_go(self, tmp_path: Path) -> None:
-        entry = BuiltinBundleConfig(name="x", bundles=["shell", "browser"], workspace=str(tmp_path))
-        built = entry.build()
+        entry = BuiltinBundleConfig(name="x", bundles=["shell", "browser"])
+        built = entry.build(resource=LocalDirResource(id="w", paths=[str(tmp_path)]))
         assert built.browser is not None
         assert built.browser.backend is built.backend
 

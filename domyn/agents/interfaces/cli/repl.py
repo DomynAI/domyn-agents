@@ -108,8 +108,8 @@ from domyn.agents.planner_strategy.context_management.budget import (
 from domyn.agents.runner import PushResult, Runner
 from domyn.agents.skills import SkillNotFoundError, SkillsRuntime
 from domyn.agents.skills.integration import attach_skills
-from domyn.agents.tools.builtin.backends.docker import DockerBackend
 from domyn.agents.skills.sources import local_source_paths
+from domyn.agents.tools.builtin.backends.docker import DockerBackend
 
 if TYPE_CHECKING:
     from domyn.agents.conversation_manager import ConversationInfo
