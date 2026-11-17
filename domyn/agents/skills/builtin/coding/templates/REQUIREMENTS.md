@@ -47,6 +47,7 @@ An item without evidence is not met. `BLOCKED` only for causes outside the agent
 with the reason and what was tried.
 
 - [ ] Every requirement's check passes (R1…Rn). Evidence:
+- [ ] What was built ran the way it will be used; its output matches the request. Evidence:
 - [ ] The whole test suite ran after the last edit; nothing fails that did not fail in the
       baseline. Evidence:
 - [ ] Lint, format and type checks pass on the changed code. Evidence:

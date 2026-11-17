@@ -5,6 +5,9 @@
 A step is marked done only after its verification ran and passed. Exactly one step is in
 progress at a time. Updated after every step.
 
+**Architecture:** <`ARCHITECTURE.md`, or "none needed" and why (the change is small or
+simple enough that these steps say it all)>
+
 ## Steps
 
 - [ ] **1. <title>**
@@ -16,8 +19,8 @@ progress at a time. Updated after every step.
   - Files:
   - Verify:
 - [ ] **N. Final verification**
-  - Does: whole suite, lint, format and type checks, read the full diff, check the
-    Definition of DONE in REQUIREMENTS.md item by item
+  - Does: run what was built as it will be used, whole suite, lint, format and type
+    checks, read the full diff, check the Definition of DONE in REQUIREMENTS.md item by item
   - Verify: every item of the Definition of DONE has its evidence
 
 ## Log
