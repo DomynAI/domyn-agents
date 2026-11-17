@@ -16,7 +16,7 @@ The `domyn` command is installed with the package (see [Installation](../getting
 | [`domyn skills`](#domyn-skills) | List the skills the configuration loads |
 | [`domyn skill`](#domyn-skill) | Show a skill, or stop loading it |
 | [`domyn export`](#domyn-export) | Save the configuration, with its skills and instructions, into a new folder to share |
-| [`domyn clean`](#domyn-clean) | Delete old conversations and the files the agent created for them |
+| [`domyn clean`](#domyn-clean) | Delete old conversations (with their files) and memories |
 | [`domyn connect`](#domyn-connect) | Connect an agent to the Domyn platform as a relay worker |
 
 The commands available inside a `domyn run` session, such as `/model` or `/resume`, are listed in [Sessions and commands](../cli/sessions.md).
@@ -144,22 +144,24 @@ A skill is copied as its `SKILL.md` plus the files its `external_files` lists; a
 ## `domyn clean`
 
 ```bash
-domyn clean (--older-than DAYS | --all) [--dry-run] [--yes] [--project NAME]
+domyn clean (--older-than DAYS | --all) [--conversations] [--memory] [--dry-run] [--yes] [--project NAME]
 ```
 
-Deletes past conversations from the history, and the files the agent created for them: the virtual environment and `output/` folder of each one, under `conversations/<id>/`. Both grow without limit otherwise, and the environments are the larger part. The history file is compacted afterwards, so the space is given back. A deleted conversation cannot be resumed.
+Deletes past conversations from the history, and the files the agent created for them: the virtual environment and `output/` folder of each one, under `conversations/<id>/`. Both grow without limit otherwise, and the environments are the larger part. The history file is compacted afterwards, so the space is given back. A deleted conversation cannot be resumed. With `--memory` it deletes memories too, or only those.
 
 It works on one history: the default one in `~/.domyn`, or a [project](../cli/configuration.md#projects)'s with `--project`. It says which folder it is about to clean, and asks before deleting.
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `--older-than` | `int` | | Deletes the conversations not used for this many days. A folder with no conversation in the history is deleted too, once it is as old. |
-| `--all` | flag | off | Deletes every conversation. One of `--older-than` and `--all` is required. |
+| `--older-than` | `int` | | Deletes what is older than this many days: conversations not used for that long (a folder with no conversation in the history is deleted too, once it is as old) and, with `--memory`, memories written that long ago. |
+| `--all` | flag | off | Deletes everything of the chosen kind. One of `--older-than` and `--all` is required. |
+| `--conversations` | flag | on | Cleans conversations and their files. This is the default; it only needs naming to be combined with `--memory`. |
+| `--memory` | flag | off | Cleans memories: the entries of the history's own `memory.md` (the project's, or `~/.domyn/memory.md` without `--project`), by the date each was written. A memory kept in another file, such as the global one a project learns into, is not reached: run without `--project` for that. Alone, conversations are left out. A bullet written by hand has no date and counts as written when the file last changed. Lines that are not entries (the heading, notes) stay. |
 | `--dry-run` | flag | off | Says what would be deleted, and deletes nothing. |
 | `--yes`, `-y` | flag | off | Does not ask first. Without a terminal to ask on, the command refuses to run without it. |
 | `--project` | `str` | | Cleans a project's history instead of the default one. |
 
-Memory, approvals, background-process logs and browser files are not touched.
+`--older-than` and `--all` apply to whatever you choose: `domyn clean --memory --older-than 90` forgets memories older than three months and leaves every conversation; `domyn clean --conversations --memory --all` empties both. To drop single memories, use `/memory forget`. Approvals, background-process logs and browser files are never touched.
 
 ## `domyn connect`
 

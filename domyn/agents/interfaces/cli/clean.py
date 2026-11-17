@@ -1,4 +1,5 @@
-"""``domyn clean`` — take old conversations out of the history, and what they left on disk.
+"""``domyn clean`` — take old conversations and memories out of the history, and what the
+conversations left on disk.
 
 A conversation is a row in ``conversations.db`` (its whole event history, tool outputs
 included) and, once the agent ran a command, a folder ``conversations/<id>/`` beside it
@@ -8,16 +9,19 @@ heavy user's ``~/.domyn`` only grows; this is the way to give the space back.
 Done on the file with ``sqlite3`` rather than through the conversation manager, which
 is per application and user: this clears what is in the *store*. SQLite does not shrink
 its file when rows go, so the file is ``VACUUM``-ed afterwards — without it the command
-would report a saving the disk never saw.
+would report a saving the disk never saw. Memories are entries of the history's own
+``memory.md``, removed by the date each was written through `FilesystemMemoryManager`.
 """
 
 import shutil
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from domyn.agents.interfaces.cli.config import PrivateFiles
+from domyn.agents.interfaces.cli.config import MEMORY_FILENAME, PrivateFiles
+from domyn.agents.memory.managers.base import Memory
+from domyn.agents.memory.managers.local import FilesystemMemoryManager
 from domyn.agents.tools.builtin.session import StateFolders, safe_id
 
 
@@ -137,3 +141,47 @@ def human(size: int) -> str:
             return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
         value /= 1024
     return f"{size} B"
+
+
+@dataclass
+class MemoryPlan:
+    """The entries of the history's own ``memory.md`` a clean would remove."""
+
+    path: Path
+    cutoff: datetime | None  # entries written before it go; ``None``: every one
+    count: int = 0
+    kept: int = 0
+
+    @property
+    def nothing(self) -> bool:
+        return self.count == 0
+
+    def goes(self, memory: Memory) -> bool:
+        return self.cutoff is None or memory.timestamp < self.cutoff
+
+
+def plan_memory_clean(home: Path, *, older_than_days: int | None) -> MemoryPlan:
+    """The memories to remove: those written more than ``older_than_days`` ago, or every
+    one with ``None``. A hand-written bullet carries no date, so it counts as written when
+    the file last changed. Only the history's own file: files it merely reads are left out."""
+    cutoff = (
+        None if older_than_days is None else datetime.now(UTC) - timedelta(days=older_than_days)
+    )
+    path = home / MEMORY_FILENAME
+    plan = MemoryPlan(path=path, cutoff=cutoff)
+    if path.is_symlink() or not path.is_file():
+        return plan
+    for memory in FilesystemMemoryManager(file_path=str(path)).stored():
+        if plan.goes(memory):
+            plan.count += 1
+        else:
+            plan.kept += 1
+    return plan
+
+
+def apply_memory_clean(plan: MemoryPlan) -> int:
+    """Remove what ``plan`` counts; return how many entries went. Lines that are not
+    entries (the heading, notes) stay as they are."""
+    if plan.nothing:
+        return 0
+    return FilesystemMemoryManager(file_path=str(plan.path)).remove_where(plan.goes)

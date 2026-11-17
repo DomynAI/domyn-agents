@@ -201,6 +201,15 @@ class FilesystemMemoryManager(BaseMemoryManager):
             raise
         return removed
 
+    def stored(self) -> list[Memory]:
+        """The entries of ``file_path`` alone (read-only sources left out), in file order."""
+        return self._read_file(Path(self.file_path).expanduser())
+
+    def remove_where(self, goes: Callable[[Memory], bool]) -> int:
+        """Delete the entries of ``file_path`` that ``goes`` picks; return how many.
+        Everything else in the file stays as written (see `_remove`)."""
+        return self._remove(goes)
+
     def _append(self, memory: Memory) -> None:
         """Add one entry at the end of the file, touching nothing else in it.
 

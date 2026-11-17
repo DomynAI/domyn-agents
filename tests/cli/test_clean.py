@@ -88,3 +88,52 @@ def test_the_command_removes_with_yes(tmp_path: Path, monkeypatch) -> None:
 
     done = CliRunner().invoke(app, ["clean", "--all", "--yes"])
     assert done.exit_code == 0 and clean.plan_clean(tmp_path, older_than_days=None).nothing
+
+
+def _memory(home: Path) -> Path:
+    path = home / "memory.md"
+    now = datetime.now().astimezone()
+    old = (now - timedelta(days=90)).isoformat()
+    new = (now - timedelta(days=1)).isoformat()
+    path.write_text(
+        "# Memory\n\n"
+        f"- likes tea <!-- id=aaaa1111 at={old} -->\n"
+        f"- uses metric <!-- id=bbbb2222 at={new} -->\n"
+    )
+    return path
+
+
+def test_memory_is_cleaned_by_age_without_touching_conversations(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("domyn.agents.cli.commands.clean.command.home_dir", lambda: tmp_path)
+    _store(tmp_path, {"old": 90})
+    memory = _memory(tmp_path)
+
+    done = CliRunner().invoke(app, ["clean", "--memory", "--older-than", "30", "--yes"])
+    assert done.exit_code == 0
+    text = memory.read_text()
+    assert "likes tea" not in text and "uses metric" in text
+    assert clean.plan_clean(tmp_path, older_than_days=None).ids == ["old"]
+
+
+def test_memory_all_and_both_targets(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("domyn.agents.cli.commands.clean.command.home_dir", lambda: tmp_path)
+    _store(tmp_path, {"old": 90})
+    memory = _memory(tmp_path)
+
+    done = CliRunner().invoke(app, ["clean", "--conversations", "--memory", "--all", "--yes"])
+    assert done.exit_code == 0
+    assert "likes tea" not in memory.read_text() and "uses metric" not in memory.read_text()
+    assert clean.plan_clean(tmp_path, older_than_days=None).nothing
+
+
+def test_memory_dry_run_changes_nothing(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("domyn.agents.cli.commands.clean.command.home_dir", lambda: tmp_path)
+    memory = _memory(tmp_path)
+    before = memory.read_text()
+    result = CliRunner().invoke(app, ["clean", "--memory", "--older-than", "30", "--dry-run"])
+    assert result.exit_code == 0 and "memory entry to remove (1 kept)" in " ".join(
+        result.output.split()
+    )
+    assert memory.read_text() == before
