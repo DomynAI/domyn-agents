@@ -38,7 +38,7 @@ Any string value can contain `${NAME}`, replaced with the environment variable `
 | `reference` | `str` | | Instead of `type`: the name of a provider registered in Python with `@llm_provider`, copied under this entry's `name`. |
 | `config_params` | `dict` | | With `reference`: options to change on the copy; dictionaries are merged. With `type`: options added to the entry's own. Any option except `type`, `model_name`, `name`, `url` and `reference`. |
 
-The other keys depend on `type` (`url`, `api_key`, `generation_params`, `context_window`, …). See [LLM providers](../guides/llm-providers.md).
+The other keys depend on `type` (`url`, `api_key`, `generation_params`, `context_window`, `vision`, …). See [LLM providers](../guides/llm-providers.md).
 
 ## `planner_strategies`
 
@@ -94,7 +94,7 @@ An entry whose `type` is unknown, or that cannot be built from its keys, is skip
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `name` | `str` | required | Name agents refer to in `tool_bundles`. |
-| `bundles` | list of `files` \| `shell` \| `browser` | `[files, shell]` | Which tools: `files` (`read_file`, `list_dir`, `glob_files`, `grep`, `write_file`, `append_file`, `edit_file`), `shell` (`run_command`, `check_command`, `list_commands`, `stop_command`). |
+| `bundles` | list of `files` \| `shell` \| `browser` | `[files, shell]` | Which tools: `files` (`read_file`, `list_dir`, `glob_files`, `grep`, `write_file`, `append_file`, `edit_file`, and `read_image` for an agent whose provider has `vision: true`), `shell` (`run_command`, `check_command`, `list_commands`, `stop_command`). |
 | `workspace` | `str` | the current directory | The directory the tools can reach. |
 | `backend` | `auto` \| `docker` \| `local` | `auto` | Where the tools (commands, files, browser) run. `auto`: in a Docker container when Docker is running and its image can be pulled, else on this machine with a warning. `docker`: always in a container, and the session does not start without Docker. `local`: on this machine. See [Files, commands and approvals](../cli/tools-and-approvals.md#running-the-tools-in-a-docker-container). |
 | `docker` | mapping | defaults | Options of the Docker backend: `image` (default `auto`: the image of this release from `ghcr.io/domynai/domyn-docker-backend`), `allowed_network` (`public`, `none`, or a list of hosts), `memory`, `cpus`, `pids_limit`, `docker_binary`. Ignored when `backend: local`. |

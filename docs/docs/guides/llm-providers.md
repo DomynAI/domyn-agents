@@ -78,6 +78,7 @@ The [interactive CLI](../cli/configuration.md) writes its provider to `~/.domyn/
 | `name` | `str` | the `model_name` | Name the provider is referenced by in YAML. |
 | `model_name` | `str` | required | The model, as the API names it. |
 | `context_window` | `int` | none | The model's context window, in tokens. When it is not set, it is asked of the provider before each turn (the `/models` listing of vLLM, of OpenRouter or of a gateway that publishes it, or Anthropic's model API), or read from a catalogue shipped with the package for `openai` and `cerebras`; answers are kept for five minutes. A request the provider rejects as too long states it too, and lowers a window set too high. [Context compaction](context-compaction.md) compacts at a threshold only when a window is known; a rejected request is compacted and retried either way. |
+| `vision` | `bool` | `false` | Whether the model reads images. An agent whose provider has it gets `read_image` with the `files` [tool bundle](configuration.md): the tool sends an image and a question to this provider in a request of its own and returns the answer as text, so no image is kept in the conversation. Nothing checks it at run time: `domyn setup` sets it by sending the provider a small image, and in a file written by hand it is yours to declare. |
 
 ### `openai`, `anthropic`, `vllm`, `cerebras`, `open_router`
 

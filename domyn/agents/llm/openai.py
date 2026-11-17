@@ -111,7 +111,20 @@ class OpenAIProvider(BaseLLMProvider):
                     )
             else:
                 d: dict[str, Any] = {"role": msg.role}
-                if msg.content is not None:
+                if isinstance(msg.content, list):
+                    # The Responses API names its parts differently from chat
+                    # completions, the shape messages are built in (`image_message`).
+                    parts: list[dict[str, Any]] = []
+                    for part in msg.content:
+                        if part.get("type") == "text":
+                            parts.append({"type": "input_text", "text": part.get("text", "")})
+                        elif part.get("type") == "image_url":
+                            url = (part.get("image_url") or {}).get("url")
+                            parts.append({"type": "input_image", "image_url": url})
+                        else:
+                            parts.append(part)
+                    d["content"] = parts
+                elif msg.content is not None:
                     d["content"] = msg.content
                 if msg.name is not None:
                     d["name"] = msg.name

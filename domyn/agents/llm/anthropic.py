@@ -202,10 +202,10 @@ class AnthropicProvider(BaseLLMProvider):
                 if isinstance(msg.content, list):
                     blocks: list[dict[str, Any]] = []
                     for part in msg.content:
-                        if part.get("type") != "image_url":
+                        url = (part.get("image_url") or {}).get("url")
+                        if part.get("type") != "image_url" or not isinstance(url, str):
                             blocks.append(part)
                             continue
-                        url = part.get("image_url", {}).get("url")
                         if url.startswith("data:"):
                             # "data:image/png;base64,<data>"
                             header, data = url.split(",", 1)

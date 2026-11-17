@@ -242,3 +242,14 @@ def no_decision_or_memory_prompt(
         )
     if not module.endswith("test_setup_memory"):
         monkeypatch.setattr(setup, "_ask_memory", lambda console, theme, current: MemoryChoice())
+
+
+@pytest.fixture(autouse=True)
+def no_image_probe(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setup does not send the provider an image, which would be a request to a real
+    endpoint from every wizard test. test_setup_vision.py covers it."""
+    if request.module.__name__.endswith("test_setup_vision"):
+        return
+    from domyn.agents.interfaces.cli import setup
+
+    monkeypatch.setattr(setup, "_image_rejection", lambda provider: "not asked in tests")

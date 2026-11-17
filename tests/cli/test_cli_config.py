@@ -921,3 +921,58 @@ class TestTheBrowserSettingsSurviveTheWizard:
         fields = dict(bundle.fields)
         assert fields["browser cdp"] == "set"
         assert fields["browser allowed_domains"] == "(any public site)"
+
+
+class TestWhetherTheModelReadsImages:
+    """`vision` is found by setup and written on the provider entry: what the wizard
+    does not read back is lost on the next `domyn setup`, and what the loader does
+    not get mounts nothing."""
+
+    @staticmethod
+    def _raw(vision: bool, tools: list[str] | None = None) -> dict:
+        provider = cfg.ProviderConfig(
+            type="vllm", model_name="m", url="http://x/v1/chat/completions", vision=vision
+        )
+        agent = cfg.AgentConfig(tools=tools if tools is not None else ["files", "shell"])
+        return cfg.configuration_v1_dict_from(provider, agent, cfg.CompactionConfig())
+
+    @staticmethod
+    def _fields(raw: dict, title: str) -> dict[str, str]:
+        sections = cfg.describe_configuration_v1(raw).sections
+        return dict(next(s for s in sections if s.title == title).items[0].fields)
+
+    def test_it_comes_back_from_the_file(self) -> None:
+        assert cfg.current_settings_from(self._raw(True))[0].vision is True
+        assert cfg.current_settings_from(self._raw(False))[0].vision is False
+
+    def test_it_is_written_only_when_found(self) -> None:
+        assert self._raw(True)["llm_providers"][0]["vision"] is True
+        assert "vision" not in self._raw(False)["llm_providers"][0]
+
+    def test_the_provider_built_from_the_file_has_it(self) -> None:
+        provider = LLMProviderFactory.from_config(self._raw(True)["llm_providers"][0])
+
+        assert provider.vision is True
+
+    def test_config_lists_read_image_with_the_file_tools(self) -> None:
+        tools = self._fields(self._raw(True), "Agents")["tools"].split(", ")
+
+        assert "read_image(files)" in tools
+        assert self._fields(self._raw(True), "Providers")["images"] == "read"
+
+    def test_not_for_a_model_that_does_not_read_them(self) -> None:
+        assert "read_image" not in self._fields(self._raw(False), "Agents")["tools"]
+        assert self._fields(self._raw(False), "Providers")["images"] == "not read"
+
+    def test_not_without_the_files_bundle(self) -> None:
+        assert "read_image" not in self._fields(self._raw(True, ["shell"]), "Agents")["tools"]
+
+    def test_what_config_lists_is_what_the_loader_mounts(self, tmp_path: Path) -> None:
+        raw = self._raw(True)
+        entry = BuiltinBundleConfig(**{**raw["tool_bundles"][0], "workspace": str(tmp_path)})
+        provider = LLMProviderFactory.from_config(raw["llm_providers"][0])
+
+        mounted = {tool.name for tool in entry.build(llm_provider=provider)}
+        listed = {name.split("(")[0] for name in self._fields(raw, "Agents")["tools"].split(", ")}
+
+        assert mounted == listed
