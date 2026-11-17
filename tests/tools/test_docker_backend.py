@@ -292,10 +292,49 @@ class TestFingerprint:
 
 class TestRefusals:
     @pytest.mark.asyncio
-    async def test_a_home_folder_workspace_is_refused(self) -> None:
-        backend = DockerBackend(Workspace.at(Path.home()))
+    async def test_a_folder_above_home_is_refused(self) -> None:
+        backend = DockerBackend(Workspace.at(Path.home().parent))
         with pytest.raises(BackendUnavailableError, match="Run domyn from a project folder"):
             await backend.prepare()
+
+    def test_the_home_folder_is_allowed_with_the_global_domyn_folder_hidden(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from domyn.agents.tools.builtin.backends.docker.mounts import (
+            build_mounts,
+            refuse_unsafe_workspace,
+        )
+
+        home = tmp_path / "home"
+        (home / ".domyn" / "projects" / "p").mkdir(parents=True)
+        (home / ".domyn" / "credentials").write_text("secret")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        refuse_unsafe_workspace(home)  # no longer raises
+
+        project = home / ".domyn" / "projects" / "p"
+        (project / "config.yaml").write_text("x: 1")
+        state = StateFolder.resolve(home, project)
+        arguments = build_mounts(Workspace.at(home), state, "c1")
+
+        hidden = f"{home}/.domyn:rw,size=1m,mode=0755"
+        assert hidden in arguments
+        assert arguments.index(f"type=bind,source={home},target={home}") < arguments.index(hidden)
+        assert arguments.index(hidden) < arguments.index(
+            f"type=bind,source={project}/processes,target={project}/processes"
+        )
+        assert not any("credentials" in a for a in arguments)
+
+    def test_a_session_on_the_global_folder_needs_no_extra_mask(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from domyn.agents.tools.builtin.backends.docker.mounts import build_mounts
+
+        home = tmp_path / "home"
+        (home / ".domyn").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        state = StateFolder.resolve(home, home / ".domyn")
+        arguments = build_mounts(Workspace.at(home), state, "c1")
+        assert not any(a.endswith("size=1m,mode=0755") for a in arguments)
 
     @pytest.mark.asyncio
     async def test_a_missing_docker_binary_says_so(self, tmp_path: Path) -> None:
