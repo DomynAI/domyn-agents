@@ -174,7 +174,7 @@ agents:
     tool_bundles: [workspace_tools]
 ```
 
-`files` adds `read_file`, `list_dir`, `glob_files`, `grep`, `write_file`, `append_file` and `edit_file`; `shell` adds `run_command`, `check_command`, `list_commands` and `stop_command`. Without `bundles`, both are added. The tools can reach only the `workspace` directory (the current directory by default), and writing files or running commands needs approval.
+`files` adds `read_file`, `list_dir`, `glob_files`, `grep`, `write_file`, `append_file` and `edit_file`; `shell` adds `run_command`, `check_command`, `list_commands` and `stop_command`. Without `bundles`, both are added. `files` also adds `read_image` for an agent whose provider declares `vision: true`. The tools can reach only the `workspace` directory (the current directory by default), and writing files or running commands needs approval.
 
 ## MCP servers
 

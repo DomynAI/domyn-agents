@@ -82,7 +82,6 @@ class CustomLLMProvider(BaseLLMProvider):
             payload["tool_choice"] = tool_choice
 
         # TODO: Add tracing headers
-        # TODO: Add support for self.append_text_system_prompt and self.append_text_last_message
 
         log_inference_request(logger, self.url, payload)
 
@@ -170,7 +169,6 @@ class CustomLLMProvider(BaseLLMProvider):
         log_inference_request(logger, self.url, payload, stream=True)
 
         # TODO: Add tracing headers
-        # TODO: Add support for self.append_text_system_prompt and self.append_text_last_message
 
         token_count = 0
         full_output = ""

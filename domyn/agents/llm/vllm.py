@@ -119,12 +119,6 @@ class VLLMProvider(BaseLLMProvider):
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        if self.append_text_system_prompt:
-            messages[0].content += "\n" + self.append_text_system_prompt
-
-        if self.append_text_last_message:
-            messages[-1].content += "\n" + self.append_text_last_message
-
         serialized_messages = [
             message.to_dict(reasoning_key=self.reasoning_key_in_use) for message in messages
         ]
@@ -426,6 +420,4 @@ class VLLMProvider(BaseLLMProvider):
             },
             api_key=config.get("api_key"),
             name=config.get("name") or config["model_name"],
-            append_text_last_message=config.get("append_text_last_message"),
-            append_text_system_prompt=config.get("append_text_system_prompt"),
         )
