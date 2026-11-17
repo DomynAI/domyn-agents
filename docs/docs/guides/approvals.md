@@ -108,7 +108,7 @@ The tool runs with the new values, and `tool_end` shows them. The edited call is
 
 When the model asks for several tools at once, a call that needs approval stops the turn after the calls before it have run. The `TOOL_NEEDS_FEEDBACK` is about that call; the calls after it are held. Your answer runs the approved (or refused) call, then the held ones, one of which may need an answer in its turn, and only then asks the model again: it sees a result for every call it made.
 
-If a new message arrives instead of an answer, the waiting call and the held ones do not run. Each is given a result saying so, `The tool … was not executed: the user sent a new message instead of answering…`, so the model knows they did not happen and can ask again.
+If a new message arrives instead of an answer, the waiting call and the held ones do not run. Each is given a result saying so, `The tool … was not executed: the user sent a new message instead of answering…`, so the model knows they did not happen and can ask again. When the call was a sub-agent's, the message goes to the agent the user talks to, not to that sub-agent, which ends as interrupted.
 
 ## Remembering an approval
 
