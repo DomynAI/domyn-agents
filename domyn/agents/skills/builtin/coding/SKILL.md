@@ -2,19 +2,18 @@
 name: coding
 version: 1.2.0
 description: >
-  A skill for coding tasks. Read it before starting one: how to orient, plan in a task
-  folder (REQUIREMENTS.md, PLAN.md, and ARCHITECTURE.md when needed), work in verified
-  steps, and decide when the task is done.
+  Use for any task that needs code to get done: writing or changing code, running scripts or commands, building or
+  installing a program, or computing or producing a result with code. How to plan, architect the solution, work in
+  verified steps, and decide when the task is done.
 tags: [coding, software-engineering, debugging, testing, planning]
 external_files:
   - templates/
 ---
 
-# Coding tasks
+# Coding 
 
-A method for coding tasks: the task is written down before it is built,
-built in verified steps, and finished only when a written **Definition of DONE** is met and
-shown to be met. A task folder keeps the work on track and can be picked up by a later session:
+The task is written down before it is built, built in verified steps, and finished only when a written **Definition of DONE** is met and shown to be met. 
+A task folder keeps the work on track and can be picked up by a later session:
 
 | File | Holds | Changes | When |
 |---|---|---|---|
