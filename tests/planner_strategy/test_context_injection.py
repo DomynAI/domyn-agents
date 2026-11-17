@@ -14,7 +14,7 @@ from domyn.agents import BaseEvent, ExecutionEventType, Part
 from domyn.agents.core import InteractionContext
 from domyn.agents.llm import LLMMessage
 from domyn.agents.memory.managers.base import BaseMemoryManager, Memory
-from domyn.agents.planner_strategy.context_injection import inject_turn_context
+from domyn.agents.planner_strategy.context_injection import inject_turn_context, with_skills
 
 
 class _Memory(BaseMemoryManager):
@@ -108,31 +108,49 @@ class TestMemory:
 
 class TestSkills:
     @pytest.mark.asyncio
-    async def test_payload_passed_by_the_planner_is_injected(self) -> None:
-        """The skill payload arrives as an argument."""
+    async def test_payload_goes_at_the_end_of_the_system_prompt(self) -> None:
+        """Not as a message: an assistant message read as the model's own words."""
         messages = _messages()
+        system = messages[0].content
         await inject_turn_context(
             messages, _Agent(), _context(), "Available skills:\n- sql-style: conventions"
         )
-        assert "sql-style" in (messages[1].content or "")
+        assert len(messages) == 2
+        assert messages[0].role == "system"
+        assert messages[0].content == f"{system}\n\nAvailable skills:\n- sql-style: conventions"
 
     @pytest.mark.asyncio
     async def test_empty_payload_injects_nothing(self) -> None:
         messages = _messages()
+        system = messages[0].content
         await inject_turn_context(messages, _Agent(), _context(), "")
         assert len(messages) == 2
+        assert messages[0].content == system
 
     @pytest.mark.asyncio
-    async def test_memory_and_skills_both_land_and_keep_system_first(self) -> None:
+    async def test_memory_is_a_message_and_skills_are_in_the_system_prompt(self) -> None:
         messages = _messages()
         await inject_turn_context(
             messages, _Agent(_Memory(["MEMORY BLOCK"])), _context(), "SKILLS BLOCK"
         )
         assert messages[0].role == "system"
-        joined = " ".join(m.content or "" for m in messages)
-        assert "SKILLS BLOCK" in joined
-        assert "MEMORY BLOCK" in joined
-        assert len(messages) == 4
+        assert (messages[0].content or "").endswith("SKILLS BLOCK")
+        assert "MEMORY BLOCK" in (messages[1].content or "")
+        assert len(messages) == 3
+
+    def test_a_cached_system_message_is_not_changed(self) -> None:
+        """The system message is replaced, so the block is never appended twice."""
+        system = LLMMessage(role="system", content="You are helpful.")
+        messages = [system]
+        with_skills(messages, "SKILLS")
+        with_skills([system], "SKILLS")
+        assert system.content == "You are helpful."
+        assert messages[0].content == "You are helpful.\n\nSKILLS"
+
+    def test_without_a_system_message_one_is_added(self) -> None:
+        messages = [LLMMessage(role="user", content="hi")]
+        with_skills(messages, "SKILLS")
+        assert [(m.role, m.content) for m in messages] == [("system", "SKILLS"), ("user", "hi")]
 
 
 class TestAllPlannersUseIt:
