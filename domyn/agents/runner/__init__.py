@@ -92,6 +92,7 @@ from domyn.agents.runner.branches import (
     TrunkStack,
     branch_of,
     hidden_from,
+    name_waiting_questions,
     new_batch,
 )
 from domyn.agents.skills.models import LoadedSkills
@@ -3370,6 +3371,7 @@ class Runner:
             # The outermost branch names itself last, so a question from deep in a
             # tree says which of the agents the user saw start is asking.
             question.metadata[METADATA_BRANCH] = record["agent"]
+            name_waiting_questions(state.shared_state, record["interactions"], record["agent"])
             record["question"] = question.model_dump(mode="json")
             return
         if not ended and record["stack"]:
@@ -4149,44 +4151,106 @@ class Runner:
         context.state = state.conversation_info.state
         await self._drop_held_tool_calls(state, context)
         waiting_branches = context.state.get(WAITING_BRANCHES_KEY) or {}
+        # The agents above the entrypoint, top first, and the entrypoint below them.
+        above: list[StackAgentEntry] = []
         while top is not None and top.agent_name != entrypoint:
-            end = BaseEvent(
-                event_type=ExecutionEventType.AGENT_END,
-                author=top.agent_name,
-                interaction_id=top.interaction_id,
-                turn_id=top.turn_id,
-                content=[Part(text=_INTERRUPTED_BY_MESSAGE)],
-                error_code="SubAgentInterrupted",
-                error_message=f"The agent {top.agent_name} was interrupted",
-            )
-            await self._add_event(state, end, context=None)
-            yield end
-            forget_copy(context.state, top.agent_name, top.interaction_id)
+            above.append(top)
             await trunk.pop()
             top = await trunk.last()
-            if top is None:
-                break
-            # The rest of the batch this agent ran in, if its caller ran one.
-            mine = waiting_branches.pop(top.interaction_id, None)
-            if mine is None:
-                continue
-            for record in mine["branches"]:
-                first = record["interactions"][0] if record["interactions"] else None
-                yield await self._end_branch(
-                    state,
-                    record,
-                    first,
-                    text=_INTERRUPTED_BY_MESSAGE,
-                    code="SubAgentInterrupted",
-                    message=f"The agent {record['agent']} was interrupted",
-                    conversation_state=context.state,
-                )
-            held = [BaseEvent.model_validate(raw) for raw in mine["held"]]
-            await self._close_tool_calls(held, state, context, _SUPERSEDED)
+        async for interrupted in self._interrupt_agents(
+            state, context, above, top.interaction_id if top else None, waiting_branches
+        ):
+            yield interrupted
         if not waiting_branches:
             context.state.pop(WAITING_BRANCHES_KEY, None)
         await self._write_conversation_state(state, context)
         state.current_agent = state.entrypoint_agent
+
+    async def _interrupt_agents(
+        self,
+        state: RunnerState,
+        context: InteractionContext,
+        entries: list[StackAgentEntry],
+        caller: str | None,
+        waiting_branches: dict[str, Any],
+    ) -> AsyncGenerator[BaseEvent, None]:
+        """End ``entries``, a stack's agents top first, as interrupted by a new
+        message, each with the rest of the batch it ran in: the branches of it still
+        waiting, and the calls held after it. ``caller`` is the interaction of the
+        agent below the last entry, whose batch that entry may have been part of.
+        """
+        below = [entry.interaction_id for entry in entries[1:]] + [caller]
+        for entry, under in zip(entries, below, strict=True):
+            end = BaseEvent(
+                event_type=ExecutionEventType.AGENT_END,
+                author=entry.agent_name,
+                interaction_id=entry.interaction_id,
+                turn_id=entry.turn_id,
+                content=[Part(text=_INTERRUPTED_BY_MESSAGE)],
+                error_code="SubAgentInterrupted",
+                error_message=f"The agent {entry.agent_name} was interrupted",
+            )
+            await self._add_event(state, end, context=None)
+            yield end
+            forget_copy(context.state, entry.agent_name, entry.interaction_id)
+            mine = waiting_branches.pop(under, None) if under else None
+            if mine is None:
+                continue
+            for record in mine["branches"]:
+                async for interrupted in self._interrupt_branch(
+                    state, context, record, waiting_branches
+                ):
+                    yield interrupted
+            held = [BaseEvent.model_validate(raw) for raw in mine["held"]]
+            await self._close_tool_calls(held, state, context, _SUPERSEDED)
+
+    async def _interrupt_branch(
+        self,
+        state: RunnerState,
+        context: InteractionContext,
+        record: dict[str, Any],
+        waiting_branches: dict[str, Any],
+    ) -> AsyncGenerator[BaseEvent, None]:
+        """A branch kept waiting beside the one asked, interrupted by a new message
+        like the conversation's stack is: its waiting call and the calls held after
+        it closed, then its agents, with the branches still waiting in their own
+        batches, however deep."""
+        held = record.pop(HELD_TOOL_CALLS_KEY, None) or {}
+        if held:
+            history = state.conversation_info.events_history
+            answered = {
+                getattr(e.action, "call_id", None)
+                for e in history
+                if e.event_type in (ExecutionEventType.TOOL_END, ExecutionEventType.TOOL_ERROR)
+            }
+            waiting = [
+                e
+                for e in history
+                if e.event_type == ExecutionEventType.TOOL_START
+                and held.get("waiting")
+                and getattr(e.action, "call_id", None) == held["waiting"]
+            ][-1:]
+            calls = [BaseEvent.model_validate(raw) for raw in held.get("calls") or []]
+            unanswered = [
+                c for c in waiting + calls if getattr(c.action, "call_id", None) not in answered
+            ]
+            await self._close_tool_calls(unanswered, state, context, _SUPERSEDED)
+        entries = [StackAgentEntry.model_validate(raw) for raw in reversed(record["stack"])]
+        if not entries and record["interactions"]:
+            entries = [
+                StackAgentEntry(
+                    agent_name=record["agent"],
+                    interaction_id=record["interactions"][0],
+                    turn_id=state.turn_id,
+                )
+            ]
+        # The batch this branch was part of is closed by the caller's loop.
+        async for interrupted in self._interrupt_agents(
+            state, context, entries, None, waiting_branches
+        ):
+            yield interrupted
+        record["stack"].clear()
+        record["status"] = DONE
 
     async def _drop_held_tool_calls(self, state: RunnerState, context: InteractionContext) -> None:
         """Close the calls of a pause the user did not answer: see ``run()``."""

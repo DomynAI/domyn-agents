@@ -23,6 +23,7 @@ from collections.abc import Callable
 from typing import Any
 
 from domyn.agents.conversation_manager.base import BaseConversationManager, StackAgentEntry
+from domyn.agents.core import METADATA_BRANCH
 
 # Under ``context.state``, keyed by the interaction of the agent that ran a batch:
 # the branches of that batch still waiting for an answer after the first one,
@@ -140,3 +141,28 @@ def hidden_from(
         return mine | outer() if outer is not None else mine
 
     return hidden
+
+
+def name_waiting_questions(
+    state: dict[str, Any] | None, interactions: list[str], name: str
+) -> None:
+    """Name ``name`` as the branch of every question still waiting below the
+    ``interactions`` of a branch: those of the batches its agents ran, and of the
+    batches below them.
+
+    The question a branch stops on is named on its way up, by each branch it
+    crosses, so it ends up naming the one its caller started. The others of the
+    same batch are kept waiting and asked later, from the conversation's stack,
+    where no branch is left to name them: they are named here, when the first
+    one is, or a front-end would see them asked by an agent the user never saw
+    start.
+    """
+    waiting = (state or {}).get(WAITING_BRANCHES_KEY) or {}
+    for interaction in interactions:
+        mine = waiting.get(interaction)
+        if not mine:
+            continue
+        for record in mine["branches"]:
+            if record.get("question"):
+                record["question"].setdefault("metadata", {})[METADATA_BRANCH] = name
+            name_waiting_questions(state, record["interactions"], name)

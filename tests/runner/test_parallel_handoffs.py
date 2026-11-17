@@ -361,6 +361,52 @@ class TestASubAgentWaitingForApproval:
 
     @pytest.mark.parametrize("planner", PLANNERS)
     @pytest.mark.asyncio
+    async def test_every_question_two_levels_down_names_the_branch_the_user_saw(
+        self, planner: str
+    ) -> None:
+        """Two sub-agents of a nested batch both ask: each question names the
+        sub-agent the caller started, not only the first one asked. The others
+        waiting were asked later, from the conversation's stack, where no branch
+        is left to name them, and named the agent asking instead."""
+        log: list[str] = []
+        inner = [_sub("Y", planner, log, writes=True)[0], _sub("Z", planner, log, writes=True)[0]]
+        x = Agent(
+            name="X",
+            description="splits its work",
+            instruction="delegate",
+            llm_provider=_Script(
+                label="X",
+                log=log,
+                replies=[[("Y", '{"task": "y"}'), ("Z", '{"task": "z"}')], "X done"],
+            ),
+            planner=_planner(planner, parallel_handoffs=True),
+            sub_agents=inner,
+        )
+        root = Agent(
+            name="MainAgent",
+            description="the agent",
+            instruction="delegate",
+            llm_provider=_Script(
+                label="main",
+                log=log,
+                replies=[[("X", '{"task": "x"}'), ("Beta", '{"task": "b"}')], "Done."],
+            ),
+            planner=_planner(planner, parallel_handoffs=True),
+            sub_agents=[x, _sub("Beta", planner, log)[0]],
+        )
+        runner = Runner()
+        conversation = f"c_nested_names_{planner}"
+
+        first = await _run(runner, root, conversation)
+        second = await _run(runner, root, conversation, _approve())
+        third = await _run(runner, root, conversation, _approve())
+
+        asked = [(t[-1].author, t[-1].metadata.get(METADATA_BRANCH)) for t in (first, second)]
+        assert sorted(asked) == [("Y", "X"), ("Z", "X")]
+        assert _answered_by_main(third)
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
     async def test_one_waiting_two_levels_down_is_resumed_and_returns_up(
         self, planner: str
     ) -> None:
@@ -1263,6 +1309,75 @@ class TestAMessageInsteadOfTheAnswer:
         assert not [x for x in log if x.startswith("write")]
         assert _answered_by_main(events)
         assert sorted(main.answered(1)) == ["main_1_0", "main_1_1"]
+        assert not (await _state(runner.conversation_manager, conversation)).get(
+            WAITING_BRANCHES_KEY
+        )
+
+
+def _splitting(name: str, planner: str, log: list[str], subs: list[Agent]) -> Agent:
+    """An agent that hands both of its sub-agents a task in one response."""
+    calls = [(sub.name, f'{{"task": "{sub.name.lower()}"}}') for sub in subs]
+    return Agent(
+        name=name,
+        description=f"splits {name.lower()}'s work",
+        instruction="delegate",
+        llm_provider=_Script(label=name, log=log, replies=[calls, f"{name} done"]),
+        planner=_planner(planner, parallel_handoffs=True),
+        sub_agents=subs,
+    )
+
+
+class TestAMessageWhereNestedBatchesWait:
+    """Two batches two levels down, all four of their sub-agents waiting, and a new
+    message: every one ends as interrupted and every call is closed. Only the
+    batch on the conversation's stack used to be: a branch waiting beside it was
+    ended alone, its own sub-agents left waiting, their calls without a result."""
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_nothing_is_left_waiting_or_without_a_result(self, planner: str) -> None:
+        log: list[str] = []
+        x = _splitting(
+            "X",
+            planner,
+            log,
+            [_sub("Y", planner, log, writes=True)[0], _sub("Z", planner, log, writes=True)[0]],
+        )
+        w = _splitting(
+            "W",
+            planner,
+            log,
+            [_sub("U", planner, log, writes=True)[0], _sub("V", planner, log, writes=True)[0]],
+        )
+        root = _splitting("MainAgent", planner, log, [x, w])
+        runner = Runner()
+        conversation = f"c_nested_message_{planner}"
+        first = await _run(runner, root, conversation)
+        assert first[-1].event_type == ExecutionEventType.TOOL_NEEDS_FEEDBACK
+
+        events = await _run(runner, root, conversation, _ask("never mind"))
+
+        assert sorted(_of(events, ExecutionEventType.AGENT_END)) == ["U", "V", "W", "X", "Y", "Z"]
+        assert not [x for x in log if x.startswith("write")]
+        assert _answered_by_main(events)
+        stored = await _stored(runner.conversation_manager, conversation)
+        made = {
+            e.action.call_id
+            for e in stored
+            if e.event_type in (ExecutionEventType.TOOL_START, ExecutionEventType.AGENT_CALL)
+        }
+        closed = {
+            e.action.call_id
+            for e in stored
+            if e.event_type
+            in (
+                ExecutionEventType.TOOL_END,
+                ExecutionEventType.TOOL_ERROR,
+                ExecutionEventType.AGENT_START,
+            )
+            and getattr(e.action, "call_id", None)
+        }
+        assert made <= closed, made - closed
         assert not (await _state(runner.conversation_manager, conversation)).get(
             WAITING_BRANCHES_KEY
         )
