@@ -9,6 +9,7 @@ as the tool's result, and that the tool exists only for a model that reads image
 
 import base64
 import io
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -27,6 +28,8 @@ from domyn.agents.tools.builtin import (
     bundle,
     images,
 )
+from domyn.agents.tools.builtin.backends import CommandBackend, CommandResult, ToolHost
+from domyn.agents.tools.builtin.files import serve
 
 
 class Model(BaseLLMProvider):
@@ -75,6 +78,44 @@ def model() -> Model:
 async def _read(workspace: Workspace, model: Model, path: str, query: str = "What is it?") -> str:
     tools = {t.name: t for t in bundle("files", workspace=workspace, llm_provider=model)}
     result = await tools["read_image"].execute(path=path, query=query)
+    return str(result.data) if result.success else f"ERROR: {result.error}"
+
+
+class _Elsewhere(CommandBackend):
+    """A backend whose tool bodies run "elsewhere": each request goes through `run` and
+    `serve` answers it, as the container's tool host does. Like `auto`, it knows where
+    the bodies run only once started."""
+
+    name = "elsewhere"
+
+    def __init__(self, *, hosted: bool = True, fail: CommandResult | None = None) -> None:
+        self.hosted = hosted
+        self.fail = fail
+        self.started = False
+        self.requests: list[tuple[str, dict[str, Any]]] = []
+
+    @property
+    def tool_host(self) -> ToolHost | None:
+        return ToolHost("tool-host", roots=(Path("/"),)) if self.started and self.hosted else None
+
+    async def start(self) -> None:
+        self.started = True
+
+    async def run(
+        self, command: str, *, timeout: float, conversation_id: str = "", stdin: str | None = None
+    ) -> CommandResult:
+        if self.fail is not None:
+            return self.fail
+        request = json.loads(stdin or "{}")
+        self.requests.append((conversation_id, request))
+        return CommandResult(exit_code=0, stdout=json.dumps(serve(request)) + "\n", stderr="")
+
+
+async def _read_through(backend: _Elsewhere, workspace: Workspace, model: Model, path: str) -> str:
+    tools = {
+        t.name: t for t in bundle("files", workspace=workspace, backend=backend, llm_provider=model)
+    }
+    result = await tools["read_image"].execute(path=path, query="What is it?", conversation_id="c1")
     return str(result.data) if result.success else f"ERROR: {result.error}"
 
 
@@ -274,3 +315,64 @@ class TestWhenTheModelFails:
         model.answer = "  "
 
         assert "gave no answer" in await _read(workspace, model, "shot.png")
+
+
+class TestThroughABackend:
+    """Loaded where the backend runs the file tools; the model is asked from here."""
+
+    @pytest.mark.asyncio
+    async def test_the_image_is_loaded_where_the_backend_runs_the_tools(
+        self, workspace: Workspace, model: Model, tmp_path: Path
+    ) -> None:
+        backend = _Elsewhere()
+
+        assert await _read_through(backend, workspace, model, "shot.png") == "A red square."
+
+        ((conversation, request),) = backend.requests
+        assert conversation == "c1"
+        assert request["operation"] == "load_image"
+        assert request["arguments"] == {"path": "shot.png"}
+        assert request["extra_roots"][-1] == "/"
+        assert _sent(model)[1:] == ("image/png", (tmp_path / "shot.png").read_bytes())
+
+    @pytest.mark.asyncio
+    async def test_a_backend_that_runs_the_tools_here_loads_here(
+        self, workspace: Workspace, model: Model
+    ) -> None:
+        """`auto` after falling back, or the local backend."""
+        backend = _Elsewhere(hosted=False)
+
+        assert await _read_through(backend, workspace, model, "shot.png") == "A red square."
+        assert backend.started and backend.requests == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("path", "expected"),
+        [
+            # No "outside the workspace": where the backend runs the tools, `/` is a
+            # root, and the boundary is what the backend mounts.
+            ("missing.png", "does not exist"),
+            ("folder", "is a directory"),
+            ("notes.md", "not an image this tool can open"),
+        ],
+    )
+    async def test_a_refusal_comes_back_as_written(
+        self, workspace: Workspace, model: Model, path: str, expected: str
+    ) -> None:
+        answer = await _read_through(_Elsewhere(), workspace, model, path)
+
+        assert expected in answer
+        # Not an exception's name, which `serve` puts before anything but a refusal.
+        assert "Error:" not in answer
+        assert model.asked == []
+
+    @pytest.mark.asyncio
+    async def test_a_backend_that_failed_is_an_error_the_model_can_read(
+        self, workspace: Workspace, model: Model
+    ) -> None:
+        failed = CommandResult(exit_code=None, stdout="", stderr="", backend_error="box is gone")
+
+        answer = await _read_through(_Elsewhere(fail=failed), workspace, model, "shot.png")
+
+        assert "box is gone" in answer
+        assert model.asked == []

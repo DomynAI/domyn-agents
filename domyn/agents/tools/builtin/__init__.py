@@ -186,7 +186,7 @@ def bundle(
                 isinstance(llm_provider, BaseLLMProvider)
                 and getattr(llm_provider, "vision", False) is True
             ):
-                tools.extend(image_tools(space, llm_provider))
+                tools.extend(image_tools(space, llm_provider, backend=resolved))
         elif name == "shell":
             resolved = resolved or LocalBackend(space, allowed_env=allowed_env)
             tools.extend(shell_tools(space, backend=resolved))
