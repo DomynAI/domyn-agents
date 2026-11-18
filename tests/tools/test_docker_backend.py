@@ -1292,6 +1292,14 @@ class TestARealContainer:
         assert (make_docker.workspace / "made.txt").stat().st_uid == os.getuid()
 
     @pytest.mark.asyncio
+    async def test_the_user_has_a_name(self, make_docker: Any) -> None:
+        """Without one a shell in the container reads "I have no name!"."""
+        result = await _sh(make_docker(), "whoami && id -gn && echo ~")
+        assert result.exit_code == 0, result.stderr
+        assert result.stdout.split()[0] in {"domyn", "root"}
+        assert result.stdout.split()[-1] == "/tmp/domyn-home"
+
+    @pytest.mark.asyncio
     async def test_the_host_outside_the_workspace_is_not_there(
         self, make_docker: Any, tmp_path: Path
     ) -> None:
