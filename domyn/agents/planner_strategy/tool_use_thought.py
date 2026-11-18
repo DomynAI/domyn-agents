@@ -15,6 +15,7 @@ When content appears **without** tool calls it is the response to the user
 (streamable), not a thought.
 """
 
+import asyncio
 import json
 import traceback
 import uuid
@@ -36,6 +37,7 @@ from domyn.agents.core import (
 from domyn.agents.core.utils import extract_parts
 from domyn.agents.llm import DelegateLLMProvider
 from domyn.agents.llm.base import LLMMessage, LLMResponse, LLMToolCall, is_context_overflow
+from domyn.agents.llm.retry import retry_delay
 from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.context_injection import (
     insert_turn_context,
@@ -136,6 +138,8 @@ class ToolUseWithThoughtPlannerStrategy(ToolUsePlannerStrategy):
         """
         logger = get_logger()
         iteration = 0
+        # Transient failures asked again since the last successful call; see ``llm/retry.py``.
+        llm_retries = 0
         # See ``ToolUsePlannerStrategy.execute`` for soft-miss semantics.
         fv_soft_miss_remaining = MAX_FV_SOFT_MISS_RETRIES
         # Last-ditch fallback after soft-miss budget is spent: nudge the LLM
@@ -316,6 +320,18 @@ class ToolUseWithThoughtPlannerStrategy(ToolUsePlannerStrategy):
                         else:
                             generation_complete = True
                 except Exception as e:
+                    delay = retry_delay(e, llm_retries, self.max_llm_retries)
+                    if delay is not None:
+                        llm_retries += 1
+                        # A retry asks the same request again, so it gives the iteration back
+                        # rather than spending the step budget.
+                        iteration -= 1
+                        logger.warning(
+                            f"transient LLM failure ({type(e).__name__}): retrying in {delay:.1f}s "
+                            f"({llm_retries}/{self.max_llm_retries})"
+                        )
+                        await asyncio.sleep(delay)
+                        continue
                     # See `ToolUsePlannerStrategy.execute`: compacted and retried
                     # once when the provider rejects the request as too long.
                     recovery = (
@@ -355,6 +371,7 @@ class ToolUseWithThoughtPlannerStrategy(ToolUsePlannerStrategy):
                     )
                     break
 
+            llm_retries = 0
             # See `ToolUsePlannerStrategy.execute`: the base the next request is
             # measured from.
             self.compactor.observe(

@@ -20,6 +20,7 @@ Response contract
   - Content only (no tool calls) → implicit ``AGENT_END``.
 """
 
+import asyncio
 import json
 import traceback
 import uuid
@@ -49,6 +50,7 @@ from domyn.agents.core import (
 from domyn.agents.core.utils import extract_parts
 from domyn.agents.llm import DelegateLLMProvider
 from domyn.agents.llm.base import LLMMessage, LLMResponse, LLMToolCall, is_context_overflow
+from domyn.agents.llm.retry import retry_delay
 from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.base import BasePlannerStrategy
 from domyn.agents.planner_strategy.context_injection import (
@@ -480,6 +482,9 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
         """
         logger = get_logger()
         iteration = 0
+        # Transient failures asked again since the last successful call; reset below, so the budget
+        # is per model call and a flaky provider cannot exhaust a long turn.
+        llm_retries = 0
         # Soft-miss budget for FORWARD_VERBATIM. Each retry injects a tool-role
         # feedback message so the LLM sees the diagnostic and can recover. Cap
         # prevents loops where the LLM keeps hallucinating the same garbage.
@@ -680,6 +685,18 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                                 generation_complete = True
 
                 except Exception as e:
+                    delay = retry_delay(e, llm_retries, self.max_llm_retries)
+                    if delay is not None:
+                        llm_retries += 1
+                        # A retry asks the same request again; it is not a step of the plan, so it
+                        # gives the iteration back rather than spending the step budget.
+                        iteration -= 1
+                        logger.warning(
+                            f"transient LLM failure ({type(e).__name__}): retrying in {delay:.1f}s "
+                            f"({llm_retries}/{self.max_llm_retries})"
+                        )
+                        await asyncio.sleep(delay)
+                        continue
                     # Rejected as too long: the estimate under-counted. Compact
                     # harder and go round again, once — a second rejection is an
                     # error like any other.
@@ -720,6 +737,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                     )
                     break
 
+                llm_retries = 0
                 yield _create_event(
                     event_type=ExecutionEventType.LLM_END,
                     content=[Part(text="LLM response received")],
