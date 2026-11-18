@@ -49,6 +49,7 @@ class BuiltinSkill:
     name: str
     """The skill's folder name, which is what a config's path ends in."""
     category: str
+    """The folder it is grouped under, or ``""`` for a skill directly under ``builtin/``."""
     description: str
     external_files: tuple[str, ...]
     """The skill's ``external_files:`` entries as written: paths relative to its ``SKILL.md``."""
@@ -67,26 +68,35 @@ class BuiltinSkill:
 
 
 def list_builtin_skills() -> list[BuiltinSkill]:
-    """Every skill under ``builtin/<category>/<skill>/SKILL.md``, in a stable order."""
+    """Every skill under ``builtin/<category>/<skill>/SKILL.md`` or ``builtin/<skill>/SKILL.md``.
+
+    A folder directly under ``builtin/`` holding a ``SKILL.md`` is a skill of its own,
+    in no category; any other folder there is a category. The order is stable.
+    """
     skills: list[BuiltinSkill] = []
     if not BUILTIN_SKILLS_ROOT.is_dir():
         return skills
-    for category in sorted(p for p in BUILTIN_SKILLS_ROOT.iterdir() if p.is_dir()):
-        if category.name == "__pycache__":
-            continue
-        for folder in sorted(p for p in category.iterdir() if p.is_dir()):
-            skill_file = folder / "SKILL.md"
-            if not skill_file.is_file():
-                continue
-            descriptor, _ = parse_skill_file(skill_file, source="builtin")
-            skills.append(
-                BuiltinSkill(
-                    name=folder.name,
-                    category=category.name,
-                    description=descriptor.description,
-                    external_files=tuple(descriptor.requires.external_files),
-                )
+
+    def add(folder: Path, category: str) -> None:
+        descriptor, _ = parse_skill_file(folder / "SKILL.md", source="builtin")
+        skills.append(
+            BuiltinSkill(
+                name=folder.name,
+                category=category,
+                description=descriptor.description,
+                external_files=tuple(descriptor.requires.external_files),
             )
+        )
+
+    for top in sorted(p for p in BUILTIN_SKILLS_ROOT.iterdir() if p.is_dir()):
+        if top.name == "__pycache__":
+            continue
+        if (top / "SKILL.md").is_file():
+            add(top, "")
+            continue
+        for folder in sorted(p for p in top.iterdir() if p.is_dir()):
+            if (folder / "SKILL.md").is_file():
+                add(folder, top.name)
     return skills
 
 
@@ -94,11 +104,13 @@ def skill_groups() -> dict[str, list[str]]:
     """The builtin skill names by category, in catalog order.
 
     The categories are the folders under ``builtin/``, so a group is whatever the
-    package ships and there is no second list to keep in step with it.
+    package ships and there is no second list to keep in step with it. A skill in no
+    category is in no group: the picker lists it on its own row.
     """
     groups: dict[str, list[str]] = {}
     for skill in list_builtin_skills():
-        groups.setdefault(skill.category, []).append(skill.name)
+        if skill.category:
+            groups.setdefault(skill.category, []).append(skill.name)
     return groups
 
 

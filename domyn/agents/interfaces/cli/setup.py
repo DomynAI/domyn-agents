@@ -918,10 +918,13 @@ def _choose_project_skills(
         taken.add(label)
         category = install_dir / builtin.category
         # The group the exported built-ins of that category sit in, so the two mix.
+        # A built-in in no category sits directly in the install directory.
         group = (
             category.relative_to(project.expanduser().absolute()).as_posix()
             if _inside(category, project)
             else f"built-in/{builtin.category}"
+            if builtin.category
+            else "built-in"
         )
         missing[label] = builtin
         missing_rows.append(

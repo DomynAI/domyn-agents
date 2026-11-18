@@ -48,6 +48,7 @@ from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.context_injection import (
     insert_turn_context,
     turn_context_messages,
+    with_skills,
 )
 from domyn.agents.planner_strategy.context_management.tool_use import (
     ToolUseWithThoughtContextManager,
@@ -157,8 +158,11 @@ class ToolUseWithThoughtPlannerStrategy(ToolUsePlannerStrategy):
         while iteration < self.max_iterations:
             iteration += 1
 
-            messages = await self.context_manager.get_context(
-                context=interaction_context, agent=agent, instruction=instruction
+            messages = with_skills(
+                await self.context_manager.get_context(
+                    context=interaction_context, agent=agent, instruction=instruction
+                ),
+                skills_payload,
             )
             if fv_soft_miss_carry:
                 messages.extend(fv_soft_miss_carry)
@@ -174,7 +178,7 @@ class ToolUseWithThoughtPlannerStrategy(ToolUsePlannerStrategy):
             # the threshold is checked on the whole request, but only the
             # conversation is compacted.
             tool_defs = self.context_manager.get_tool_definitions(agent, interaction_context)
-            turn_context = await turn_context_messages(agent, interaction_context, skills_payload)
+            turn_context = await turn_context_messages(agent, interaction_context)
             messages = self.compactor.replay(messages, interaction_context.state, agent.name)
             compaction_plan = self.compactor.assess(
                 messages,
