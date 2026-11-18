@@ -42,7 +42,8 @@ The answer and the model's reasoning are rendered as Markdown: headings, lists, 
 
 - **A message** is delivered to the agent at its next step, so you can correct or add to a request without waiting for the answer.
 - **A command that only shows something**, such as `/context` or `/help`, runs at once, and so does `/auto`.
-- **Any other command**, such as `/clear` or `/model`, is held and runs when the agent finishes. A held `/clear` clears the screen right after the answer is printed; `/resume` shows that conversation again.
+- **`/exit` and `/clear`** stop the agent, as Ctrl-C does, and then run: the session ends, or a new conversation starts. A message or command typed before them and not yet taken in is not sent, and the session says how many were left out.
+- **Any other command**, such as `/model` or `/resume`, is held and runs when the agent finishes. A held `/resume` shows that conversation again.
 
 **Ctrl-C** depends on what is happening:
 

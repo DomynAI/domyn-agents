@@ -267,21 +267,97 @@ class TestALineTypedWhileTheAgentWorks:
 class TestSlashCommandsTypedMidTurn:
     @pytest.mark.asyncio
     async def test_a_stateful_one_is_held_until_the_turn_ends(self) -> None:
-        """``/clear`` mid-turn would swap the conversation id while the runner is
-        still writing events under the old one. Held, not refused: the user typed
-        it on purpose."""
+        """``/model`` mid-turn would rebuild the agent the runner is using. Held,
+        not refused: the user typed it on purpose."""
         repl, scripted, _, buffer = _repl()
-        before = repl._state.conversation_id
 
         turn = asyncio.ensure_future(repl._run_turn("read every file"))
-        await scripted.queue.put("/clear")
+        await scripted.queue.put("/model")
         await turn
 
-        assert repl._state.conversation_id == before
-        assert "/clear" in repl._deferred
+        assert "/model" in repl._deferred
         # Not printed when it was typed — it was a queue row then. Printed as the
         # queue is drained, which is immediately above the run it causes.
-        assert "/clear" in buffer.getvalue()
+        assert "/model" in buffer.getvalue()
+
+    @pytest.mark.asyncio
+    async def test_clear_stops_the_turn_and_runs_at_once(self) -> None:
+        """Held, ``/clear`` ran only after the agent had finished work the user
+        had already walked away from. It stops the turn instead, as Ctrl-C does,
+        and starts the new conversation then."""
+        repl, scripted, provider, buffer = _repl()
+        before = repl._state.conversation_id
+        typed = asyncio.Event()
+
+        async def type_clear() -> None:
+            await scripted.queue.put("/clear")
+            await scripted.queue.put(EOFError())
+            typed.set()
+            await asyncio.sleep(30)  # the model is slow; the turn must not wait for it
+
+        provider.pause = type_clear
+
+        assert await asyncio.wait_for(repl._loop("read every file"), timeout=5) == 0
+
+        assert typed.is_set()
+        assert provider.calls == 1, "the turn went on after /clear"
+        assert repl._state.conversation_id != before
+        assert "Turn interrupted." in buffer.getvalue()
+        assert "Started a new conversation." in buffer.getvalue()
+        assert not repl._deferred
+
+    @pytest.mark.asyncio
+    async def test_exit_stops_the_turn_and_ends_the_session(self) -> None:
+        repl, scripted, provider, buffer = _repl()
+
+        async def type_exit() -> None:
+            await scripted.queue.put("/exit")
+            await asyncio.sleep(30)
+
+        provider.pause = type_exit
+
+        assert await asyncio.wait_for(repl._loop("read every file"), timeout=5) == 0
+
+        assert provider.calls == 1
+        assert "Turn interrupted." in buffer.getvalue()
+        assert "Session closed." in buffer.getvalue()
+
+    @pytest.mark.asyncio
+    async def test_what_was_waiting_for_the_stopped_turn_is_not_sent(self) -> None:
+        """A message or a held command typed before /clear was for the
+        conversation being left: it does not start the new one."""
+        repl, scripted, provider, buffer = _repl()
+        before = repl._state.conversation_id
+
+        async def type_then_clear() -> None:
+            await scripted.queue.put("/model")
+            await scripted.queue.put("/clear")
+            await scripted.queue.put(EOFError())
+            await asyncio.sleep(30)
+
+        provider.pause = type_then_clear
+
+        assert await asyncio.wait_for(repl._loop("read every file"), timeout=5) == 0
+
+        assert repl._state.conversation_id != before
+        assert provider.calls == 1
+        assert "Not sent, typed before the turn was stopped: 1 message." in buffer.getvalue()
+
+    @pytest.mark.asyncio
+    async def test_clear_during_an_approval_answers_nothing_and_clears(self) -> None:
+        """The run has paused on the question; /clear leaves it unanswered in the
+        old conversation and starts the new one."""
+        repl, scripted, provider, buffer = _choosing_repl()
+        before = repl._state.conversation_id
+        loop = asyncio.ensure_future(repl._loop("read every file"))
+        await _until(lambda: repl._approving)
+        await scripted.queue.put("/clear")
+        await scripted.queue.put(EOFError())
+
+        assert await asyncio.wait_for(loop, timeout=5) == 0
+        assert repl._state.conversation_id != before
+        assert provider.calls == 1
+        assert "Started a new conversation." in buffer.getvalue()
 
     @pytest.mark.asyncio
     async def test_a_read_only_one_runs_immediately(self) -> None:
@@ -602,11 +678,11 @@ class TestTheQueueIsVisibleWhileItWaits:
         repl, _, _, buffer = _repl()
         before = len(buffer.getvalue())
 
-        await repl._dispatch_typed("/clear")
+        await repl._dispatch_typed("/model")
 
-        assert repl._pending_rows() == [("held", "/clear")]
-        assert list(repl._deferred) == ["/clear"]
-        assert "/clear" not in buffer.getvalue()[before:]
+        assert repl._pending_rows() == [("held", "/model")]
+        assert list(repl._deferred) == ["/model"]
+        assert "/model" not in buffer.getvalue()[before:]
 
     @pytest.mark.asyncio
     async def test_the_editor_is_given_the_queue_as_a_callable(self) -> None:
