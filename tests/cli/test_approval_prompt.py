@@ -8,6 +8,7 @@ import pytest
 from rich.console import Console
 
 from domyn.agents.core import (
+    METADATA_BRANCH,
     ApprovalType,
     BaseEvent,
     ExecutionEventType,
@@ -133,6 +134,25 @@ class TestTheCallReadsAsWritten:
         # rich's default console, markup on: an embedder may hand in one like it.
         begin_approval(Console(file=buffer, width=width), Theme.build(allow_animation=False), event)
         return "\n".join(line.rstrip() for line in buffer.getvalue().split("\n"))
+
+    def test_a_sub_agent_of_several_says_it_is_the_one_asking(self) -> None:
+        buffer = io.StringIO()
+        event = BaseEvent(
+            event_type=ExecutionEventType.TOOL_NEEDS_FEEDBACK,
+            author="Alpha",
+            metadata={
+                "approval_subject": "$ make",
+                "approval_scopes": ["conversation"],
+                METADATA_BRANCH: "Alpha",
+            },
+            action=FeedbackAction(
+                name="run_command",
+                approval_type=ApprovalType.USER_CONFIRM,
+                parameters=[FeedbackParameters(name="command", value="make", type="str")],
+            ),
+        )
+        begin_approval(Console(file=buffer, width=500), Theme.build(allow_animation=False), event)
+        assert "approval required (Alpha): $ make" in buffer.getvalue()
 
     def test_a_command_is_shown_once_as_it_will_run(self) -> None:
         command = (

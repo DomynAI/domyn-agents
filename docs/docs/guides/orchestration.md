@@ -61,6 +61,31 @@ The main agent decides whom to call only from the sub-agents' names and descript
 - **Keep specialists distinct.** Two descriptions that could both match a request make the choice a coin toss.
 - **Tell the main agent how to delegate** in its `instruction`: for example, to send each question to the right specialist and to answer from what the specialist found.
 
+## Several sub-agents at once
+
+A model may call several sub-agents in one response, for example `OrderAgent` and `PaymentAgent` for a question about both. They run at the same time (`parallel_handoffs`, on by default). To have them run one after the other instead, in the order called and each to its end before the next starts, as a handoff that gives the conversation to one agent at a time, turn it off on the calling agent's planner; the calls of the same response after them still run, so none is lost:
+
+```python
+from domyn.agents.planner_strategy.tool_use_thought import ToolUseWithThoughtPlannerStrategy
+
+main_agent = Agent(
+    ...,
+    sub_agents=[order_agent, payment_agent],
+    planner=ToolUseWithThoughtPlannerStrategy(parallel_handoffs=False),
+)
+```
+
+It is an option of `tool_use` and `tool_use_thought`, and needs `parallel_tool_calls` (on by default): turning that off turns this off too, unless it is set. `react` has it off and refuses it. When they run together, everything else works as it does for a single handoff: the same events, the same conversation, the same `context_visibility` and `handoff_scope`. What changes:
+
+- **They run together.** The sub-agents called in the response, and the tools called with them that need no approval, start at the same time. At most `max_parallel_tool_calls` tool calls run at once in the whole turn, however many sub-agents are running (a `Runner` option, 8 by default); a sub-agent takes no place of its own, so one waiting for its tools never holds up another. The calling agent resumes once all of them have finished, and reads their answers in the order it called them, whichever finished first.
+- **They do not see each other at work.** A sub-agent does not read what another one of the same response is doing; once that one has finished, its work is visible as usual, according to `context_visibility`.
+- **An approval stops one sub-agent, not the others.** A sub-agent that calls a tool needing approval waits for the answer, while the others go on until they finish or wait in turn. Then the questions are asked one at a time: the sub-agent asking is a sub-agent waiting like after a single handoff, its answer resumes it, and when it returns to the calling agent the next question is asked. The calling agent resumes after the last one. A pause is saved with the conversation, so the answer can come from another process, after a restart.
+- **A message instead of the answer goes to the agent the user talks to**, the entrypoint, as after a single handoff: the calls that were waiting are not run, and every sub-agent waiting, at any depth, ends as interrupted (`SubAgentInterrupted`), so the entrypoint reads the message knowing what was left undone.
+- **A failure stays with the sub-agent.** A sub-agent whose model or code fails ends with an answer saying it failed; the others are not affected.
+- **Nesting is limited.** A sub-agent can call several sub-agents at once in turn, up to `max_agent_depth` levels (a `Runner` option, 3 by default). Below that the calls are not started, and the agent that made them is told why.
+
+In the [event stream](events-and-streaming.md), the `AGENT_CALL` and the `AGENT_START` of these sub-agents carry `tool_batch` in their `metadata`, and the events of the sub-agents are interleaved, each with its `author`. A `TOOL_NEEDS_FEEDBACK` from one of them carries in `metadata["branch"]` the name of the sub-agent it belongs to, the one the calling agent started when sub-agents call sub-agents in turn, which the CLI shows in the approval prompt.
+
 ## What an agent sees, and whom it can call
 
 Two settings on each agent, independent of each other, control a team:
@@ -164,7 +189,7 @@ agents:
       - PaymentAgent
 ```
 
-`entrypoint` names the agent the user talks to.
+`entrypoint` names the agent the user talks to. `CustomerService` runs its specialists at the same time when it calls both in one response (`parallel_handoffs`, on by default).
 
 ## Next steps
 

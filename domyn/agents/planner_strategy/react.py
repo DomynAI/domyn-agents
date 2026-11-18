@@ -121,7 +121,21 @@ class ReactPlannerStrategy(BasePlannerStrategy):
     stream: bool = False
     context_manager: ContextManager = Field(default_factory=_default_context_manager)
     name: str = "react"
+    # One action per step: there is never a batch to run, so off, and refused on.
+    parallel_handoffs: bool = False
     _disable_structured_outputs: bool = False
+
+    @field_validator("parallel_handoffs")
+    @classmethod
+    def refuse_parallel_handoffs(cls, value: bool) -> bool:
+        # One action per step is the protocol this planner parses: it never sees
+        # several sub-agents in one response, so there is nothing to run together.
+        if value:
+            raise ValueError(
+                "parallel_handoffs is not supported by the react planner: use "
+                "tool_use or tool_use_thought"
+            )
+        return value
 
     @field_validator("context_manager", mode="wrap")
     @classmethod

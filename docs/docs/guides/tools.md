@@ -265,7 +265,7 @@ planner_strategies:
     parallel_tool_calls: false
 ```
 
-How many run at the same time at most is the `Runner`'s: `Runner(max_parallel_tool_calls=4)` (default 8).
+How many run at the same time at most is the `Runner`'s: `Runner(max_parallel_tool_calls=4)` (default 8). The limit is for the whole turn, sub-agents running together included.
 
 Tools that run together share the conversation's `state`, so a tool that changes it should not assume another one is not changing it at the same time.
 

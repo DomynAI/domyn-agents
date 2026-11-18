@@ -181,11 +181,10 @@ class TestAMessageThatArrivesMidTurn:
     @pytest.mark.parametrize("planner", PLANNERS)
     @pytest.mark.asyncio
     async def test_the_next_llm_call_sees_it(self, planner: str) -> None:
-        """The whole feature. Also parametrized over both planners because
-        ``ToolUseWithThoughtPlannerStrategy.execute`` is a copy of its parent's loop
-        rather than an extension, and has shipped a feature missing from one copy
-        before. The absorb lives in the runner, so this should pass for free — this
-        is what says so."""
+        """The whole feature. Also parametrized over both planners: they run one
+        loop now, but ``ToolUseWithThoughtPlannerStrategy.execute`` was a copy of its
+        parent's, and shipped a feature missing from one copy. The absorb lives in
+        the runner, so this should pass for free — this is what says so."""
         runner = Runner()
         conversation_id = f"c_next_call_{planner}"
         provider = _ToolThenAnswer(rounds=2)
