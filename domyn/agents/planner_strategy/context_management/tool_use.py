@@ -13,9 +13,8 @@ from domyn.agents.approvals import INJECTED_PARAMS
 from domyn.agents.core import (
     METADATA_CONVERTED_TO_AGENT_END,
     METADATA_EXTERNAL_PART_AGENT_VISIBLE,
-    METADATA_TOOL_BATCH,
-    METADATA_PARAMETERS_BEFORE_USER_EDIT,
     METADATA_INITIAL_PARAMETERS,
+    METADATA_TOOL_BATCH,
     BaseAgent,
     BaseEvent,
     ExecutionEventType,
