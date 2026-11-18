@@ -164,9 +164,6 @@ llm_providers:
 planner_strategies:
   - name: planner
     type: tool_use_thought
-  - name: parallel_planner
-    type: tool_use_thought
-    parallel_handoffs: true
 
 agents:
   - name: OrderAgent
@@ -186,13 +183,13 @@ agents:
     description: Main customer service agent
     instruction: Route each question to the right specialist.
     llm_provider: main_llm
-    planner_strategy: parallel_planner
+    planner_strategy: planner
     sub_agents:
       - OrderAgent
       - PaymentAgent
 ```
 
-`entrypoint` names the agent the user talks to. `CustomerService` runs its specialists at the same time when it calls both in one response (`parallel_handoffs`).
+`entrypoint` names the agent the user talks to. `CustomerService` runs its specialists at the same time when it calls both in one response (`parallel_handoffs`, on by default).
 
 ## Next steps
 
