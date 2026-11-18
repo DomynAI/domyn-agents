@@ -453,10 +453,9 @@ class AnthropicProvider(BaseLLMProvider):
                                         execution_time=time.time() - start,
                                     )
 
-                            elif delta.get("type") == "input_json_delta":
+                            elif delta.get("type") == "input_json_delta" and idx in tool_call_acc:
                                 # Accumulate partial JSON for the tool call at this index
-                                if idx in tool_call_acc:
-                                    tool_call_acc[idx]["arguments"] += delta.get("partial_json", "")
+                                tool_call_acc[idx]["arguments"] += delta.get("partial_json", "")
 
                         # message_start → the prompt's size, message_delta → the reply's
                         elif event_type == "message_start":
