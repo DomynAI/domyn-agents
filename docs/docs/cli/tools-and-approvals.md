@@ -15,6 +15,8 @@ The setup wizard asks which sets of tools the agent gets, with all three ticked 
 | Set | Tools | Approval |
 |---|---|---|
 | `files` | `read_file`, `list_dir`, `glob_files`, `grep` | Never asked: they only read |
+
+`read_file` returns each line with its number and a tab in front (`     12\ttext`). The number is not part of the file: `edit_file` matches the text after the tab, and says so when a copy with the number in it fails to match. The tool descriptions tell the model to use `read_file`, `grep` and `glob_files` rather than `cat`, `sed`, `grep` or `find` in a command.
 | | `write_file`, `append_file`, `edit_file` | Asked for every file |
 | `shell` | `run_command` | Asked for every command |
 | `browser` | `browser_snapshot`, `browser_read`, `browser_scroll`, `browser_back` | Never asked: they read the page that is open |

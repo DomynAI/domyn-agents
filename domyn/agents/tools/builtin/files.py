@@ -53,6 +53,10 @@ from domyn.agents.tools.builtin.workspace import Workspace, WorkspaceError, is_i
 # tool result, within ``max_tool_result_chars`` (20 000 by default, event-id
 # header included). A longer window loses its middle, and the note's
 # ``start_line`` then reads on past lines the model never saw.
+#
+# Each line is returned with its number and a tab in front (``_numbered``), about seven characters a
+# line, so a full window reaches the model at roughly 15 500 characters — still inside the
+# context manager's 20 000, which is what the budget exists to respect.
 MAX_READ_CHARS = 12_000
 MAX_MATCHES = 200
 MAX_LISTED = 500
@@ -72,6 +76,21 @@ MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
 # Runs of pages a line names before it counts the rest: a PDF with a scan on
 # every other page must not open with a line of hundreds of numbers.
 _LISTED_RUNS = 20
+
+
+def _numbered(lines: list[str], first: int) -> str:
+    """The lines as the model reads them: number, tab, text.
+
+    The number is how the model names a line it has seen — in a plan, in a question to itself, in the
+    ``start_line`` of the next read — and how it finds the place again after a window. It is not part
+    of the file: ``edit_file`` matches the text after the tab, and says so when a copy fails.
+    """
+    width = 6
+    return "".join(f"{number:>{width}}\t{line}" for number, line in enumerate(lines, start=first))
+
+
+# A line of a read copied with its number: catches the one mistake numbering invites.
+_LINE_NUMBER_LOOKS_COPIED = re.compile(r"(?m)^\s*\d+\t")
 
 
 def _positive_int(value: object, fallback: int) -> int:
@@ -472,9 +491,15 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
     def read_file(path: str, start_line: int = 1, max_lines: int = 0, start_char: int = 0) -> str:
         """Read a text file or a document, or a range of lines from it.
 
-        Large files come back in pieces: read a window, then call again with
-        start_line set past the end of what you got. A line too long for one
-        read is cut, and the note after it gives the start_char to go on with.
+        Every line comes back with its line number and a tab in front, so a line
+        can be named and found again. The number is not part of the file: when
+        you edit, copy the text after the tab.
+
+        Use this rather than cat, sed, head or tail: a large file arrives in
+        pieces with the numbers kept, and the note at the end says where to read
+        on. Read a window, then call again with start_line set past the end of
+        what you got. A line too long for one read is cut, and the note after it
+        gives the start_char to go on with.
 
         PDF, Word, Excel, PowerPoint, OpenDocument, RTF and EPUB files come back
         converted to markdown: headings as # headings, tables as | tables |, a
@@ -520,7 +545,7 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
                 f"'{path}' has {window.last_seen} lines, so there is nothing at line {start}."
             )
 
-        body = "".join(window.lines)
+        body = _numbered(window.lines, first=start)
         if window.omitted:
             body = f"{window.omitted}\n\n{body}"
         first, final = start, start + len(window.lines) - 1
@@ -565,6 +590,9 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
     def glob_files(pattern: str, path: str = ".") -> str:
         """Find files by name pattern, e.g. '**/*.py' or 'src/*.ts'.
 
+        Use this rather than find or ls in a command: it lists what is inside
+        the workspace, skips dependency directories, and caps the list.
+
         Args:
             pattern: Glob pattern, relative to `path`. Not an absolute path and no '..'.
             path: Folder to search in, relative to the workspace root or an absolute
@@ -586,6 +614,10 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
 
     def grep(pattern: str, path: str = ".", glob: str = "**/*") -> str:
         """Search file contents for a regular expression.
+
+        Use this rather than grep or rg in a command: matches come back grouped
+        by file with their line numbers, capped at a readable count rather than
+        clipped, and binary and dependency directories are skipped for you.
 
         Only text files are searched: PDF, Word, Excel and other documents are
         not, so read those with read_file instead.
@@ -672,7 +704,8 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
         """Replace an exact piece of text in a file, once.
 
         The old text must appear exactly once, so include enough surrounding
-        context to make it unique.
+        context to make it unique. Copy it from a read without the line number
+        and tab in front: those are not part of the file.
 
         Args:
             path: File to edit, relative to the workspace root.
@@ -685,9 +718,15 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
         content = _read_text(path, workspace)
         occurrences = content.count(old)
         if occurrences == 0:
+            hint = (
+                " The line-number prefix of a read ('     12\\t') is not part of the file: copy"
+                " from after the tab."
+                if _LINE_NUMBER_LOOKS_COPIED.search(old)
+                else ""
+            )
             raise WorkspaceError(
                 f"That text does not appear in {workspace.display(resolved)}. "
-                "Read the file again — it may not be what you expect."
+                "Read the file again — it may not be what you expect." + hint
             )
         if occurrences > 1:
             raise WorkspaceError(

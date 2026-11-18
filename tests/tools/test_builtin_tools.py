@@ -188,6 +188,15 @@ class TestContainment:
         assert "the secret" not in await _call(tools, "grep", pattern="secret", path="notes.txt")
 
 
+def _unread(out: str) -> str:
+    """A read's text with the line-number prefixes taken off.
+
+    Assertions about a file's content read through it; assertions about the
+    numbering itself read the raw output (see ``test_the_lines_carry_their_numbers``).
+    """
+    return re.sub(r"(?m)^ *\d+\t", "", out)
+
+
 class TestReadingAndSearching:
     @pytest.mark.asyncio
     async def test_read_file(self, tools: dict) -> None:
@@ -211,7 +220,9 @@ class TestReadingAndSearching:
         (workspace.root / "big.txt").write_text("x" * 200_000)
         out = await _call(tools, "read_file", path="big.txt")
         body, _, note = out.partition("\n\n[")
-        assert len(body) == MAX_READ_CHARS
+        number, _, content = body.partition("\t")
+        assert number.strip() == "1", "the line is numbered like every other"
+        assert len(content) == MAX_READ_CHARS
         assert f"start_char={MAX_READ_CHARS}" in note
 
     @pytest.mark.asyncio
@@ -750,10 +761,12 @@ class TestReadingInPieces:
         return target
 
     @pytest.mark.asyncio
-    async def test_a_small_file_comes_back_whole_and_unadorned(self, tools: dict) -> None:
-        """Most files are small; a note on every read would be noise."""
+    async def test_the_lines_carry_their_numbers(self, tools: dict) -> None:
+        """The number is how a line is named and found again; a small file gets no
+        note beyond it."""
         out = await _call(tools, "read_file", path="app.py")
-        assert out == "print('hello')\nprint('world')\n"
+
+        assert out == "     1\tprint('hello')\n     2\tprint('world')\n"
 
     @pytest.mark.asyncio
     async def test_a_large_file_is_windowed(self, tools: dict, big: Path) -> None:
@@ -772,7 +785,7 @@ class TestReadingInPieces:
         self, tools: dict, big: Path
     ) -> None:
         out = await _call(tools, "read_file", path="big.txt", start_line=501)
-        assert out.startswith("line 501\n")
+        assert out.startswith("   501\tline 501\n")
 
     @pytest.mark.asyncio
     async def test_the_last_window_says_so(self, tools: dict, big: Path) -> None:
@@ -873,7 +886,7 @@ class TestReadingInPieces:
         # The last line shown is whole, and the next window starts right after it.
         assert f"line_{resume - 1:04d} = {row}" in seen
         following = await _call(tools, "read_file", path="wide.py", start_line=resume)
-        assert following.startswith(f"line_{resume:04d} = {row}\n")
+        assert following.startswith(f"{resume:>6}\tline_{resume:04d} = {row}\n")
 
     @pytest.mark.asyncio
     async def test_a_single_enormous_line_still_respects_the_budget(
@@ -897,7 +910,7 @@ class TestReadingInPieces:
         while True:
             out = await _call(tools, "read_file", path="one.json", start_char=start_char)
             body, _, note = out.partition("\n\n[")
-            pieces.append(body)
+            pieces.append(_unread(body))
             notes.append(note)
             match = re.search(r"start_line=1, start_char=(\d+)", note)
             if not match:
@@ -1117,7 +1130,7 @@ class TestReadingDocuments:
         out = await _call(tools, "read_file", path="report.pdf")
         assert out.startswith("[Not included: page 2 of its 3 pages"), out
         page = r"<!-- Page 2 -->\n\n\[Page not included: [^\]]+\]\n\n<!-- Page 3 -->"
-        assert re.search(rf"Terms.*{page}.*Penalties", out, re.S), out
+        assert re.search(rf"Terms.*{page}.*Penalties", _unread(out), re.S), out
 
     @pytest.mark.asyncio
     async def test_only_the_first_window_says_what_was_left_out(
@@ -1126,7 +1139,7 @@ class TestReadingDocuments:
         (workspace.root / "report.pdf").write_bytes(_pdf(_text("Terms"), _SCAN, _text("Penalties")))
         out = await _call(tools, "read_file", path="report.pdf", start_line=3)
         assert "of its 3 pages" not in out, out
-        assert out.startswith("Terms"), out
+        assert _unread(out).startswith("Terms"), out
 
     @pytest.mark.asyncio
     async def test_the_first_lines_name_twenty_runs_of_pages_and_count_the_rest(
@@ -1147,7 +1160,9 @@ class TestReadingDocuments:
         """What "export to Excel" often writes: tab-separated text called .xls.
         It is not the workbook its name claims, and it is readable as it is."""
         (workspace.root / "export.xls").write_text("id\tname\n1\tAda\n")
-        assert await _call(tools, "read_file", path="export.xls") == "id\tname\n1\tAda\n"
+        out = await _call(tools, "read_file", path="export.xls")
+
+        assert out == "     1\tid\tname\n     2\t1\tAda\n"
 
     @pytest.mark.asyncio
     async def test_a_variant_of_a_known_format_is_read_as_a_document(
@@ -1174,7 +1189,9 @@ class TestReadingDocuments:
         """The converter would make it a markdown table, whose lines and text
         are not the file's. Read as written, it is what edit_file matches."""
         (workspace.root / "rows.csv").write_text("id,name\n1,Ada\n")
-        assert await _call(tools, "read_file", path="rows.csv") == "id,name\n1,Ada\n"
+        out = await _call(tools, "read_file", path="rows.csv")
+
+        assert out == "     1\tid,name\n     2\t1,Ada\n"
 
     @pytest.mark.asyncio
     async def test_a_csv_that_is_not_utf8_is_read_as_a_table(
@@ -1185,7 +1202,7 @@ class TestReadingDocuments:
         the model a file it cannot see at all."""
         (workspace.root / "export.csv").write_bytes("name;price\ncafé;12 €\n".encode("cp1252"))
         out = await _call(tools, "read_file", path="export.csv")
-        assert out.startswith("| name | price |"), out
+        assert _unread(out).startswith("| name | price |"), out
         assert "café" in out and "12 €" in out, out
 
     @pytest.mark.asyncio
@@ -1199,7 +1216,7 @@ class TestReadingDocuments:
         content = ("id,value\n" + rows).encode() + "café,50\n".encode("cp1252")
         (workspace.root / "late.csv").write_bytes(content)
         first = await _call(tools, "read_file", path="late.csv", max_lines=5)
-        assert first.startswith("| id | value |"), first
+        assert _unread(first).startswith("| id | value |"), first
 
 
 class TestWritingOverDocuments:
