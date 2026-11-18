@@ -280,8 +280,9 @@ class SkillsRuntime(BaseModel):
     def build_payload(self, selection: Selection, contents: list[SkillContent]) -> str:
         """Render the block handed to the model.
 
-        Delivered as a message rather than folded into the system prompt: it keeps
-        the prompt prefix stable across the iterations of a turn.
+        The planner puts it at the end of the system prompt
+        (``planner_strategy.context_injection.with_skills``): it is resolved once per
+        agent entry, so it is the same on every iteration of a turn.
         """
         blocks: list[str] = []
 
@@ -347,7 +348,13 @@ class SkillsRuntime(BaseModel):
 
     def render_index(self, layout: IndexLayout) -> str:
         """The index block, in the form ``layout`` decided."""
-        header = "Available skills (call skill_view to read one in full):"
+        header = (
+            "Available skills. They hold instructions for kinds of work, and you must use them. "
+            "Before starting a task, check this list and read every skill relevant to the task "
+            "in full with skill_view, before doing anything else. While working, whenever a "
+            "step might make use of a skill (a kind of work comes up that one of them covers), "
+            "read it before taking that step. Follow every skill you read:"
+        )
         lines: list[str] = []
         names: list[str] = []
         for skill in layout.listed:
