@@ -100,6 +100,19 @@ class ContainerLauncher:
             await self._cli("rm", "-f", name, timeout=ACTION_SECONDS)
             raise TransientDockerError(f"could not start the container: {started.error()}")
         await self._probe(name, image)
+        if hasattr(os, "getuid"):
+            # The host's uid and gid have no name in the image, so a shell there reads
+            # "I have no name!" and `whoami` fails. Root is the one user that can write
+            # /etc/passwd, and only this host-made call runs as root. Best effort:
+            # nothing but the name depends on it.
+            uid, gid = os.getuid(), os.getgid()
+            await self._cli(
+                "exec", "--user", "0", name, "sh", "-c",
+                f"getent passwd {uid} >/dev/null"
+                f" || echo 'domyn:x:{uid}:{gid}::{CONTAINER_HOME}:/bin/bash' >> /etc/passwd;"
+                f" getent group {gid} >/dev/null || echo 'domyn:x:{gid}:' >> /etc/group",
+                timeout=ACTION_SECONDS,
+            )  # fmt: skip
         return DockerContainer(name, fingerprint)
 
     async def _probe(self, name: str, image: str) -> None:
