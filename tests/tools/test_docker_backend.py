@@ -25,6 +25,7 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
+from PIL import Image
 
 from domyn.agents.tools.builtin import (
     BackendUnavailableError,
@@ -36,6 +37,7 @@ from domyn.agents.tools.builtin import (
     Workspace,
     build_backend,
     file_tools,
+    image_tools,
     shell,
 )
 from domyn.agents.tools.builtin.backends.docker import (
@@ -59,6 +61,7 @@ from domyn.agents.tools.builtin.backends.docker.mounts import build_mounts
 from domyn.agents.tools.builtin.backends.docker.network import EgressNetwork
 from domyn.agents.tools.builtin.backends.docker.scope import BackendScope, remove_orphans
 from domyn.agents.tools.builtin.backends.docker.state import StateFolder
+from tests.tools.test_read_image import Model
 
 
 def _docker_works() -> bool:
@@ -905,11 +908,17 @@ class TestTheToolHostEntry:
 
     SCRIPT = Path(__file__).parents[2] / "domyn/agents/tools/builtin/backends/docker/tool_host.py"
 
-    def _run(self, workspace: Path, *flags: str) -> subprocess.CompletedProcess[str]:
+    def _run(
+        self,
+        workspace: Path,
+        *flags: str,
+        operation: str = "read_file",
+        arguments: dict[str, Any] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         request = json.dumps(
             {
-                "operation": "read_file",
-                "arguments": {"path": "a.txt"},
+                "operation": operation,
+                "arguments": arguments or {"path": "a.txt"},
                 "root": str(workspace),
                 "extra_roots": [],
             }
@@ -936,6 +945,28 @@ class TestTheToolHostEntry:
         imports = self._run(tmp_path, "-X", "importtime").stderr
 
         for heavy in ("fastmcp", "domyn.agents.tools.mcp", "domyn.agents.tools.base"):
+            assert f"| {heavy}\n" not in imports and f"| {heavy} " not in imports, heavy
+
+    def test_it_loads_an_image(self, tmp_path: Path) -> None:
+        Image.new("RGB", (8, 8), "red").save(tmp_path / "a.png")
+
+        answer = self._run(tmp_path, operation="load_image", arguments={"path": "a.png"})
+
+        result = json.loads(answer.stdout.strip().splitlines()[-1])
+        assert result["ok"] and result["result"].startswith("data:image/png;base64,")
+
+    def test_loading_an_image_does_not_import_the_model_or_the_backends(
+        self, tmp_path: Path
+    ) -> None:
+        """`images.py` names the provider and the backend in its annotations only."""
+        Image.new("RGB", (8, 8), "red").save(tmp_path / "a.png")
+
+        imports = self._run(
+            tmp_path, "-X", "importtime", operation="load_image", arguments={"path": "a.png"}
+        ).stderr
+
+        assert "| domyn.agents.tools.builtin.images" in imports  # the image was loaded
+        for heavy in ("fastmcp", "domyn.agents.llm", "domyn.agents.tools.builtin.backends"):
             assert f"| {heavy}\n" not in imports and f"| {heavy} " not in imports, heavy
 
     def test_it_is_what_the_container_is_told_to_run(self) -> None:
@@ -1110,6 +1141,28 @@ class TestToolsInTheContainer:
         result = await _tool(backend, workspace, "read_file", path="/tmp/downloaded.txt")
 
         assert result.success and "from-the-container" in result.data
+
+    @pytest.mark.asyncio
+    async def test_an_image_a_command_made_outside_the_workspace_is_read(
+        self, make_docker: Any
+    ) -> None:
+        """Loaded in the container, so a path means what it means to `read_file`;
+        the model is asked from this process."""
+        backend = make_docker()
+        workspace = Workspace.at(make_docker.workspace)
+        # Pillow is in domyn's virtualenv, not in the image's own Python.
+        await _sh(
+            backend,
+            '/opt/domyn/bin/python -c "from PIL import Image; '
+            "Image.new('RGB', (8, 8), 'red').save('/tmp/plot.png')\"",
+        )
+        model = Model(vision=True)
+        (tool,) = image_tools(workspace, model, backend)
+
+        result = await tool.execute(path="/tmp/plot.png", query="What is it?", conversation_id="c1")
+
+        assert result.success, result.error
+        assert len(model.asked) == 1
 
     @pytest.mark.asyncio
     async def test_a_write_reaches_the_host_and_is_seen_by_commands(self, make_docker: Any) -> None:

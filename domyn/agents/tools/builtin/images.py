@@ -19,15 +19,25 @@ Anything else Pillow opens is scaled down and sent as JPEG.
 # of the tool at construction time and cannot resolve string annotations.
 
 import asyncio
+import base64
 import io
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from PIL import Image, UnidentifiedImageError
 
-from domyn.agents.llm.base import BaseLLMProvider, image_message
 from domyn.agents.logger import get_logger
 from domyn.agents.tools.builtin.workspace import Workspace, WorkspaceError
+
+if TYPE_CHECKING:
+    from domyn.agents.llm.base import BaseLLMProvider
+    from domyn.agents.tools.builtin.backends.base import CommandBackend
+
+from domyn.agents.tools.builtin.files import (
+    IMAGE_OPERATION,
+    TOOL_BODY_SECONDS,
+    answer_of,
+    request_text,
+)
 
 # Longest edge sent, in pixels. Providers scale a larger image down themselves
 # (or refuse it), so the pixels past this are paid for in upload and read by nobody.
@@ -53,40 +63,63 @@ _FRAMING = (
 )
 
 
-class ImageError(Exception):
-    """An image could not be read. Raised, not returned, like ``WorkspaceError``:
-    the message is written for the model."""
+class ImageError(WorkspaceError):
+    """An image could not be read. Raised, not returned, like ``WorkspaceError``: the
+    message is written for the model. A ``WorkspaceError`` so that, raised in a
+    container, it comes back as a refusal with its message unchanged (``files.serve``)."""
 
 
-def _as_sent(path: Path) -> tuple[bytes, str]:
-    """The image as it goes to the provider: its bytes and their media type.
+def load_image(workspace: Workspace, path: str) -> tuple[bytes, str]:
+    """The image at ``path`` as it goes to the provider: its bytes and their media type.
 
-    A function of its own because decoding is the slow part and runs in a thread.
+    Synchronous: decoding is the slow part, so it runs in a thread here, or in the process
+    the tool host starts in a container (``files.run_file_operation``).
     """
-    with Image.open(path) as image:
-        media_type = _SENT_AS_IS.get(image.format or "")
-        if (
-            media_type
-            and max(image.size) <= MAX_IMAGE_EDGE
-            and path.stat().st_size <= MAX_SENT_BYTES
-        ):
-            return path.read_bytes(), media_type
-        image.thumbnail((MAX_IMAGE_EDGE, MAX_IMAGE_EDGE))
-        # JPEG has no transparency, and a transparent area converted as it is turns
-        # black: a diagram with black lines would be sent as a black rectangle.
-        layer = image.convert("RGBA")
-        flat = Image.new("RGB", layer.size, "white")
-        flat.paste(layer, mask=layer.getchannel("A"))
-        buffer = io.BytesIO()
-        flat.save(buffer, format="JPEG", quality=85)
-        return buffer.getvalue(), "image/jpeg"
+    resolved = workspace.resolve(path, must_exist=True)
+    if resolved.is_dir():
+        raise WorkspaceError(f"'{path}' is a directory. Use list_dir for that.")
+    try:
+        with Image.open(resolved) as image:
+            media_type = _SENT_AS_IS.get(image.format or "")
+            if (
+                media_type
+                and max(image.size) <= MAX_IMAGE_EDGE
+                and resolved.stat().st_size <= MAX_SENT_BYTES
+            ):
+                return resolved.read_bytes(), media_type
+            image.thumbnail((MAX_IMAGE_EDGE, MAX_IMAGE_EDGE))
+            # JPEG has no transparency, and a transparent area converted as it is turns
+            # black: a diagram with black lines would be sent as a black rectangle.
+            layer = image.convert("RGBA")
+            flat = Image.new("RGB", layer.size, "white")
+            flat.paste(layer, mask=layer.getchannel("A"))
+            buffer = io.BytesIO()
+            flat.save(buffer, format="JPEG", quality=85)
+    except UnidentifiedImageError:
+        raise ImageError(
+            f"'{path}' is not an image this tool can open. Use read_file for text and documents."
+        ) from None
+    except Image.DecompressionBombError:
+        raise ImageError(
+            f"'{path}' has too many pixels to open. Retrying will not help; try a smaller version."
+        ) from None
+    except OSError as e:
+        get_logger().warning(f"read_image: could not decode an image ({type(e).__name__})")
+        get_logger().debug(f"read_image: could not decode '{resolved}', detail: {e}")
+        raise ImageError(
+            f"'{path}' could not be decoded: the file is damaged or cut short."
+        ) from None
+
+    return buffer.getvalue(), "image/jpeg"
 
 
-def image_tools(workspace: Workspace, provider: BaseLLMProvider) -> list[Any]:
+def image_tools(
+    workspace: Workspace, provider: "BaseLLMProvider", backend: "CommandBackend | None" = None
+) -> list[Any]:
     """``read_image``, bound to one workspace and to the model that answers."""
     from domyn.agents.tools.function_tool import FunctionTool
 
-    async def read_image(path: str, query: str) -> str:
+    async def read_image(path: str, query: str, conversation_id: str = "") -> str:
         """Look at an image file and answer a question about it.
 
         The image is not shown to you: a separate request looks at it, and what
@@ -100,29 +133,33 @@ def image_tools(workspace: Workspace, provider: BaseLLMProvider) -> list[Any]:
             query: What to find out about the image, for example "Transcribe all
                 the text" or "What does the error dialog say?".
         """
-        resolved = workspace.resolve(path, must_exist=True)
-        if resolved.is_dir():
-            raise WorkspaceError(f"'{path}' is a directory. Use list_dir for that.")
-        try:
-            image, media_type = await asyncio.to_thread(_as_sent, resolved)  # Review from here
-        except UnidentifiedImageError:
-            raise ImageError(
-                f"'{path}' is not an image this tool can open. "
-                "Use read_file for text and documents."
-            ) from None
-        except Image.DecompressionBombError:
-            raise ImageError(
-                f"'{path}' has too many pixels to open. Retrying will not help; "
-                "try a smaller version."
-            ) from None
-        except OSError as e:
-            get_logger().warning(f"read_image: could not decode an image ({type(e).__name__})")
-            get_logger().debug(f"read_image: could not decode '{resolved}', detail: {e}")
-            raise ImageError(
-                f"'{path}' could not be decoded: the file is damaged or cut short."
-            ) from None
+
+        if backend is not None:
+            # Where an "auto" backend decides between Docker and this machine
+            await backend.start()
+        where = backend.tool_host if backend is not None else None
+        if (backend is None) or (where is None):
+            image, media_type = await asyncio.to_thread(load_image, workspace=workspace, path=path)
+        else:
+            result = await backend.run(
+                where.command,
+                timeout=TOOL_BODY_SECONDS,
+                conversation_id=conversation_id,
+                stdin=request_text(
+                    IMAGE_OPERATION,
+                    {"path": path},
+                    root=workspace.root,
+                    extra_roots=(*workspace.extra_roots, *where.roots),
+                ),
+            )
+            header, data = answer_of(result, "read_image").split(",", 1)
+            media_type = header.removeprefix("data:").removesuffix(";base64")
+            image = base64.b64decode(data)
 
         question = query.strip() or "Describe the image in detail."
+
+        from domyn.agents.llm.base import image_message
+
         try:
             response = await provider.generate(
                 [image_message(f"{question}\n\n{_FRAMING}", image, media_type)]
