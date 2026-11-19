@@ -1,9 +1,10 @@
 [project]
 name = "domyn"
 # From the git tag (vX.Y.Z), read at build time by hatch-vcs: see [tool.hatch.version].
-dynamic = ["version"]
+# The readme too: README.md with its relative links made absolute for PyPI, see
+# [tool.hatch.metadata.hooks.fancy-pypi-readme].
+dynamic = ["version", "readme"]
 description = "Build AI agents in Python or YAML, run them on any model, and work with them from the terminal."
-readme = "README.md"
 requires-python = ">=3.12"
 authors = [
     {name = "Domyn", email = "agents@domyn.com"}
@@ -116,7 +117,7 @@ audio = [
 ]
 
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling", "hatch-vcs", "hatch-fancy-pypi-readme>=24.1.0"]
 build-backend = "hatchling.build"
 
 # The version is the release tag: a build at v1.7.0 is 1.7.0, one five commits
@@ -126,6 +127,28 @@ build-backend = "hatchling.build"
 [tool.hatch.version]
 source = "vcs"
 fallback-version = "0.0.0"
+
+# Fix PyPI Readme
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+# <img src>, <source srcset>.
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(src|srcset)="(?!https?://|#|/)([^"]+)"'
+replacement = '\1="https://raw.githubusercontent.com/DomynAI/domyn-agents/main/\2"'
+
+# ![alt](path), before the links: an image needs the raw file, not its GitHub page.
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '!\[([^\]]*)\]\((?!https?://|#|/)([^)\s]+)\)'
+replacement = '![\1](https://raw.githubusercontent.com/DomynAI/domyn-agents/main/\2)'
+
+# [text](path).
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\((?!https?://|#|/|mailto:)([^)\s]+)\)'
+replacement = '](https://github.com/DomynAI/domyn-agents/blob/main/\1)'
 
 [tool.hatch.build]
 exclude = [
