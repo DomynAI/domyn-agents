@@ -388,7 +388,7 @@ def _image_rejection(provider: ProviderConfig) -> str | None:
     }
     try:
         model = LLMProviderFactory.from_config(entry)
-        run_sync(
+        response = run_sync(
             asyncio.wait_for(
                 model.generate(
                     [image_message("What colour is this image?", picture.getvalue(), "image/png")]
