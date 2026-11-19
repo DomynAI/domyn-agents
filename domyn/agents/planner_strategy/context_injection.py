@@ -68,6 +68,34 @@ def insert_turn_context(messages: list[LLMMessage], injected: list[LLMMessage]) 
     return messages
 
 
+def append_plan(messages: list[LLMMessage], plan: LLMMessage | None) -> list[LLMMessage]:
+    """Put the agent's plan at the end of ``messages``, in place, and return the
+    same list.
+
+    At the end, unlike the turn's context: the plan changes during a turn, and
+    there an update re-bills only the plan, not the history after it.
+
+    When the last message is the user's text (the first request of a turn), the
+    plan is added to it rather than sent as a second user message in a row, which
+    a chat template that wants user and assistant to alternate refuses. After tool
+    results it is a message of its own, which every provider accepts there.
+    """
+    if plan is None:
+        return messages
+    last = messages[-1] if messages else None
+    if (
+        last is not None
+        and last.role == plan.role
+        and not last.tool_calls
+        and isinstance(last.content, str)
+        and isinstance(plan.content, str)
+    ):
+        messages[-1] = last.model_copy(update={"content": f"{last.content}\n\n{plan.content}"})
+    else:
+        messages.append(plan)
+    return messages
+
+
 async def inject_turn_context(
     messages: list[LLMMessage],
     agent: BaseAgent,

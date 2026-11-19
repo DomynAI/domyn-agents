@@ -41,6 +41,12 @@ from domyn.agents.tools.read_tool_result import (
     read_back,
     read_call,
 )
+from domyn.agents.tools.update_plan import (
+    PLAN_PART,
+    UPDATE_PLAN_DEFINITION,
+    UPDATE_PLAN_TOOL_NAME,
+    stored_plan,
+)
 
 _FORWARD_VERBATIM_INSTRUCTION = (
     "FORWARD_VERBATIM is only for terminal pass-through. Before calling it, "
@@ -79,6 +85,10 @@ class ToolUseContextManager(ContextManager):
     type: str = "tool_use"
     name: str = "tool_use"
     max_tool_result_chars: int = 20_000
+    plan_tool: bool = False
+    """Offer ``update_plan`` and show the agent's plan at the end of every
+    request while it has a step left to do. Off by default: an agent that does
+    not ask for it gets no extra tool definition and no extra message."""
 
     stop_tool_name: str = "STOP"
     ask_user_tool_name: str = "ASK_USER_MISSING_INFO"
@@ -574,6 +584,10 @@ class ToolUseContextManager(ContextManager):
         if self._has_read_tool_result(agent, context):
             tool_defs.append(copy.deepcopy(READ_TOOL_RESULT.tool_definition))
 
+        # The plan tool, when this manager keeps one: no agent lists it either.
+        if self.offers_plan(agent):
+            tool_defs.append(copy.deepcopy(UPDATE_PLAN_DEFINITION))
+
         # Add explicit handoff targets as callable tools. The ``parameters`` slot
         # references ``agent_desc.invocation_parameters`` directly, so the
         # wrapper dict must also be built around a deep copy.
@@ -630,6 +644,31 @@ class ToolUseContextManager(ContextManager):
             return self.max_tool_result_chars
         budget = self.max_tool_result_chars - len(_RUNNER_EVENT_ID_HEADER)
         return budget if budget > 0 else self.max_tool_result_chars
+
+    def offers_plan(self, agent: BaseAgent) -> bool:
+        """Whether *agent* gets ``update_plan``: when ``plan_tool`` is on, unless
+        one of its own tools has that name (two definitions with one name are a
+        request providers reject)."""
+        if not self.plan_tool:
+            return False
+        return all(getattr(tool, "name", None) != UPDATE_PLAN_TOOL_NAME for tool in agent.tools)
+
+    def plan_message(self, agent: BaseAgent, context: InteractionContext) -> LLMMessage | None:
+        """The message showing *agent*'s plan at the end of a request, or ``None``.
+
+        A user message, tagged ``part="plan"``: it goes after the history, where
+        an update changes only itself and the rest of the request stays cached,
+        and where an assistant message would be read as the start of the reply.
+        Only while a step is left to do: a finished plan is in the history as the
+        call that finished it, and showing it on every later request costs tokens
+        for nothing.
+        """
+        if not self.offers_plan(agent):
+            return None
+        plan = stored_plan(context.state, agent.name)
+        if plan is None or not plan.is_open:
+            return None
+        return LLMMessage(role=self.user_role, content=plan.render(), part=PLAN_PART)
 
     @staticmethod
     def _has_read_tool_result(agent: BaseAgent, context: InteractionContext) -> bool:

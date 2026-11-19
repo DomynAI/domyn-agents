@@ -1233,6 +1233,8 @@ def configuration_v1_dict_from(
             {
                 "name": CLI_PLANNER,
                 "type": CLI_PLANNER,
+                # The CLI agent keeps a plan of multi-step work (`update_plan`).
+                "context_manager": {"type": "thought_tool_use", "plan_tool": True},
                 "compactor": compaction.model_dump(exclude_none=True),
             }
         ],

@@ -518,6 +518,7 @@ class TestThePlannerIsPinned:
             {
                 "name": cfg.CLI_PLANNER,
                 "type": cfg.CLI_PLANNER,
+                "context_manager": {"type": "thought_tool_use", "plan_tool": True},
                 "compactor": {"strategy": "two_phase"},
             }
         ]

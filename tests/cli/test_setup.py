@@ -84,6 +84,7 @@ class TestAFreshWizardRun:
             {
                 "name": "tool_use_thought",
                 "type": "tool_use_thought",
+                "context_manager": {"type": "thought_tool_use", "plan_tool": True},
                 "compactor": {"strategy": "two_phase"},
             }
         ]

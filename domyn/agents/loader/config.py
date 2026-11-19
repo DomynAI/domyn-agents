@@ -405,8 +405,11 @@ class ConfigurationV1(BaseModel):
         properties.pop("context_manager", None)
 
         properties["context_manager"] = {
-            "description": "Name of a context manager strategy defined in the context_managers list",
-            "type": "string",
+            "description": (
+                "Name of a context manager strategy defined in the context_managers list, "
+                "or a context manager written inline (a mapping with its `type`)"
+            ),
+            "anyOf": [{"type": "string"}, {"type": "object"}],
             "title": "Context manager Strategy",
         }
 
@@ -672,7 +675,9 @@ class ConfigurationV1(BaseModel):
         for planner_strategy_config in config_dict.get("planner_strategies", []):
             from domyn.agents.planner_strategy import PlannerStrategyFactory
 
-            if "context_manager" in planner_strategy_config:
+            # A name refers to the `context_managers` list; a mapping is a context
+            # manager written inline, built by the planner's own factory.
+            if isinstance(planner_strategy_config.get("context_manager"), str):
                 new_context_manager = context_managers.get(
                     planner_strategy_config["context_manager"]
                 )

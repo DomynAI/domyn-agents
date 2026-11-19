@@ -62,6 +62,7 @@ from domyn.agents.llm.base import (
 from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.base import BasePlannerStrategy
 from domyn.agents.planner_strategy.context_injection import (
+    append_plan,
     insert_turn_context,
     turn_context_messages,
 )
@@ -724,6 +725,11 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
             # conversation is compacted.
             tool_defs = self.context_manager.get_tool_definitions(agent, interaction_context)
             turn_context = await turn_context_messages(agent, interaction_context, skills_payload)
+            # The agent's plan goes at the end of the request rather than after the
+            # system prompt (`append_plan`), but it is counted like the turn's
+            # context: part of every request, and never compacted.
+            plan = self.context_manager.plan_message(agent, interaction_context)
+            fixed_context = [*turn_context, plan] if plan is not None else turn_context
             # A copy of the agent called alongside another keeps its own.
             record = compaction_key(agent.name, interaction_context)
             messages = self.compactor.replay(messages, interaction_context.state, record)
@@ -731,7 +737,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 messages,
                 agent,
                 tool_defs=tool_defs,
-                turn_context=turn_context,
+                turn_context=fixed_context,
                 state=interaction_context.state,
                 key=record,
             )
@@ -742,12 +748,12 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 )
                 yield compaction_done
             conversation = messages
-            messages = insert_turn_context(list(conversation), turn_context)
+            messages = append_plan(insert_turn_context(list(conversation), turn_context), plan)
 
             # The context measurement for LLM_START metadata: a front-end has no
             # other way to know it without rebuilding the context itself.
             usage_metadata = self.compactor.usage_metadata(
-                messages, tool_defs, agent, interaction_context.state, turn_context, key=record
+                messages, tool_defs, agent, interaction_context.state, fixed_context, key=record
             )
 
             # ── LLM invocation ────────────────────────────────────────────────
@@ -923,7 +929,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             conversation,
                             agent,
                             tool_defs=tool_defs,
-                            turn_context=turn_context,
+                            turn_context=fixed_context,
                             state=interaction_context.state,
                             error=e,
                             key=record,

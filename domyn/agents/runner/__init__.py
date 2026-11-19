@@ -109,6 +109,7 @@ from domyn.agents.tools.mcp.mcp_tool import MCPCredentialsCheckResult, MCPTool
 from domyn.agents.tools.streamable_function_tool import (
     StreamableToolResult,
 )
+from domyn.agents.tools.update_plan import UPDATE_PLAN
 
 NO_COPY_KEYS = {"tool", "result", "agent"}
 
@@ -4730,6 +4731,11 @@ class Runner:
             # TOOL_START and has nothing else to take the thought from.
             "tool_action": event.action,
         }
+        if tool is UPDATE_PLAN:
+            # The plan is kept per agent; only this tool is told which one calls
+            # it, so a tool of anyone else's with an argument by that name keeps
+            # what the model sent.
+            tool_only_args["calling_agent"] = state.current_agent.name
         """Execute a streamable tool and yield events."""
         tool_result: ToolResult | None = None
         # An agent suppresses partial RESPONSE events (and surfaces the content via

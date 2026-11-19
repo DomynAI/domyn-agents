@@ -41,6 +41,7 @@ from domyn.agents.tools.builtin import BuiltinTools
 from domyn.agents.tools.builtin.memory import memory_tools
 from domyn.agents.tools.mcp import MCPServerStreamableHTTPConfig
 from domyn.agents.tools.read_tool_result import READ_TOOL_RESULT
+from domyn.agents.tools.update_plan import UPDATE_PLAN
 
 
 def _default_planner_factory() -> BasePlannerStrategy:
@@ -584,6 +585,14 @@ class Agent(BaseAgent):
             # Offered to every agent by the tool-use context manager, never
             # listed in `tools`: see `domyn.agents.tools.read_tool_result`.
             return READ_TOOL_RESULT
+        if matching_tool is None and tool_name == UPDATE_PLAN.name:
+            # Offered only by a context manager that keeps a plan: see
+            # `domyn.agents.tools.update_plan`.
+            offers_plan = getattr(
+                getattr(self.planner, "context_manager", None), "offers_plan", None
+            )
+            if callable(offers_plan) and offers_plan(self):
+                return UPDATE_PLAN
         return matching_tool
 
     def get_sub_agent_by_name(self, agent_name: str) -> Agent | None:
