@@ -61,7 +61,7 @@ def skill_roots(workspace: Workspace) -> list[Path]:
     """
     hidden = Path.home().absolute() / HOME_DIRNAME
     inside = [p for p in workspace.covered_roots if p == hidden or hidden in p.parents]
-    return [p for p in (*workspace.extra_roots, *inside) if p.is_dir() and "," not in str(p)]
+    return [p for p in (*workspace.extra_roots, *inside) if p.is_dir()]
 
 
 def build_mounts(workspace: Workspace, state: StateFolder, conversation: str) -> list[str]:
