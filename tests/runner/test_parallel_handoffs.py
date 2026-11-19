@@ -16,7 +16,6 @@
 import asyncio
 import re
 import sqlite3
-import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any
@@ -180,6 +179,18 @@ def _team(
     return root, main, [provider for _, provider in subs]
 
 
+def _overlapped(log: list[str], first: str, second: str) -> bool:
+    """Whether ``first`` and ``second`` both started before either of them ended.
+
+    Read from the order of the log rather than from the clock: a time limit has
+    to leave room for a busy CI runner, and the room it leaves is what sequential
+    runs fit in (two 0.3 s waits, 0.55 s allowed, 0.65 s seen on a loaded runner).
+    """
+    started = max(log.index(f"start {first}"), log.index(f"start {second}"))
+    ended = min(log.index(f"end {first}"), log.index(f"end {second}"))
+    return started < ended
+
+
 def _ask(text: str = "find a and b") -> BaseEvent:
     return BaseEvent(
         event_type=ExecutionEventType.USER_INPUT, author="user", content=[Part(text=text)]
@@ -238,11 +249,9 @@ class TestSubAgentsRunTogether:
         log: list[str] = []
         root, main, _ = _team(planner, log)
 
-        started = time.monotonic()
         events = await _run(Runner(), root, f"c_together_{planner}")
-        elapsed = time.monotonic() - started
 
-        assert elapsed < 0.55, f"took {elapsed:.2f}s: the sub-agents ran one after another"
+        assert _overlapped(log, "Alpha", "Beta"), f"the sub-agents ran one after another: {log}"
         assert log[2:4] == ["start Alpha", "start Beta"]
         assert _of(events, ExecutionEventType.AGENT_START) == ["Alpha", "Beta"]
         assert sorted(_of(events, ExecutionEventType.AGENT_END)) == ["Alpha", "Beta"]
@@ -544,11 +553,9 @@ class TestWhatRunsAlongside:
             tools=[_slow_read(log, 0.3)],
         )
 
-        started = time.monotonic()
         events = await _run(Runner(), root, f"c_mixed_{planner}")
-        elapsed = time.monotonic() - started
 
-        assert elapsed < 0.55, f"took {elapsed:.2f}s: the tool and the sub-agent took turns"
+        assert _overlapped(log, "read x", "Alpha"), f"the tool and the sub-agent took turns: {log}"
         assert _answered_by_main(events)
         assert sorted(main.answered(1)) == ["main_1_0", "main_1_1"]
 
@@ -575,11 +582,9 @@ class TestWhatRunsAlongside:
             tools=[_slow_read(log, 0.3)],
         )
 
-        started = time.monotonic()
         events = await _run(Runner(), root, f"c_tool_last_{planner}")
-        elapsed = time.monotonic() - started
 
-        assert elapsed < 0.55, f"took {elapsed:.2f}s: the sub-agent and the tool took turns"
+        assert _overlapped(log, "Alpha", "read x"), f"the sub-agent and the tool took turns: {log}"
         assert _answered_by_main(events)
         assert sorted(main.answered(1)) == ["main_1_0", "main_1_1"]
 
@@ -687,11 +692,9 @@ class TestWhatRunsAlongside:
             sub_agents=[alpha, remote],
         )
 
-        started = time.monotonic()
         events = await _run(Runner(), root, f"c_remote_{planner}")
-        elapsed = time.monotonic() - started
 
-        assert elapsed < 0.55, f"took {elapsed:.2f}s: the agents took turns"
+        assert _overlapped(log, "Alpha", "Remote"), f"the agents took turns: {log}"
         assert sorted(_of(events, ExecutionEventType.AGENT_END)) == ["Alpha", "Remote"]
         assert _answered_by_main(events)
         said = " ".join(str(m.content or "") for m in main.shown[1])
