@@ -307,6 +307,29 @@ class TestSlashCommandsTypedMidTurn:
         assert not repl._deferred
 
     @pytest.mark.asyncio
+    async def test_the_stopped_turn_has_cleaned_up_before_the_command_runs(self) -> None:
+        """Stopping a turn runs the runner's cleanup, which writes to the
+        conversation. Only cancelled, it was still running when the session ended,
+        and the closing loop cut it short (seen in CI as aiosqlite's worker thread
+        failing on "Event loop is closed")."""
+        repl, scripted, provider, _ = _repl()
+        cleaned: list[bool] = []
+
+        async def type_exit_then_take_time_to_stop() -> None:
+            await scripted.queue.put("/exit")
+            try:
+                await asyncio.sleep(30)
+            finally:
+                await asyncio.sleep(0.05)  # a write, as the runner's cleanup makes
+                cleaned.append(True)
+
+        provider.pause = type_exit_then_take_time_to_stop
+
+        assert await asyncio.wait_for(repl._loop("read every file"), timeout=5) == 0
+
+        assert cleaned == [True]
+
+    @pytest.mark.asyncio
     async def test_exit_stops_the_turn_and_ends_the_session(self) -> None:
         repl, scripted, provider, buffer = _repl()
 
