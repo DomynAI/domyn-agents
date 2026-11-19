@@ -212,7 +212,7 @@ class SlackChannel:
             logger.warning(
                 "SlackChannel: failed to send message to %s: %s", channel_id, type(exc).__name__
             )
-            logger.debug("SlackChannel: send failure detail", exc_info=True)
+            logger.debug("SlackChannel: send failure detail: %s", exc, exc_info=True)
 
     async def _send_file(
         self,

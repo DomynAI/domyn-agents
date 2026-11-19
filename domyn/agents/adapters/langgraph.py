@@ -332,8 +332,9 @@ class LangGraphAdapter:
                 type(exc).__name__,
             )
             logger.debug(
-                "LangGraphAdapter: invocation failure detail request_id=%s",
+                "LangGraphAdapter: invocation failure request_id=%s, detail: %s",
                 request_id,
+                exc,
                 exc_info=True,
             )
             done = BaseEvent(

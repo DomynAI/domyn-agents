@@ -246,7 +246,7 @@ class WhatsAppChannel:
                         )
         except Exception as exc:
             logger.warning("WhatsAppChannel: error parsing webhook payload: %s", type(exc).__name__)
-            logger.debug("WhatsAppChannel: webhook payload parse detail", exc_info=True)
+            logger.debug("WhatsAppChannel: webhook payload parse detail: %s", exc, exc_info=True)
 
         return b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK"
 
@@ -298,7 +298,7 @@ class WhatsAppChannel:
             logger.warning(
                 "WhatsAppChannel: failed to resolve media_id=%s: %s", media_id, type(exc).__name__
             )
-            logger.debug("WhatsAppChannel: media resolution failure detail", exc_info=True)
+            logger.debug("WhatsAppChannel: media resolution failure detail: %s", exc, exc_info=True)
             return None
 
     # ------------------------------------------------------------------
@@ -337,7 +337,7 @@ class WhatsAppChannel:
                 conversation_id,
                 type(exc).__name__,
             )
-            logger.debug("WhatsAppChannel: send failure detail", exc_info=True)
+            logger.debug("WhatsAppChannel: send failure detail: %s", exc, exc_info=True)
 
 
 _FILE_TYPE_TO_WHATSAPP = {

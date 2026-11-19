@@ -124,7 +124,7 @@ class TelegramChannel:
                 break
             except Exception as exc:
                 logger.warning("TelegramChannel: getUpdates failed: %s", type(exc).__name__)
-                logger.debug("TelegramChannel: getUpdates failure detail", exc_info=True)
+                logger.debug("TelegramChannel: getUpdates failure detail: %s", exc, exc_info=True)
                 await asyncio.sleep(5)
                 continue
 
@@ -191,7 +191,7 @@ class TelegramChannel:
                 conversation_id,
                 type(exc).__name__,
             )
-            logger.debug("TelegramChannel: send failure detail", exc_info=True)
+            logger.debug("TelegramChannel: send failure detail: %s", exc, exc_info=True)
 
 
 async def _message_to_parts(bot: "telegram.Bot", message: "telegram.Message") -> list[Part]:
@@ -235,7 +235,7 @@ async def _message_to_parts(bot: "telegram.Bot", message: "telegram.Message") ->
             logger.warning(
                 "TelegramChannel: failed to resolve file_id=%s: %s", file_id, type(exc).__name__
             )
-            logger.debug("TelegramChannel: file resolution failure detail", exc_info=True)
+            logger.debug("TelegramChannel: file resolution failure detail: %s", exc, exc_info=True)
 
     if caption:
         parts.append(Part(text=caption))

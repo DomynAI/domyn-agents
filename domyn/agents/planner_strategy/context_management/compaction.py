@@ -1857,7 +1857,7 @@ def build_compactor(config: CompactionConfig) -> Compactor:
         get_logger().warning(
             f"compaction: {type(exc).__name__} building the strategy, using the default instead"
         )
-        get_logger().debug("compaction strategy build detail", exc_info=True)
+        get_logger().debug(f"compaction strategy build detail: {exc}")
         strategy = build_strategy(CompactionConfig().strategy)
 
     # Built field by field rather than from a dict of overrides: `**kwargs` into a

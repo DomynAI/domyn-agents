@@ -157,7 +157,7 @@ class AgentServer:
             logger.warning(
                 "AgentServer: auth.authenticate raised: %s — rejecting event", type(exc).__name__
             )
-            logger.debug("AgentServer: authenticate failure detail", exc_info=True)
+            logger.debug("AgentServer: authenticate failure detail: %s", exc, exc_info=True)
             return False
         if not allowed:
             logger.info(
@@ -179,8 +179,9 @@ class AgentServer:
                 type(exc).__name__,
             )
             logger.debug(
-                "AgentServer: normalizer failure detail for conv=%s",
+                "AgentServer: normalizer failure for conv=%s, detail: %s",
                 conv_id,
+                exc,
                 exc_info=True,
             )
             return None
