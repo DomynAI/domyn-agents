@@ -16,8 +16,9 @@ from domyn.agents.llm.base import (
     ToolCallFunction,
     log_inference_request,
     log_inference_response,
+    raise_for_status,
 )
-from domyn.agents.logger import get_logger, url_origin
+from domyn.agents.logger import get_logger
 from domyn.agents.tools.base import sanitize_tool_names
 from domyn.agents.tracing import inject_trace_headers
 
@@ -150,14 +151,7 @@ class VLLMProvider(BaseLLMProvider):
         # TODO: reuse a caller-provided httpx.AsyncClient instead of opening one per request.
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(self.url, headers=headers, json=payload)
-            if response.is_error:
-                body_bytes = await response.aread()
-                logger.error(f"vLLM API {response.status_code} on {url_origin(self.url)}")
-                logger.debug(
-                    "vLLM API error body",
-                    payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},
-                )
-            response.raise_for_status()
+            await raise_for_status(logger, response, "vLLM")
             data = response.json()
 
             full_output = data["choices"][0]["message"]["content"]
@@ -265,14 +259,7 @@ class VLLMProvider(BaseLLMProvider):
             httpx.AsyncClient(timeout=self.timeout) as client,
             client.stream("POST", self.url, headers=headers, json=payload) as response,
         ):
-            if response.is_error:
-                body_bytes = await response.aread()
-                logger.error(f"vLLM API {response.status_code} on {url_origin(self.url)}")
-                logger.debug(
-                    "vLLM API error body",
-                    payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},
-                )
-            response.raise_for_status()
+            await raise_for_status(logger, response, "vLLM")
             async for line in response.aiter_lines():
                 line = line.strip()
                 if not line.startswith("data:"):

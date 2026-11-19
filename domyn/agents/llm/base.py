@@ -6,6 +6,7 @@ from collections.abc import AsyncGenerator
 from enum import StrEnum, auto
 from typing import Any, ClassVar
 
+import httpx
 from pydantic import BaseModel, Field, model_validator
 
 from domyn.agents.core import TOKEN_USAGE_METADATA_KEY
@@ -190,6 +191,30 @@ def log_inference_response(logger: Any, url: str, payload: dict[str, Any]) -> No
         },
     )
     logger.debug(f"[Inference Response] full payload: {url_origin(url)}", payload=payload)
+
+
+async def raise_for_status(logger: Any, response: httpx.Response, provider: str) -> None:
+    """``response.raise_for_status()`` for a provider's call, with the lines every provider logs.
+
+    A failure logs its status at error and its body at debug. The endpoint is named by its origin
+    (`url_origin`), in the raised error's message too: httpx quotes the whole URL there, a
+    credential can sit in it, and callers log that message and copy it into events. The error
+    keeps its class, ``request`` and ``response``.
+    """
+    if response.is_success:
+        return
+    origin = url_origin(response.request.url)
+    if response.is_error:
+        body = (await response.aread()).decode("utf-8", "ignore")
+        logger.error(f"{provider} API {response.status_code} on {origin}")
+        logger.debug(f"{provider} API error body", payload={"body": body[:2000]})
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as error:
+        message = str(error).replace(str(error.request.url), origin)
+        raise httpx.HTTPStatusError(
+            message, request=error.request, response=error.response
+        ) from None
 
 
 _VLLM_ENGINE_TOO_LONG = r"decoder prompt \(length \d+\)[^.]*maximum model length"

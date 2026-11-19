@@ -18,8 +18,9 @@ from domyn.agents.llm.base import (
     ToolCallFunction,
     log_inference_request,
     log_inference_response,
+    raise_for_status,
 )
-from domyn.agents.logger import get_logger, url_origin
+from domyn.agents.logger import get_logger
 from domyn.agents.tools.base import sanitize_tool_names
 
 
@@ -84,14 +85,7 @@ class CustomLLMProvider(BaseLLMProvider):
 
         async with httpx.AsyncClient(timeout=300.0) as client:
             response = await client.post(self.url, headers=request_headers, json=payload)
-            if response.is_error:
-                body_bytes = await response.aread()
-                logger.error(f"Custom LLM API {response.status_code} on {url_origin(self.url)}")
-                logger.debug(
-                    "Custom LLM API error body",
-                    payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},
-                )
-            response.raise_for_status()
+            await raise_for_status(logger, response, "Custom LLM")
             data = response.json()
 
             message_data = data["choices"][0]["message"]
@@ -181,14 +175,7 @@ class CustomLLMProvider(BaseLLMProvider):
             httpx.AsyncClient(timeout=300.0) as client,
             client.stream("POST", self.url, headers=request_headers, json=payload) as response,
         ):
-            if response.is_error:
-                body_bytes = await response.aread()
-                logger.error(f"Custom LLM API {response.status_code} on {url_origin(self.url)}")
-                logger.debug(
-                    "Custom LLM API error body",
-                    payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},
-                )
-            response.raise_for_status()
+            await raise_for_status(logger, response, "Custom LLM")
             async for line in response.aiter_lines():
                 line = line.strip()
                 if not line.startswith("data:"):

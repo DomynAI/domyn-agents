@@ -17,8 +17,9 @@ from domyn.agents.llm.base import (
     ToolCallFunction,
     log_inference_request,
     log_inference_response,
+    raise_for_status,
 )
-from domyn.agents.logger import get_logger, url_origin
+from domyn.agents.logger import get_logger
 from domyn.agents.tools.base import sanitize_tool_name, sanitize_tool_names
 
 MODELS_SUPPORT_REASONING_EFFORT = ["o1", "o1-mini", "o3-mini", "gpt-5", "gpt-5-mini", "gpt-5-nano"]
@@ -204,14 +205,7 @@ class OpenAIProvider(BaseLLMProvider):
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(self.url, headers=headers, json=payload)
-            if response.is_error:
-                body_bytes = await response.aread()
-                logger.error(f"OpenAI API {response.status_code} on {url_origin(self.url)}")
-                logger.debug(
-                    "OpenAI API error body",
-                    payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},
-                )
-            response.raise_for_status()
+            await raise_for_status(logger, response, "OpenAI")
             data = response.json()
 
             output_text = ""
@@ -330,14 +324,7 @@ class OpenAIProvider(BaseLLMProvider):
             httpx.AsyncClient(timeout=60.0) as client,
             client.stream("POST", self.url, headers=headers, json=payload) as response,
         ):
-            if response.is_error:
-                body_bytes = await response.aread()
-                logger.error(f"OpenAI API {response.status_code} on {url_origin(self.url)}")
-                logger.debug(
-                    "OpenAI API error body",
-                    payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},
-                )
-            response.raise_for_status()
+            await raise_for_status(logger, response, "OpenAI")
             # Line-buffered read: httpx reassembles SSE lines across network
             # chunks. The old aiter_bytes()+splitlines() was line-aware only
             # within a single chunk, so an event split at a chunk boundary was

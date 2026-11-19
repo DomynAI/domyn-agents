@@ -7,6 +7,7 @@ full payload is available at debug only.
 """
 
 import json
+import traceback
 
 import httpx
 import pytest
@@ -223,13 +224,16 @@ class TestProviderWiring:
     @pytest.mark.asyncio
     @respx.mock
     async def test_a_credential_in_the_endpoint_url_reaches_no_level(self, recording_logger):
-        """Only scheme and host of the endpoint are logged: a token in its query reaches no line."""
+        """Only scheme and host of the endpoint are named: a token in its query reaches no line,
+        and not the raised error either, whose message callers log and copy into events."""
         url = "https://llm.test/v1/chat/completions?api-key=endpoint-secret"
         respx.post(url).mock(return_value=httpx.Response(500, json={"error": "boom"}))
         provider = VLLMProvider(url=url, model_name="test-model", api_key="k")
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(httpx.HTTPStatusError) as raised:
             await provider.generate([LLMMessage(role="user", content="hi")])
 
+        assert raised.value.response.status_code == 500
+        assert "endpoint-secret" not in "".join(traceback.format_exception(raised.value))
         assert "vLLM API 500 on https://llm.test" in recording_logger.dump("error")
         assert "[Inference Request]: https://llm.test" in recording_logger.dump("info")
         for level in ("debug", *ABOVE_DEBUG):

@@ -156,13 +156,17 @@ class MCPTool(FunctionTool):
         cached = await cache.get(key)
         if cached is not None:
             if cached == _LIST_TOOLS_FAILURE_SENTINEL:
-                raise ClientError(f"MCP server {server_url}: list_tools recently failed")
+                raise ClientError(
+                    f"MCP server {url_origin(server_url)}: list_tools recently failed"
+                )
             return cast(list[Tool], cached)
         async with cache.lock(f"{key}:lock", expire=30):
             cached = await cache.get(key)
             if cached is not None:
                 if cached == _LIST_TOOLS_FAILURE_SENTINEL:
-                    raise ClientError(f"MCP server {server_url}: list_tools recently failed")
+                    raise ClientError(
+                        f"MCP server {url_origin(server_url)}: list_tools recently failed"
+                    )
                 return cast(list[Tool], cached)
             try:
                 async with client as c:
@@ -240,7 +244,9 @@ class MCPTool(FunctionTool):
         await self.get_tool_schema()
 
         if self._tool_schema is None:
-            raise RuntimeError(f"Tool '{self.tool_name}' not found on MCP server {self.server_url}")
+            raise RuntimeError(
+                f"Tool '{self.tool_name}' not found on MCP server {url_origin(self.server_url)}"
+            )
 
         return self._client
 
@@ -574,7 +580,8 @@ class MCPTool(FunctionTool):
                                 await probe_client.ping()
                 except Exception as exc:
                     raise RuntimeError(
-                        f"MCP server at {self.server_url} stopped responding during tool execution"
+                        f"MCP server at {url_origin(self.server_url)} stopped responding during "
+                        "tool execution"
                     ) from exc
 
             async def _run_call_and_healthcheck() -> None:
