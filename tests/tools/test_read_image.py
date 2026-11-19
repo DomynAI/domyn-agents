@@ -376,3 +376,87 @@ class TestThroughABackend:
 
         assert "box is gone" in answer
         assert model.asked == []
+
+
+class TestAttachedImages:
+    """An image the user attached in the CLI is in the conversation's state folder, no
+    root of the workspace: readable for that conversation alone, and never through a link."""
+
+    @pytest.fixture
+    def attached(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Workspace, Path]:
+        from domyn.agents.tools.builtin.session import attachments_dir, default_state_dir
+
+        monkeypatch.setenv("DOMYN_PROJECT_DIR", str(tmp_path / "home"))
+        work = tmp_path / "work"
+        work.mkdir()
+        workspace = Workspace.at(work)
+        folder = attachments_dir(workspace.root, default_state_dir(), "c1")
+        folder.mkdir(parents=True)
+        return workspace, _picture(folder / "image-1.png")
+
+    @staticmethod
+    async def _read_in(workspace: Workspace, model: Model, path: Path, conversation_id: str) -> str:
+        tools = {t.name: t for t in bundle("files", workspace=workspace, llm_provider=model)}
+        result = await tools["read_image"].execute(
+            path=str(path), query="What is it?", conversation_id=conversation_id
+        )
+        return str(result.data) if result.success else f"ERROR: {result.error}"
+
+    @pytest.mark.asyncio
+    async def test_readable_in_its_conversation(
+        self, attached: tuple[Workspace, Path], model: Model
+    ) -> None:
+        workspace, image = attached
+        assert await self._read_in(workspace, model, image, "c1") == "A red square."
+
+    @pytest.mark.asyncio
+    async def test_not_from_another_conversation(
+        self, attached: tuple[Workspace, Path], model: Model
+    ) -> None:
+        workspace, image = attached
+        assert "outside the workspace" in await self._read_in(workspace, model, image, "c2")
+        assert model.asked == []
+
+    @pytest.mark.asyncio
+    async def test_the_other_file_tools_gain_nothing(
+        self, attached: tuple[Workspace, Path], model: Model
+    ) -> None:
+        workspace, image = attached
+        tools = {t.name: t for t in bundle("files", workspace=workspace, llm_provider=model)}
+        result = await tools["read_file"].execute(path=str(image), conversation_id="c1")
+        assert not result.success
+        assert "outside the workspace" in str(result.error)
+
+    @pytest.mark.asyncio
+    async def test_never_through_a_link(
+        self, tmp_path: Path, model: Model, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A linked folder would make a root of wherever it points."""
+        from domyn.agents.tools.builtin.session import attachments_dir, default_state_dir
+
+        monkeypatch.setenv("DOMYN_PROJECT_DIR", str(tmp_path / "home"))
+        work = tmp_path / "work"
+        work.mkdir()
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        secret = _picture(elsewhere / "secret.png")
+        workspace = Workspace.at(work)
+        folder = attachments_dir(workspace.root, default_state_dir(), "c1")
+        folder.parent.mkdir(parents=True)
+        folder.symlink_to(elsewhere)
+
+        answer = await self._read_in(workspace, model, folder / secret.name, "c1")
+        assert "outside the workspace" in answer
+        assert model.asked == []
+
+    @pytest.mark.asyncio
+    async def test_through_a_backend_the_request_is_unchanged(
+        self, attached: tuple[Workspace, Path], model: Model
+    ) -> None:
+        """In a container the conversation's folder is mounted, and `/` is a root."""
+        workspace, image = attached
+        backend = _Elsewhere()
+        assert await _read_through(backend, workspace, model, str(image)) == "A red square."
+        ((conversation, request),) = backend.requests
+        assert conversation == "c1"
+        assert request["extra_roots"] == [str(r) for r in workspace.extra_roots] + ["/"]

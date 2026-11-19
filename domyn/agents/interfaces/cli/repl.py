@@ -57,6 +57,7 @@ from domyn.agents.interfaces.cli.approval import (
     prompt_for_approval,
     settle_approval,
 )
+from domyn.agents.interfaces.cli.attachments import Attachments, Place
 from domyn.agents.interfaces.cli.calls import as_written
 from domyn.agents.interfaces.cli.config import (
     LOCAL_SKILLS_DIRS,
@@ -107,6 +108,7 @@ from domyn.agents.runner import PushResult, Runner
 from domyn.agents.skills import LocalDirSkillSource, SkillNotFoundError, SkillsRuntime
 from domyn.agents.skills.integration import attach_skills
 from domyn.agents.tools.builtin.backends.docker import DockerBackend
+from domyn.agents.tools.builtin.session import attachments_dir, default_state_dir, state_base
 
 if TYPE_CHECKING:
     from domyn.agents.conversation_manager import ConversationInfo
@@ -427,6 +429,10 @@ class Repl:
         # which repaints on a timer slower than tokens arrive.
         self._renderer.on_preview = self._input.refresh
         self._renderer.output = self._input.output
+        # Images attached to the conversation in the editor: Ctrl+V and a pasted or
+        # dragged path. See `attachments.py`.
+        self._attachments = Attachments(self._attachment_place)
+        self._input.attachments = self._attachments
         # Typed mid-turn and not consumed there: a held slash command, a line
         # submitted as the turn ended, a steer the runner could not take.
         self._deferred: deque[str] = deque()
@@ -1148,6 +1154,7 @@ class Repl:
         elif name == "/clear":
             left = self._state.conversation_id
             self._state.reset_conversation()
+            self._attachments.reset()
             await self._end_backend_conversation(left)
             self._warm_backend()
             # The screen holds the conversation just left: kept, it would read as
@@ -1239,6 +1246,7 @@ class Repl:
 
         left = self._state.conversation_id
         self._state.resume_conversation(info)
+        self._attachments.reset()
         await self._end_backend_conversation(left)
         self._warm_backend()
         # The screen holds the conversation that was left, and the one resumed
@@ -1705,6 +1713,7 @@ class Repl:
             )
         self._console.print(
             "\n  Enter sends · Alt+Enter or Ctrl+J for a newline · Shift+Tab auto-approve"
+            "\n  Ctrl+V pastes an image · pasting or dragging in an image's path attaches it"
             "\n  Ctrl-C clears the line, or stops a running turn · twice in a row quits\n",
             style=self._theme.style("meta"),
             highlight=False,
@@ -1755,6 +1764,28 @@ class Repl:
             sessions = getattr(built.backend, "sessions", None)
             if sessions is not None:
                 return sessions.paths(self._state.conversation_id).home
+        return None
+
+    def _attachment_place(self) -> Place | None:
+        """Where an image attached now goes, or ``None`` when the agent has no
+        ``read_image`` to look at it with.
+
+        The folder ``read_image`` itself reads for the conversation: the state folder
+        of the bundle that mounts it, as its backend has it. Not `_conversation_home`,
+        which only a local backend can answer."""
+        for built in getattr(self._agent, "builtin_tools", None) or []:
+            if built.workspace is None:
+                continue
+            if not any(getattr(tool, "name", None) == "read_image" for tool in built.tools):
+                continue
+            root = built.workspace.root
+            state_dir = (
+                built.backend.state_dir if built.backend is not None else default_state_dir()
+            )
+            return Place(
+                state=state_base(root, state_dir),
+                folder=attachments_dir(root, state_dir, self._state.conversation_id),
+            )
         return None
 
     def _read_config(self) -> bytes | None:
