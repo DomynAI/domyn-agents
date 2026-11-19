@@ -96,3 +96,74 @@ class TestTheHomeFolderInTheContainer:
         arguments = build_mounts(workspace, StateFolder.resolve(workspace.root, None), "c1")
 
         assert not any(a.startswith(f"{home}:") for a in arguments)
+
+
+class TestTheRealGlobalFolderIsNeverLeftOpen:
+    """The container's home is ``CONTAINER_HOME`` when the real one has a colon, so the
+    scratch alias is not at ``~/.domyn``: something else has to cover the real one."""
+
+    @staticmethod
+    def _covered(arguments: list[str], hidden: Path) -> bool:
+        return any(
+            a == f"type=tmpfs,target={hidden},tmpfs-size=1048576,tmpfs-mode=0755"
+            or (a.startswith("type=bind,source=") and a.endswith(f",target={hidden}"))
+            for a in arguments
+        )
+
+    @pytest.mark.parametrize("home_name", ["ab", "a:b"])
+    @pytest.mark.parametrize("project", ["elsewhere", "under_global"])
+    def test_a_workspace_that_is_the_home_never_exposes_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, home_name: str, project: str
+    ) -> None:
+        from domyn.agents.tools.builtin.backends.docker.mounts import build_mounts
+        from domyn.agents.tools.builtin.backends.docker.state import StateFolder
+
+        home = (tmp_path / home_name).resolve()
+        (home / ".domyn" / "projects" / "p").mkdir(parents=True)
+        (home / ".domyn" / "credentials").write_text("SECRET")
+        proj = tmp_path / "proj" if project == "elsewhere" else home / ".domyn" / "projects" / "p"
+        proj.mkdir(exist_ok=True)
+        (proj / "config.yaml").write_text("x: 1")
+        monkeypatch.setenv("HOME", str(home))
+        arguments = build_mounts(Workspace.at(home), StateFolder.resolve(home, proj), "c1")
+
+        assert self._covered(arguments, home / ".domyn")
+        assert not any("credentials" in a for a in arguments)
+
+
+class TestAPathDockerWouldSplit:
+    """``--mount`` is read as CSV: a comma or a double quote in a path is quoted, not skipped."""
+
+    @pytest.mark.parametrize(
+        ("value", "field"),
+        [
+            ("/a b", "target=/a b"),
+            ("/a:b", "target=/a:b"),
+            ("/a,b", '"target=/a,b"'),
+            ('/a"b', '"target=/a""b"'),
+            ('/a,"b', '"target=/a,""b"'),
+            ("/a\nb", '"target=/a\nb"'),
+        ],
+    )
+    def test_the_field_is_quoted_only_when_it_has_to_be(self, value: str, field: str) -> None:
+        from domyn.agents.tools.builtin.backends.docker.mounts import _field
+
+        assert _field("target", value) == field
+
+    def test_the_hidden_global_folder_is_covered_for_a_home_with_a_comma(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from domyn.agents.tools.builtin.backends.docker.mounts import build_mounts
+        from domyn.agents.tools.builtin.backends.docker.state import StateFolder
+
+        home = (tmp_path / "a,b").resolve()
+        (home / ".domyn").mkdir(parents=True)
+        (tmp_path / "proj").mkdir()
+        ((tmp_path / "proj") / "config.yaml").write_text("x: 1")
+        monkeypatch.setenv("HOME", str(home))
+        arguments = build_mounts(
+            Workspace.at(home), StateFolder.resolve(home, tmp_path / "proj"), "c1"
+        )
+
+        assert f'type=tmpfs,"target={home}/.domyn",tmpfs-size=1048576,tmpfs-mode=0755' in arguments
+        assert f'type=bind,"source={home}","target={home}"' in arguments

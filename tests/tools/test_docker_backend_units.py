@@ -694,11 +694,12 @@ class TestTheBackendExplainsAFailure:
 
 
 class TestSmallThings:
-    def test_a_path_with_a_comma_cannot_be_mounted(self, tmp_path: Path) -> None:
+    def test_a_path_with_a_comma_is_mounted_quoted(self, tmp_path: Path) -> None:
         workspace = Workspace.at(tmp_path / "a,b")
         (tmp_path / "a,b").mkdir(exist_ok=True)
         arguments = build_mounts(workspace, StateFolder.resolve(workspace.root, None), "c1")
-        assert not any("a,b" in argument for argument in arguments)
+        root = workspace.root
+        assert f'type=bind,"source={root}","target={root}"' in arguments
 
     def test_each_network_setting_describes_itself(self) -> None:
         assert "public" in DockerBackendOptions().describe_network()
