@@ -72,6 +72,9 @@ class OpenAIProvider(BaseLLMProvider):
         reasoning_effort = gen_params.pop("reasoning_effort", None)
         if reasoning_effort and self.model_name in MODELS_SUPPORT_REASONING_EFFORT:
             gen_params["reasoning"] = {"effort": reasoning_effort}
+        # Responses endpoint expects max_output_tokens instead of max_tokens.
+        if "max_tokens" in gen_params:
+            gen_params["max_output_tokens"] = gen_params.pop("max_tokens")
         return gen_params
 
     def model_post_init(self, context: Any, /) -> None:
