@@ -213,24 +213,27 @@ def resolve_verbatim_detailed(
         source_event = event
         break
 
+    # source_id and source_key are the model's own arguments, not ids read from history: they go
+    # to debug only. The ids of the events actually found stay on the warning and info lines.
     if source_event is None:
         logger.warning(
-            f"forward_verbatim: source_id={source_id!r} not found in interaction or conversation history"
+            "forward_verbatim: source_id not found in interaction or conversation history"
         )
+        logger.debug(f"forward_verbatim: source_id={source_id!r} not found")
         return VerbatimResolution()
 
     if source_key and source_event.event_type == ExecutionEventType.AGENT_END:
         logger.warning(
-            f"forward_verbatim: source_key={source_key!r} is not supported for "
-            f"AGENT_END source event_id={source_event.event_id}; forward the "
-            "sub-agent output with an empty source_key"
+            f"forward_verbatim: a source_key is not supported for AGENT_END source "
+            f"event_id={source_event.event_id}; forward the sub-agent output with an empty source_key"
         )
+        logger.debug(f"forward_verbatim: source_key={source_key!r} on an AGENT_END source")
         return VerbatimResolution(source_event_type=source_event.event_type)
 
     action = cast(Any, source_event.action)
     if action is None:
         logger.warning(
-            f"forward_verbatim: source_id={source_id!r} not found in interaction or conversation history"
+            f"forward_verbatim: source event_id={source_event.event_id} has no action to forward"
         )
         return VerbatimResolution(source_event_type=source_event.event_type)
 
@@ -253,9 +256,10 @@ def resolve_verbatim_detailed(
         resolved = extract_by_dot_path(obs, source_key)
         if resolved is None:
             logger.warning(
-                f"forward_verbatim: source_key={source_key!r} did not resolve on observation of "
+                f"forward_verbatim: source_key did not resolve on observation of "
                 f"event_id={source_event.event_id}"
             )
+            logger.debug(f"forward_verbatim: source_key={source_key!r} did not resolve")
             return VerbatimResolution(
                 source_event_type=source_event.event_type,
                 source_key_miss=True,
@@ -263,10 +267,8 @@ def resolve_verbatim_detailed(
         obs = resolved
 
     text = json.dumps(obs, default=str) if isinstance(obs, dict | list) else str(obs)
-    logger.info(
-        f"forward_verbatim: forwarding observation from event_id={source_event.event_id} "
-        f"(source_id={source_id!r}, source_key={source_key!r})"
-    )
+    logger.info(f"forward_verbatim: forwarding observation from event_id={source_event.event_id}")
+    logger.debug(f"forward_verbatim: forwarded with source_key={source_key!r}")
     return VerbatimResolution(
         text=text,
         found=True,

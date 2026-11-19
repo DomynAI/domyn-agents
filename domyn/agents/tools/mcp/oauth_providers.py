@@ -335,7 +335,13 @@ async def _patched_handle_token_response_scopes(response: httpx2.Response) -> OA
     try:
         return _parse_oauth_token(content)
     except PydanticValidationError as e:
-        raise OAuthTokenError(f"Invalid token response: {e}") from e
+        # Pydantic's message quotes the response, which can hold the tokens, and this text reaches
+        # the conversation as the tool's error: name the fields only, and drop the chained cause.
+        problems = ", ".join(
+            f"{'.'.join(map(str, error['loc'])) or 'body'} ({error['type']})"
+            for error in e.errors(include_url=False, include_context=False, include_input=False)
+        )
+        raise OAuthTokenError(f"Invalid token response: {problems}") from None
 
 
 async def _patched_handle_refresh_response(

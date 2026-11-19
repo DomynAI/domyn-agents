@@ -395,9 +395,10 @@ def _handle_forward_verbatim(
         return ForwardVerbatimMiss(feedback=FORWARD_VERBATIM_FEEDBACK_EMPTY_SOURCE_ID)
 
     if not is_valid_source_id_format(source_id):
-        logger.warning(
-            f"FORWARD_VERBATIM source_id={source_id!r} failed format check (likely hallucinated)"
-        )
+        # Not identifier-shaped means the model wrote free text there, which can be the answer
+        # itself: the value goes to debug only, here and on the misses below.
+        logger.warning("FORWARD_VERBATIM source_id failed format check (likely hallucinated)")
+        logger.debug(f"FORWARD_VERBATIM source_id={source_id!r} failed format check")
         return ForwardVerbatimMiss(
             feedback=FORWARD_VERBATIM_FEEDBACK_INVALID_FORMAT.format(source_id=source_id),
         )
@@ -406,7 +407,8 @@ def _handle_forward_verbatim(
     text, found = resolution.text, resolution.found
 
     if not found:
-        logger.warning(
+        logger.warning("FORWARD_VERBATIM could not resolve its source")
+        logger.debug(
             FORWARD_VERBATIM_MISS_UNRESOLVED.format(source_id=source_id, source_key=source_key)
         )
         # Distinguish the AGENT_END + source_key reject from a generic miss so

@@ -529,7 +529,8 @@ class ReactPlannerStrategy(BasePlannerStrategy):
                         source_id=source_id,
                         source_key=source_key,
                     )
-                    logger.warning(observation)
+                    logger.warning("FORWARD_VERBATIM could not resolve its source")
+                    logger.debug(observation)
                     yield create_error_event(
                         AGENT_ERROR_MESSAGE,
                         agent.name,
