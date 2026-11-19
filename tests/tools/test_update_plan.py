@@ -5,6 +5,7 @@ import pytest
 from domyn.agents.llm import LLMMessage
 from domyn.agents.planner_strategy.context_injection import append_plan
 from domyn.agents.tools.update_plan import (
+    NO_PLAN_TEXT,
     PLAN_PART,
     PLANS_STATE_KEY,
     UPDATE_PLAN,
@@ -144,3 +145,42 @@ class TestAppendingThePlan:
         messages = [LLMMessage(role="user", content="go")]
 
         assert append_plan(messages, None) == [LLMMessage(role="user", content="go")]
+
+
+class TestThePlanMessage:
+    """What the context manager shows at the end of a request."""
+
+    @staticmethod
+    def _message(state: dict, plan_tool: bool = True):
+        from types import SimpleNamespace
+
+        from domyn.agents.planner_strategy.context_management.tool_use import (
+            ToolUseContextManager,
+        )
+
+        agent = SimpleNamespace(name="A", tools=[])
+        context = SimpleNamespace(state=state)
+        return ToolUseContextManager(plan_tool=plan_tool).plan_message(agent, context)
+
+    def test_says_there_is_no_plan_before_one(self) -> None:
+        message = self._message({})
+
+        assert message is not None and message.part == PLAN_PART
+        assert message.content == NO_PLAN_TEXT
+        assert "update_plan" in NO_PLAN_TEXT
+
+    @pytest.mark.asyncio
+    async def test_says_so_again_once_cleared(self) -> None:
+        first = await _update([{"step": "a", "status": "pending"}])
+        cleared = await _update([], state=first.state)
+
+        assert self._message(cleared.state).content == NO_PLAN_TEXT
+
+    @pytest.mark.asyncio
+    async def test_shows_nothing_once_finished(self) -> None:
+        done = await _update([{"step": "a", "status": "completed"}])
+
+        assert self._message(done.state) is None
+
+    def test_shows_nothing_when_off(self) -> None:
+        assert self._message({}, plan_tool=False) is None

@@ -15,7 +15,7 @@ from domyn.agents import Agent, BaseEvent, ExecutionEventType, Part, Runner
 from domyn.agents.llm import BaseLLMProvider, LLMResponse, LLMToolCall, ToolCallFunction
 from domyn.agents.planner_strategy import PlannerStrategyFactory
 from domyn.agents.tools import FunctionTool
-from domyn.agents.tools.update_plan import PLANS_STATE_KEY
+from domyn.agents.tools.update_plan import NO_PLAN_TEXT, PLANS_STATE_KEY
 
 _PLAN = "<current_plan>"
 
@@ -122,7 +122,8 @@ async def test_the_plan_is_shown_at_the_end_while_a_step_is_left(planner: str) -
 
     first, after_plan, after_work, after_finish = (messages for messages, _ in provider._requests)
     assert all("update_plan" in tools for _, tools in provider._requests)
-    assert not any(_PLAN in str(m.content) for m in first), "no plan before one is written"
+    assert _last(first).endswith(NO_PLAN_TEXT), "before a plan, the place says there is none"
+    assert _last(first).startswith("USER INPUT: go"), "joined to the user's own message"
     for messages in (after_plan, after_work):
         assert _PLAN in _last(messages), "the plan is the end of the request"
         assert sum(_PLAN in str(m.content) for m in messages) == 1, "and only there"

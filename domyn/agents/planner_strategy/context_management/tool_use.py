@@ -42,6 +42,7 @@ from domyn.agents.tools.read_tool_result import (
     read_call,
 )
 from domyn.agents.tools.update_plan import (
+    NO_PLAN_TEXT,
     PLAN_PART,
     UPDATE_PLAN_DEFINITION,
     UPDATE_PLAN_TOOL_NAME,
@@ -659,14 +660,17 @@ class ToolUseContextManager(ContextManager):
         A user message, tagged ``part="plan"``: it goes after the history, where
         an update changes only itself and the rest of the request stays cached,
         and where an assistant message would be read as the start of the reply.
-        Only while a step is left to do: a finished plan is in the history as the
-        call that finished it, and showing it on every later request costs tokens
-        for nothing.
+        Before any plan (or once one is cleared) it says there is none and how to
+        make one (``NO_PLAN_TEXT``); a constant text, so it costs no cache. A
+        finished plan is not shown: it is in the history as the call that finished
+        it, and showing it on every later request costs tokens for nothing.
         """
         if not self.offers_plan(agent):
             return None
         plan = stored_plan(context.state, agent.name)
-        if plan is None or not plan.is_open:
+        if plan is None:
+            return LLMMessage(role=self.user_role, content=NO_PLAN_TEXT, part=PLAN_PART)
+        if not plan.is_open:
             return None
         return LLMMessage(role=self.user_role, content=plan.render(), part=PLAN_PART)
 

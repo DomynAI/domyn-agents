@@ -36,6 +36,14 @@ PLAN_PART = "plan"
 
 UPDATE_PLAN_TOOL_NAME = "update_plan"
 
+#: Shown where the plan goes while the agent has none, so that the place a plan
+#: will appear, and the call that makes one, are seen before the first plan.
+NO_PLAN_TEXT = (
+    "<current_plan>\n"
+    f"No plan yet. For a task with several steps, call {UPDATE_PLAN_TOOL_NAME} to create one.\n"
+    "</current_plan>"
+)
+
 
 class PlanStatus(StrEnum):
     """Where a step is."""
