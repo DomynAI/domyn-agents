@@ -28,12 +28,21 @@ class SlashCommand:
     still using. Default False, so a command added later is held rather than
     silently allowed.
     """
+    interrupts: bool = False
+    """Whether typing this mid-turn stops the turn, as Ctrl-C does, and runs it then.
+
+    For a command that says the turn is no longer wanted: held, it would run only
+    after the agent had finished work the user had already walked away from. It is
+    not run alongside the turn either (it is not ``mid_turn``): the turn is stopped
+    first, every call it leaves open is closed, and the command runs once nothing
+    is using the conversation.
+    """
 
 
 COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/help", "Show this help", aliases=("/?",), mid_turn=True),
-    SlashCommand("/exit", "End the session", aliases=("/quit", "/q")),
-    SlashCommand("/clear", "Start a fresh conversation and clear the screen"),
+    SlashCommand("/exit", "End the session", aliases=("/quit", "/q"), interrupts=True),
+    SlashCommand("/clear", "Start a fresh conversation and clear the screen", interrupts=True),
     SlashCommand("/agent", "Show the active agent, its tools and sub-agents", mid_turn=True),
     SlashCommand("/skills", "List the skills available to the agent", mid_turn=True),
     SlashCommand("/skill", "Show one skill in full", usage="/skill <name>", mid_turn=True),
@@ -78,7 +87,8 @@ COMMANDS: tuple[SlashCommand, ...] = (
 # Why the ones that look harmless are not mid_turn:
 #   /clear     swaps conversation_id while the runner is still writing events under
 #              the old one, and sends the next steering message to a conversation
-#              nobody is running.
+#              nobody is running. So it stops the turn first (`interrupts`), as
+#              /exit does, rather than run alongside it.
 #   /resume    swaps it for the same reason, and reads the terminal to offer a choice.
 #   /compact   re-enters Runner.run on the same conversation, which collides in
 #              injection_queue — keyed by (application, conversation).

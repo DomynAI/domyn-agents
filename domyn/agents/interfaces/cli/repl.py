@@ -226,6 +226,19 @@ class _Queued:
     event_id: str | None = None
 
 
+class _TurnStoppedFor(Exception):  # noqa: N818 (a signal, not an error)
+    """A command typed mid-turn that stops the turn (``SlashCommand.interrupts``).
+
+    Raised where the line is read, so it leaves the turn the way a Ctrl-C does:
+    the runner's stream is closed, which closes every call left open, and the
+    reader stands down. `_loop` then runs ``line`` as if typed between turns.
+    """
+
+    def __init__(self, line: str) -> None:
+        super().__init__(line)
+        self.line = line
+
+
 class _InterruptedReadError(Exception):
     """The Ctrl-C that ended the background read, on its way to the REPL.
 
@@ -591,6 +604,11 @@ class Repl:
 
             try:
                 await self._run_turn(text)
+            except _TurnStoppedFor as stopped:
+                self._renderer.finish()
+                self._console.print()
+                self._say("Turn interrupted.")
+                pending_user_text = stopped.line
             except KeyboardInterrupt:
                 # Abort the turn, keep the session alive: the user interrupted
                 # the agent, not the conversation.
@@ -627,10 +645,14 @@ class Repl:
         else:
             await self._spinner.start()
         completed = False
+        stopped = False
         try:
             await self._reload_if_changed()
             await self._drive(pending_event)
             completed = True
+        except _TurnStoppedFor:
+            stopped = True
+            raise
         finally:
             # The reader first: it is the thing holding the terminal, and an
             # exception on its way out of _drive (Ctrl-C) passes through here too
@@ -646,6 +668,10 @@ class Repl:
                     highlight=False,
                 )
                 await self._say_what_changed()
+            if stopped:
+                # /clear or /exit stopped the turn: what was still waiting was
+                # typed for the conversation being left, and none of it runs.
+                self._drop_waiting()
             # Nothing is drawing the queue any more, so whatever is left in it has
             # to land in the transcript now or be lost from view entirely.
             #
@@ -688,6 +714,21 @@ class Repl:
             # in view while the next message is being typed, which is when it is
             # wanted. It stays quiet on its own when there is nothing to say.
             await self._render_context_indicator()
+
+    def _drop_waiting(self) -> None:
+        """Forget every message and command still waiting on the stopped turn, and say so."""
+        left = [item.text for item in self._queued]
+        left += [line for line in self._held_for_resume if line not in left]
+        left += [line for line in self._deferred if line not in left]
+        carried = self._reader.carried()
+        if carried is not None:
+            left.append(carried)
+        self._queued.clear()
+        self._held_for_resume.clear()
+        self._deferred.clear()
+        if left:
+            count = f"{len(left)} message{'s' if len(left) > 1 else ''}"
+            self._say(f"Not sent, typed before the turn was stopped: {count}.")
 
     def _pending_rows(self) -> list[tuple[str, str]]:
         """The queue, as the editor wants to draw it.
@@ -958,11 +999,12 @@ class Repl:
     async def _dispatch_typed(self, line: str | None) -> None:
         """Decide what a line that arrived mid-turn is.
 
-        Three kinds, and the distinction is about what can safely happen while a
-        ``run()`` is in flight on this conversation. A read-only slash command runs
-        now; any other slash command is *held* rather than refused, because
-        refusing would throw away something typed on purpose; anything else is a
-        message for the agent.
+        Four kinds, and the distinction is about what can safely happen while a
+        ``run()`` is in flight on this conversation. ``/exit`` and ``/clear`` stop
+        the turn (`_TurnStoppedFor`) and run once it has stopped; a read-only slash
+        command runs now; any other slash command is *held* rather than refused,
+        because refusing would throw away something typed on purpose; anything else
+        is a message for the agent.
 
         A command that runs now is printed first: the editor erased itself on
         submit, and its output would otherwise arrive under nothing. Anything that
@@ -976,6 +1018,9 @@ class Repl:
 
         if slash.is_slash(line):
             resolved = slash.resolve(line)
+            if resolved is not None and resolved[0].interrupts:
+                self._renderer.echo_user(line)
+                raise _TurnStoppedFor(line)
             if resolved is not None and resolved[0].mid_turn:
                 self._renderer.echo_user(line)
                 if await self._handle_slash(line, mid_turn=True) is False:  # pragma: no cover
