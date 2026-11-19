@@ -8,6 +8,7 @@ example folder is covered without touching this file.
 import importlib.util
 import sys
 import tempfile
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
@@ -125,6 +126,17 @@ def test_guardrail_removes_email_addresses(guardrail: TestClient, path: str):
     body = guardrail.post(path, json=_event("response", "Write to anna@example.com")).json()
     assert body["modified_event"]["content"] == [{"text": "Write to [email removed]"}]
     assert body["emitted_content"]["passed"] is False
+
+
+@_REST_GUARDRAIL
+def test_guardrail_reads_a_long_text_in_linear_time(guardrail: TestClient):
+    # With unbounded repeats the email search was quadratic: about 9 s for this
+    # text, under 0.1 s now. The limit is wide so a busy runner cannot fail it.
+    text = "a" * 40_000 + "@" + "a" * 40_000
+    started = time.monotonic()
+    body = guardrail.post("/input-guardrail", json=_event("user_input", text)).json()
+    assert time.monotonic() - started < 2
+    assert body["emitted_content"]["passed"] is True
 
 
 @_REST_GUARDRAIL

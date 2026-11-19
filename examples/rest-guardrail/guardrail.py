@@ -21,7 +21,9 @@ import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-EMAIL = re.compile(r"[\w.%+-]+@[\w.-]+\.[a-zA-Z]{2,}")
+# Every repeat is bounded (the lengths an address may have): with `+` the search
+# took time quadratic in the length of the text, which arrives over HTTP.
+EMAIL = re.compile(r"[\w.%+-]{1,64}@[\w-]{1,63}(?:\.[\w-]{1,63}){0,8}\.[a-zA-Z]{2,24}")
 BLOCKED_PHRASE = "ignore all previous instructions"
 
 app = FastAPI()
