@@ -4,13 +4,16 @@ Two programs are needed. ``agent-browser`` ships inside the standalone build
 (``<runtime>/bin``), found here when it is not on ``PATH``. Chrome is not
 shipped: the first browser tool call that finds none downloads Chrome for Testing
 (Google's channel for automation, the one ``agent-browser install`` uses) into
-``~/.domyn/browsers/``, once, and the browser is told where it is.
+``~/.domyn/browsers/``, once, and the browser is told where it is. Not on musl
+(Alpine), where Chrome for Testing does not run: there it is the system's
+Chromium (``apk add chromium``) or ``browser.executable_path``.
 
 Only for commands that run on this machine. A container backend's image has both
 programs already (``docker/docker-backend.Dockerfile``), with ``AGENT_BROWSER_EXECUTABLE_PATH``
 naming Chrome.
 """
 
+import glob
 import os
 import platform
 import shutil
@@ -59,14 +62,24 @@ class BrowserInstallError(Exception):
     """Chrome could not be downloaded or unpacked."""
 
 
+def is_musl() -> bool:
+    """Whether this is a Linux on musl (Alpine), for which Chrome for Testing has no build."""
+    return sys.platform.startswith("linux") and bool(glob.glob("/lib/ld-musl-*"))
+
+
 def chrome_platform() -> str | None:
-    """The Chrome for Testing platform of this machine, or ``None`` when it has none."""
+    """The Chrome for Testing platform of this machine, or ``None`` when it has none.
+
+    None on musl: its Linux builds need glibc, so one downloaded there would not start.
+    """
     machine = platform.machine().lower()
     arm = machine in ("arm64", "aarch64")
     system: str = sys.platform
     if system == "darwin":
         return "mac-arm64" if arm else "mac-x64"
     if system.startswith("linux"):
+        if is_musl():
+            return None
         return "linux-arm64" if arm else ("linux64" if machine in ("x86_64", "amd64") else None)
     return None
 

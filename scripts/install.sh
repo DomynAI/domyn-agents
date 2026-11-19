@@ -1,5 +1,5 @@
 #!/bin/sh
-# domyn installer, for macOS (Apple Silicon) and Linux (glibc 2.33 or newer).
+# domyn installer, for macOS (Apple Silicon) and Linux (glibc 2.33 or newer, or musl: Alpine).
 #
 #   curl -fsSL https://github.com/domynai/domyn-agents/releases/latest/download/install.sh | sh
 #   sh install.sh <dir>        install from a local build directory instead
@@ -48,8 +48,9 @@ detect_target() {
     Linux-x86_64) TARGET="x86_64-unknown-linux-gnu" ;;
     *) fail "unsupported platform: $os $arch" ;;
   esac
+  # A musl system (Alpine) has builds of its own.
   if [ "$os" = "Linux" ] && ls /lib/ld-musl-* >/dev/null 2>&1; then
-    fail "this looks like a musl system (Alpine?): the Linux builds need glibc."
+    TARGET="${TARGET%-gnu}-musl"
   fi
 }
 
@@ -160,7 +161,7 @@ main() {
 import importlib, importlib.util
 import domyn.agents.cli.main
 from domyn.agents.cli.utils import get_version
-for name in ("pydantic_core", "yaml", "cryptography.hazmat.bindings._rust", "rpds", "anydoc", "watchfiles"):
+for name in ("pydantic_core", "yaml", "cryptography.hazmat.bindings._rust", "rpds", "anydoc", "watchfiles", "pdf_inspector"):
     if importlib.util.find_spec(name.split(".")[0]) is not None:
         importlib.import_module(name)
 print(get_version())

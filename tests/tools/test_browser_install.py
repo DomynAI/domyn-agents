@@ -86,7 +86,17 @@ class TestThePlatform:
         monkeypatch.undo()
         monkeypatch.setattr(bi.sys, "platform", system)
         monkeypatch.setattr(bi.platform, "machine", lambda: machine)
+        monkeypatch.setattr(bi.glob, "glob", lambda pattern: [])
         assert bi.chrome_platform() == expected
+
+    @pytest.mark.parametrize("machine", ["x86_64", "aarch64"])
+    def test_there_is_none_on_musl(self, monkeypatch, machine):
+        monkeypatch.undo()
+        monkeypatch.setattr(bi.sys, "platform", "linux")
+        monkeypatch.setattr(bi.platform, "machine", lambda: machine)
+        monkeypatch.setattr(bi.glob, "glob", lambda pattern: ["/lib/ld-musl-x86_64.so.1"])
+        assert bi.is_musl()
+        assert bi.chrome_platform() is None
 
 
 class TestFindingPrograms:
@@ -317,6 +327,33 @@ class TestFirstUse:
             assert not s._chrome_checked
 
     @pytest.mark.asyncio
+    async def test_on_musl_without_chromium_it_says_what_to_install(self):
+        s = sessions()
+        with (
+            patch.object(bi, "chrome_platform", return_value=None),
+            patch.object(bi, "is_musl", return_value=True),
+            patch.object(bi, "system_chrome", return_value=None),
+            patch.object(bi, "download_chrome") as download,
+        ):
+            with pytest.raises(BrowserError, match="apk add chromium"):
+                await s._ensure_chrome()
+            assert not s._chrome_checked
+        download.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_on_musl_the_systems_chromium_is_used(self):
+        s = sessions()
+        with (
+            patch.object(bi, "chrome_platform", return_value=None),
+            patch.object(bi, "is_musl", return_value=True),
+            patch.object(bi, "system_chrome", return_value="/usr/bin/chromium"),
+            patch.object(bi, "download_chrome") as download,
+        ):
+            await s._ensure_chrome()
+        download.assert_not_called()
+        assert "--executable-path" not in s.command("c1", "open", "https://example.com")
+
+    @pytest.mark.asyncio
     async def test_call_makes_sure_first(self):
         s = sessions()
         s._ensure_chrome = AsyncMock(side_effect=BrowserError("no chrome"))  # type: ignore[method-assign]
@@ -352,6 +389,8 @@ class TestThePinnedBinary:
             "aarch64_apple_darwin",
             "x86_64_unknown_linux_gnu",
             "aarch64_unknown_linux_gnu",
+            "x86_64_unknown_linux_musl",
+            "aarch64_unknown_linux_musl",
         ):
             digest = values[f"AGENT_BROWSER_SHA256_{target}"]
             assert len(digest) == 64 and set(digest) <= set("0123456789abcdef")
