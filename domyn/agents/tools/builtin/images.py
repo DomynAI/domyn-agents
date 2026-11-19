@@ -129,7 +129,8 @@ def image_tools(
         other common image formats. Not for PDF or other documents: use read_file.
 
         Args:
-            path: Path to the image, relative to the workspace root.
+            path: Path to the image, relative to the workspace root, or the path
+                of an image the user attached, as the message gives it.
             query: What to find out about the image, for example "Transcribe all
                 the text" or "What does the error dialog say?".
         """
@@ -139,7 +140,26 @@ def image_tools(
             await backend.start()
         where = backend.tool_host if backend is not None else None
         if (backend is None) or (where is None):
-            image, media_type = await asyncio.to_thread(load_image, workspace=workspace, path=path)
+            # The images the user attached to this conversation are in its state
+            # folder, which is no root of the workspace: they are added for this call
+            # alone, and only this conversation's. Never through a link, which would
+            # make a root of wherever it points. In a container nothing is needed:
+            # the conversation's folder is mounted there, and `/` is a root.
+            reach = workspace
+            if conversation_id:
+                from domyn.agents.tools.builtin.session import (
+                    attachments_dir,
+                    default_state_dir,
+                    linked_below,
+                    state_base,
+                )
+
+                state_dir = backend.state_dir if backend is not None else default_state_dir()
+                attached = attachments_dir(workspace.root, state_dir, conversation_id)
+                start = state_base(workspace.root, state_dir)
+                if attached.is_dir() and linked_below(start, attached) is None:
+                    reach = Workspace.at(workspace.root, also=(*workspace.extra_roots, attached))
+            image, media_type = await asyncio.to_thread(load_image, workspace=reach, path=path)
         else:
             result = await backend.run(
                 where.command,

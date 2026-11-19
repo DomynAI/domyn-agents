@@ -286,8 +286,12 @@ async def start_session(
         # Shift+Tab is said here because nothing else shows it while auto-approve
         # is off. Only where the editor runs: a pipe has no such key.
         keys = "  ·  shift+tab auto-approve" if interactive_terminal() else ""
+        # Ctrl+V likewise: a terminal pastes text with Cmd+V, so pasting an image
+        # is a key no one would guess. Only when the agent can look at one.
+        if interactive_terminal() and agent.get_tool_by_name("read_image") is not None:
+            keys += "  ·  Ctrl+v pastes an image"
         console.print(
-            f"  {'  ·  '.join(details)}  ·  /help for commands{keys}  ·  Ctrl-C twice to quit\n",
+            f"  {'  ·  '.join(details)}  ·  /help for commands{keys}  ·  Ctrl+c twice to quit\n",
             style=theme.style("meta"),
             highlight=False,
         )
