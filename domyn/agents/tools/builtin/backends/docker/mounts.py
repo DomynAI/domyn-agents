@@ -53,8 +53,15 @@ def _hidden_global_home(root: Path, state: StateFolder) -> Path | None:
 
 
 def skill_roots(workspace: Workspace) -> list[Path]:
-    """The skill folders that exist, which builtin skills run their scripts from."""
-    return [p for p in workspace.extra_roots if p.is_dir()]
+    """The skill folders that exist, which builtin skills run their scripts from.
+
+    Those the workspace contains are only listed when they are in the global ``~/.domyn``,
+    which the container hides: a workspace that is the home folder holds the installed
+    skills, and an empty folder over them would leave the agent without its scripts.
+    """
+    hidden = Path.home().absolute() / HOME_DIRNAME
+    inside = [p for p in workspace.covered_roots if p == hidden or hidden in p.parents]
+    return [p for p in (*workspace.extra_roots, *inside) if p.is_dir() and "," not in str(p)]
 
 
 def build_mounts(workspace: Workspace, state: StateFolder, conversation: str) -> list[str]:

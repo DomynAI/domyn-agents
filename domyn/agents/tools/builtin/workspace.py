@@ -50,6 +50,14 @@ class Workspace:
     boundary, so nothing belongs here that was not deliberately put here.
     """
 
+    covered_roots: tuple[Path, ...] = ()
+    """Roots asked for that the workspace itself contains, so they are not in ``extra_roots``.
+
+    Nothing to widen on this machine. A backend that hides part of what the workspace
+    holds (the Docker one hides the global ``~/.domyn``) needs them to put back what
+    belongs to the agent, such as the installed skills.
+    """
+
     @classmethod
     def at(
         cls,
@@ -58,10 +66,9 @@ class Workspace:
         also: Iterable[str | os.PathLike[str]] = (),
     ) -> Workspace:
         root = Path(path or Path.cwd()).expanduser().resolve()
+        asked = [Path(one).expanduser().resolve() for one in also]
         candidates = dict.fromkeys(
-            resolved
-            for resolved in (Path(one).expanduser().resolve() for one in also)
-            if resolved != root and root not in resolved.parents
+            resolved for resolved in asked if resolved != root and root not in resolved.parents
         )
         # Dropped when already covered, by the root or by another extra root: a
         # redundant root would make the error message list the same place twice
@@ -72,7 +79,8 @@ class Workspace:
             for one in candidates
             if not any(other in one.parents for other in candidates if other != one)
         )
-        return cls(root=root, extra_roots=extra)
+        covered = tuple(dict.fromkeys(one for one in asked if one != root and root in one.parents))
+        return cls(root=root, extra_roots=extra, covered_roots=covered)
 
     @property
     def roots(self) -> tuple[Path, ...]:
