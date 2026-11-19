@@ -249,7 +249,8 @@ class TestWhatIsMounted:
     def test_nothing_else_is_mounted(self, tmp_path: Path) -> None:
         _, specs = self._specs(tmp_path)
         home = str(Path.home())
-        assert not any(home in s and "/ws" not in s for s in specs)
+        # The home folder itself is an empty tmpfs, which mounts nothing of the host's.
+        assert not any(home in s and "/ws" not in s and ":rw,mode=1777" not in s for s in specs)
         assert not any("docker.sock" in s for s in specs)
 
     def test_a_linked_agent_home_is_refused(self, tmp_path: Path) -> None:

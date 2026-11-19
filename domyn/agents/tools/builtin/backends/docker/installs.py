@@ -105,7 +105,7 @@ class InstallLog:
     async def _record_python(self, container: DockerContainer, conversation: str) -> None:
         frozen = await self._cli(
             "exec", container.name, "bash", "-c",
-            'export PATH="$HOME/.local/bin:$PATH"; pip freeze --user 2>/dev/null',
+            'export PATH="$PYTHONUSERBASE/bin:$PATH"; pip freeze --user 2>/dev/null',
             timeout=SLOW_ACTION_SECONDS,
         )  # fmt: skip
         if frozen.ok:
@@ -114,7 +114,7 @@ class InstallLog:
     async def _record_npm(self, container: DockerContainer, conversation: str) -> None:
         listed = await self._cli(
             "exec", container.name, "bash", "-c",
-            'export PATH="$HOME/.npm-global/bin:$PATH"; npm ls -g --depth=0 --json 2>/dev/null',
+            'export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"; npm ls -g --depth=0 --json 2>/dev/null',
             timeout=SLOW_ACTION_SECONDS,
         )  # fmt: skip
         packages = _npm_packages(listed.stdout)

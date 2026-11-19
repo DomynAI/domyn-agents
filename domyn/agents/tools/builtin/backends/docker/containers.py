@@ -20,10 +20,29 @@ from domyn.agents.tools.builtin.backends.docker.scope import FINGERPRINT_LABEL, 
 from domyn.agents.tools.builtin.session import PROJECT_DIR_VAR
 
 CONTAINER_HOME = "/tmp/domyn-home"
-"""``HOME`` inside the container. Not a mount: ``pip install --user`` and
-``npm install -g`` write under it, and a new container starts without them."""
+"""Where ``pip install --user`` and ``npm install -g`` write, and ``HOME`` when the host's
+cannot be used (see ``container_home``). Not a mount: a new container starts without
+them, and ``installs`` replays what was installed."""
 
 NPM_PREFIX = f"{CONTAINER_HOME}/.npm-global"
+
+
+def container_home() -> str:
+    """``HOME`` inside the container: the host user's home folder, at the same path.
+
+    A path the user writes as they see it on their machine (``~/notes/a.md``,
+    ``/Users/me/notes/a.md``) then means the same thing to a command and to a file tool,
+    wherever the workspace is mounted below it; what is not mounted is not there. The
+    folder itself is an empty writable tmpfs (see ``mounts``), so nothing of the real home
+    is in it but what is mounted. A home that cannot be mounted at its own path (``/``, or a
+    comma or colon in it) is ``CONTAINER_HOME``.
+    """
+    home = Path.home().absolute()
+    text = str(home)
+    if home == Path(home.anchor) or "," in text or ":" in text:
+        return CONTAINER_HOME
+    return text
+
 
 _PROXY_VARIABLES = ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY")
 _NO_PROXY = "localhost,127.0.0.1"
@@ -119,7 +138,7 @@ class ContainerLauncher:
             "--cpus", str(self._options.cpus),
             "-w", str(self._workdir),
             *_environment(
-                HOME=CONTAINER_HOME,
+                HOME=container_home(),
                 PYTHONUSERBASE=f"{CONTAINER_HOME}/.local",
                 NPM_CONFIG_PREFIX=NPM_PREFIX,
                 PIP_DISABLE_PIP_VERSION_CHECK="1",
