@@ -219,3 +219,18 @@ class TestProviderWiring:
         assert_content_stays_below_info(recording_logger)
         assert "vLLM API 500" in recording_logger.dump("error")
         assert USER_SECRET in recording_logger.dump("debug")
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_a_credential_in_the_endpoint_url_reaches_no_level(self, recording_logger):
+        """Only scheme and host of the endpoint are logged: a token in its query reaches no line."""
+        url = "https://llm.test/v1/chat/completions?api-key=endpoint-secret"
+        respx.post(url).mock(return_value=httpx.Response(500, json={"error": "boom"}))
+        provider = VLLMProvider(url=url, model_name="test-model", api_key="k")
+        with pytest.raises(httpx.HTTPStatusError):
+            await provider.generate([LLMMessage(role="user", content="hi")])
+
+        assert "vLLM API 500 on https://llm.test" in recording_logger.dump("error")
+        assert "[Inference Request]: https://llm.test" in recording_logger.dump("info")
+        for level in ("debug", *ABOVE_DEBUG):
+            assert "endpoint-secret" not in recording_logger.dump(level)

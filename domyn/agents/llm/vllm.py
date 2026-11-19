@@ -17,7 +17,7 @@ from domyn.agents.llm.base import (
     log_inference_request,
     log_inference_response,
 )
-from domyn.agents.logger import get_logger
+from domyn.agents.logger import get_logger, url_origin
 from domyn.agents.tools.base import sanitize_tool_names
 from domyn.agents.tracing import inject_trace_headers
 
@@ -152,7 +152,7 @@ class VLLMProvider(BaseLLMProvider):
             response = await client.post(self.url, headers=headers, json=payload)
             if response.is_error:
                 body_bytes = await response.aread()
-                logger.error(f"vLLM API {response.status_code} on {self.url}")
+                logger.error(f"vLLM API {response.status_code} on {url_origin(self.url)}")
                 logger.debug(
                     "vLLM API error body",
                     payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},
@@ -267,7 +267,7 @@ class VLLMProvider(BaseLLMProvider):
         ):
             if response.is_error:
                 body_bytes = await response.aread()
-                logger.error(f"vLLM API {response.status_code} on {self.url}")
+                logger.error(f"vLLM API {response.status_code} on {url_origin(self.url)}")
                 logger.debug(
                     "vLLM API error body",
                     payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},

@@ -18,7 +18,7 @@ from domyn.agents.llm.base import (
     log_inference_request,
     log_inference_response,
 )
-from domyn.agents.logger import get_logger
+from domyn.agents.logger import get_logger, url_origin
 from domyn.agents.tools.base import sanitize_tool_name, sanitize_tool_names
 
 MODELS_SUPPORT_REASONING_EFFORT = ["o1", "o1-mini", "o3-mini", "gpt-5", "gpt-5-mini", "gpt-5-nano"]
@@ -206,7 +206,7 @@ class OpenAIProvider(BaseLLMProvider):
             response = await client.post(self.url, headers=headers, json=payload)
             if response.is_error:
                 body_bytes = await response.aread()
-                logger.error(f"OpenAI API {response.status_code} on {self.url}")
+                logger.error(f"OpenAI API {response.status_code} on {url_origin(self.url)}")
                 logger.debug(
                     "OpenAI API error body",
                     payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},
@@ -332,7 +332,7 @@ class OpenAIProvider(BaseLLMProvider):
         ):
             if response.is_error:
                 body_bytes = await response.aread()
-                logger.error(f"OpenAI API {response.status_code} on {self.url}")
+                logger.error(f"OpenAI API {response.status_code} on {url_origin(self.url)}")
                 logger.debug(
                     "OpenAI API error body",
                     payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},

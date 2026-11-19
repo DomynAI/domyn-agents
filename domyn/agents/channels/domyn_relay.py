@@ -52,7 +52,7 @@ from domyn.agents.channels.cursor_store import InMemoryCursorStore
 from domyn.agents.core import BaseEvent, ExecutionEventType, RelayMessage
 from domyn.agents.integrations.utils import SeenWindow, resume_headers
 from domyn.agents.interfaces import CursorStore
-from domyn.agents.logger import get_logger
+from domyn.agents.logger import get_logger, url_origin
 
 logger = get_logger()
 
@@ -197,7 +197,7 @@ class DomynRelayChannel:
                     self._ws_url,
                     additional_headers=headers,
                 ) as ws:
-                    logger.info("DomynRelayChannel: connected to %s", self._ws_url)
+                    logger.info("DomynRelayChannel: connected to %s", url_origin(self._ws_url))
                     attempt = 0
                     drain_task = asyncio.create_task(self._drain_loop(ws), name="relay-ws-drain")
                     try:

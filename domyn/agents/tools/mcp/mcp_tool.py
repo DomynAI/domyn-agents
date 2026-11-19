@@ -24,7 +24,7 @@ from pydantic.json_schema import SkipJsonSchema
 
 from domyn.agents.core import ApprovalType, VisibilityScope
 from domyn.agents.hooks import HookPhase
-from domyn.agents.logger import get_logger
+from domyn.agents.logger import get_logger, url_origin
 from domyn.agents.tools.base import (
     _MISSING,
     FunctionDeclaration,
@@ -288,12 +288,14 @@ class MCPTool(FunctionTool):
                     input_schema = inline_schema_refs(
                         server_schema,
                         on_unresolved=lambda ref: logger.warning(
-                            f"MCP tool '{self.tool_name}' on {self.server_url}: schema "
+                            f"MCP tool '{self.tool_name}' on server '{self.group}' "
+                            f"({url_origin(self.server_url)}): schema "
                             f"reference {ref} does not resolve — dropped from the schema "
                             f"sent to the model"
                         ),
                         on_truncated=lambda cut: logger.warning(
-                            f"MCP tool '{self.tool_name}' on {self.server_url}: schema too "
+                            f"MCP tool '{self.tool_name}' on server '{self.group}' "
+                            f"({url_origin(self.server_url)}): schema too "
                             f"large to inline in full — {cut} references left as "
                             f"placeholders"
                         ),

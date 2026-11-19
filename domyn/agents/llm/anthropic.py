@@ -21,7 +21,7 @@ from domyn.agents.llm.base import (
     log_inference_response,
 )
 from domyn.agents.llm.context_window import get_json, positive_int
-from domyn.agents.logger import get_logger
+from domyn.agents.logger import get_logger, url_origin
 from domyn.agents.tools.base import (
     build_sanitized_name_map,
     sanitize_tool_choice,
@@ -272,7 +272,7 @@ class AnthropicProvider(BaseLLMProvider):
             response = await client.post(self.url, headers=headers, json=payload)
             if response.is_error:
                 body_bytes = await response.aread()
-                logger.error(f"Anthropic API {response.status_code} on {self.url}")
+                logger.error(f"Anthropic API {response.status_code} on {url_origin(self.url)}")
                 logger.debug(
                     "Anthropic API error body",
                     payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},
@@ -394,7 +394,7 @@ class AnthropicProvider(BaseLLMProvider):
             response = await client.post(self.url, headers=headers, json=payload)
             if response.is_error:
                 body_bytes = await response.aread()
-                logger.error(f"Anthropic API {response.status_code} on {self.url}")
+                logger.error(f"Anthropic API {response.status_code} on {url_origin(self.url)}")
                 logger.debug(
                     "Anthropic API error body",
                     payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},
