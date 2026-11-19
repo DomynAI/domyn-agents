@@ -47,6 +47,7 @@ class FunctionHook(Hook):
                 InputFields.AGENT_NAME,
                 InputFields.LAST_EVENT,
                 InputFields.INTERACTION_HISTORY,
+                InputFields.CONVERSATION_HISTORY,
                 InputFields.INTERACTION_CONTEXT,
             }
         ),
@@ -56,6 +57,7 @@ class FunctionHook(Hook):
                 InputFields.AGENT_NAME,
                 InputFields.LAST_EVENT,
                 InputFields.INTERACTION_HISTORY,
+                InputFields.CONVERSATION_HISTORY,
                 InputFields.INTERACTION_CONTEXT,
             }
         ),
@@ -81,6 +83,7 @@ class FunctionHook(Hook):
             {
                 InputFields.LAST_EVENT,
                 InputFields.INTERACTION_HISTORY,
+                InputFields.CONVERSATION_HISTORY,
                 InputFields.CURRENT_EVENT,
                 InputFields.INTERACTION_CONTEXT,
             }
@@ -200,6 +203,8 @@ class FunctionHook(Hook):
                     filtered[field.value] = context.last_event if context else None
                 case InputFields.INTERACTION_HISTORY:
                     filtered[field.value] = list(context.interaction_history) if context else []
+                case InputFields.CONVERSATION_HISTORY:
+                    filtered[field.value] = list(context.conversation_history) if context else []
                 case InputFields.AGENT_INPUT:
                     text = ""
                     ev = context.agent_input if context else None
