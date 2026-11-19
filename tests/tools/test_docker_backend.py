@@ -26,6 +26,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
+from domyn.agents.resources import LocalDirResource
 from domyn.agents.tools.builtin import (
     BackendUnavailableError,
     BuiltinBundleConfig,
@@ -152,30 +153,28 @@ class TestWiring:
         entry = BuiltinBundleConfig(
             name="x",
             bundles=["files", "shell"],
-            workspace=str(tmp_path),
             backend="docker",
             docker={"allowed_network": "none"},  # type: ignore[arg-type]
         )
-        built = entry.build()
+        built = entry.build(resource=LocalDirResource(id="w", paths=[str(tmp_path)]))
         assert isinstance(built.backend, DockerBackend)
 
     def test_the_browser_and_the_files_run_where_the_commands_do(self, tmp_path: Path) -> None:
         entry = BuiltinBundleConfig(
             name="x",
             bundles=["files", "shell", "browser"],
-            workspace=str(tmp_path),
             backend="docker",
         )
-        built = entry.build()
+        built = entry.build(resource=LocalDirResource(id="w", paths=[str(tmp_path)]))
         assert isinstance(built.backend, DockerBackend)
         assert built.browser is not None
         assert built.browser.backend is built.backend
 
     def test_a_file_tool_is_the_same_to_the_model_wherever_it_runs(self, tmp_path: Path) -> None:
         def tools(backend: str) -> dict[str, Any]:
-            built = BuiltinBundleConfig(
-                name="x", bundles=["files"], workspace=str(tmp_path), backend=backend
-            ).build()
+            built = BuiltinBundleConfig(name="x", bundles=["files"], backend=backend).build(
+                resource=LocalDirResource(id="w", paths=[str(tmp_path)])
+            )
             return {t.name: t for t in built.tools}
 
         in_container, here = tools("docker"), tools("local")
@@ -1203,11 +1202,10 @@ class TestToolsInTheContainer:
         built = BuiltinBundleConfig(
             name="x",
             bundles=["shell", "browser"],
-            workspace=str(make_docker.workspace),
             backend="docker",
             docker=DockerBackendOptions(image=TEST_IMAGE),
             browser={"allow_private_urls": True},  # type: ignore[arg-type]
-        ).build()
+        ).build(resource=LocalDirResource(id="w", paths=[str(make_docker.workspace)]))
         try:
             await _sh(
                 built.backend,

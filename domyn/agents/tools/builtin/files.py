@@ -651,6 +651,7 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
             path: Path to write, relative to the workspace root.
             content: The full new contents of the file.
         """
+        workspace.refuse_write(path)
         resolved = workspace.resolve(path)
         _refuse_hard_link(path, resolved)
         _refuse_text_over_document(path, resolved)
@@ -670,6 +671,7 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
             path: Path to append to, relative to the workspace root.
             content: Text to add at the end.
         """
+        workspace.refuse_write(path)
         resolved = workspace.resolve(path)
         _refuse_hard_link(path, resolved)
         _refuse_text_over_document(path, resolved)
@@ -689,6 +691,7 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
             old: Exact text to replace.
             new: Text to put in its place.
         """
+        workspace.refuse_write(path)
         resolved = workspace.resolve(path, must_exist=True)
         _refuse_hard_link(path, resolved)
         _refuse_text_over_document(path, resolved)
@@ -718,6 +721,9 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
     }
 
 
+_WRITE_OPERATIONS = frozenset({"write_file", "append_file", "edit_file"})
+
+
 def _hosted(
     name: str, func: Callable[..., str], workspace: Workspace, host: "CommandBackend"
 ) -> Callable[..., Awaitable[str]]:
@@ -729,6 +735,10 @@ def _hosted(
 
     async def hosted(**arguments: Any) -> str:
         conversation_id = arguments.pop("conversation_id", "")
+        # Refused here, on the host: the body is run against a workspace rebuilt from its
+        # roots alone, and an image of another release would not know the flag anyway.
+        if name in _WRITE_OPERATIONS:
+            workspace.refuse_write(arguments.get("path", ""))
         # Idempotent, and where an `auto` backend decides: what it decides is what it
         # says to do next.
         await host.start()
@@ -790,7 +800,7 @@ def file_tools(workspace: Workspace, host: "CommandBackend | None" = None) -> li
     from domyn.agents.tools.function_tool import FunctionTool
 
     built = build_tools(workspace)
-    gated = {"write_file", "append_file", "edit_file"}
+    gated = _WRITE_OPERATIONS
 
     tools: list[Any] = []
     for name, func in built.items():

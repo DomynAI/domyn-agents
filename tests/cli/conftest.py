@@ -135,10 +135,9 @@ def _approvals_off_the_real_home(
     # reaches the wizard without choosing a location would delete the developer's
     # own `~/.domyn/builtin-skills`. Patched where it is defined and where the wizard
     # imported it.
-    from domyn.agents.interfaces.cli import export as cli_export
     from domyn.agents.interfaces.cli import setup as cli_setup
 
-    for module in (cli_config, cli_setup, cli_export):
+    for module in (cli_config, cli_setup):
         monkeypatch.setattr(
             module, "skills_install_dir", lambda: root / cli_config.BUILTIN_SKILLS_DIRNAME
         )
@@ -185,7 +184,8 @@ def _approvals_off_the_real_home(
         monkeypatch.setattr(
             module,
             "AUTODISCOVERY_DIRS",
-            (root / "no-local-instructions" / ".domyn", root / "no-local-instructions" / ".agents"),
+            # The same folders the skills' are under (below): one autodiscovery resource.
+            (root / "no-local-skills" / ".domyn", root / "no-local-skills" / ".agents"),
         )
     # The same for the tool bundles, asked after the instructions path: the step keeps
     # what the config already mounts. `test_tool_bundles_setup.py` puts it back.

@@ -49,6 +49,9 @@ class Workspace:
     *asked for*, not what happens unasked. It does widen the structural
     boundary, so nothing belongs here that was not deliberately put here.
     """
+    read_only: bool = False
+    """Bound to a read-only resource: the write tools refuse every path
+    (:meth:`refuse_write`), the read tools work as usual."""
 
     @classmethod
     def at(
@@ -56,6 +59,7 @@ class Workspace:
         path: str | os.PathLike[str] | None = None,
         *,
         also: Iterable[str | os.PathLike[str]] = (),
+        read_only: bool = False,
     ) -> Workspace:
         root = Path(path or Path.cwd()).expanduser().resolve()
         candidates = dict.fromkeys(
@@ -72,7 +76,7 @@ class Workspace:
             for one in candidates
             if not any(other in one.parents for other in candidates if other != one)
         )
-        return cls(root=root, extra_roots=extra)
+        return cls(root=root, extra_roots=extra, read_only=read_only)
 
     @property
     def roots(self) -> tuple[Path, ...]:
@@ -118,6 +122,14 @@ class Workspace:
         if must_exist and not resolved.exists():
             raise WorkspaceError(f"'{candidate}' does not exist.")
         return resolved
+
+    def refuse_write(self, candidate: str | os.PathLike[str]) -> None:
+        """Raise when the workspace is read-only, before anything is written."""
+        if self.read_only:
+            raise WorkspaceError(
+                f"'{candidate}' was not written: the workspace is read-only. "
+                "Files here can be read, not changed."
+            )
 
     def display(self, path: Path) -> str:
         """Path as the user should see it: relative to the root when possible.

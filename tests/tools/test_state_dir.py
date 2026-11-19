@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from domyn.agents.resources.local import LocalDirResource
 from domyn.agents.tools.builtin import (
     BrowserOptions,
     BuiltinBundleConfig,
@@ -258,7 +259,9 @@ class TestTheBundle:
         (home / "processes" / "c1").mkdir(parents=True)
         (home / "conversations" / "c1").mkdir(parents=True)
         monkeypatch.setenv("DOMYN_PROJECT_DIR", str(home))
-        built = BuiltinBundleConfig(name="b", workspace=str(workspace)).build()
+        built = BuiltinBundleConfig(name="b").build(
+            resource=LocalDirResource(id="w", paths=[str(workspace)])
+        )
 
         assert built.workspace is not None and built.workspace.extra_roots == ()
         for folder in ("processes", "conversations", "credentials"):
@@ -266,7 +269,9 @@ class TestTheBundle:
         assert built.backend is not None and built.backend.state_dir == str(home)
 
     def test_without_one_the_workspace_is_unchanged(self, workspace: Path) -> None:
-        built = BuiltinBundleConfig(name="b", workspace=str(workspace)).build()
+        built = BuiltinBundleConfig(name="b").build(
+            resource=LocalDirResource(id="w", paths=[str(workspace)])
+        )
 
         assert built.workspace is not None and built.workspace.extra_roots == ()
         assert built.backend is not None and built.backend.state_dir == ".domyn"

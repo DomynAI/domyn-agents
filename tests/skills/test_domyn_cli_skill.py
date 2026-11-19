@@ -40,7 +40,7 @@ class TestWhereANewSkillGoes:
     def test_it_tells_the_agent_how_to_tell_which_case_it_is(self) -> None:
         text = " ".join(_section("Adding a skill").split())
 
-        assert "lists `.domyn/skills` and `.agents/skills`" in text
+        assert "the skills source names the `autodiscovery` resource" in text
         assert "`/config`" in text
 
     def test_with_autodiscovery_on_it_goes_in_dot_domyn_skills_and_needs_nothing_else(

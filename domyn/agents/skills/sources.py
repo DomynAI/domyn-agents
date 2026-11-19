@@ -17,17 +17,26 @@ from __future__ import annotations
 
 import asyncio
 import os
+import posixpath
 import shutil
 import sys
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 from domyn.agents.logger import get_logger
+from domyn.agents.resources.base import Resource, ResourceError, relative_path
 from domyn.agents.skills.external_files import resolve_external_files
-from domyn.agents.skills.layout import listed_path_is_linked, own_skill_file, walk_skill_tree
+from domyn.agents.skills.layout import (
+    SKILL_FILENAMES,
+    SKIPPED_DIRS,
+    listed_path_is_linked,
+    own_skill_file,
+    walk_skill_tree,
+)
 from domyn.agents.skills.models import (
     LoadedSkills,
     SkillContent,
@@ -280,6 +289,264 @@ class LocalDirSkillSource(SkillSource):
 
     def describe(self) -> str:
         return f"{self.type}({', '.join(str(p) for p in self.paths)})"
+
+
+class ResourceRef(BaseModel):
+    """One resource a source reads: its id, and how, when it differs from the source's.
+
+    Written as the bare id, or as ``{id: ..., path: ..., walk: ...}``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    path: str | None = None
+    """The folder read under each of its roots; the source's ``path`` when not given."""
+    walk: bool = False
+    """Instructions only: read every subfolder too, as the loader walks a project's
+    ``.domyn`` (`find_instruction_files`)."""
+
+    @field_validator("path")
+    @classmethod
+    def _relative(cls, value: str | None) -> str | None:
+        return None if value is None else (relative_path(value) or ".")
+
+    def subpath(self, default: str) -> str:
+        return self.path or default
+
+    def written(self) -> str | dict[str, Any]:
+        """As a configuration writes it: the bare id when nothing else is set."""
+        if self.path is None and not self.walk:
+            return self.id
+        return self.model_dump(exclude_defaults=True)
+
+
+def resource_refs(value: Any) -> list[ResourceRef]:
+    """``resource:`` as written — one id, or an ordered list of ids and ``{id, path,
+    walk}`` entries — as a list of refs. Shared by the skills and instructions sources,
+    which take it the same way."""
+    entries = [value] if isinstance(value, str | dict | ResourceRef) else value
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("'resource' must name a resource id, or an ordered list of them")
+    refs: list[ResourceRef] = []
+    for entry in entries:
+        if isinstance(entry, ResourceRef):
+            refs.append(entry)
+        elif isinstance(entry, str) and entry:
+            refs.append(ResourceRef(id=entry))
+        elif isinstance(entry, dict):
+            refs.append(ResourceRef.model_validate(entry))
+        else:
+            raise ValueError(f"'resource' entry {entry!r} is neither an id nor {{id, path}}")
+    return refs
+
+
+def resource_ids(value: Any) -> list[str]:
+    """The ids ``resource:`` names, in order."""
+    return [ref.id for ref in resource_refs(value)]
+
+
+def bind_resources(ids: list[str], declared: Mapping[str, Resource], where: str) -> list[Resource]:
+    """The resources ``ids`` name, in order, or a :class:`ResourceError` naming the one
+    no ``resources:`` entry declares."""
+    missing = [one for one in ids if one not in declared]
+    if missing:
+        raise ResourceError(
+            f"{where} names resource {', '.join(repr(m) for m in missing)}, which no "
+            "'resources:' entry declares"
+        )
+    return [declared[one] for one in ids]
+
+
+# A walk of a remote resource lists folders one request at a time, so it is bounded:
+# a bucket is not a folder of skills, and a skills path pointed at one by mistake
+# must not list it whole on every turn.
+REMOTE_SKILL_DEPTH = 4
+REMOTE_SKILL_LIMIT = 500
+
+
+class ResourceSkillSource(SkillSource):
+    """Skills read from declared resources: ``path`` under every root, earlier wins.
+
+    The resources are named by id (``resource:``) and bound when the configuration
+    loads (:meth:`bind`); an unbound source refuses to load rather than read nothing.
+    A resource on this machine (``local_dir``) is read exactly as a ``local_dir``
+    source reads its paths — the same walk, the same refusal of links, its
+    ``external_files`` checked — so moving a configuration onto resources changes
+    nothing about what loads. Any other resource is read through its file-store
+    view, with the same layout: a folder holding ``SKILL.md`` is a skill, a loose
+    ``.md`` directly under ``path`` is one, any other folder a group.
+    """
+
+    type: str = "resource"
+    resource: list[ResourceRef] = Field(
+        description="Resource ids, or {id, path} entries, in order (earlier wins)"
+    )
+    path: str = Field(
+        default="skills", description="The folder read under every root of an entry naming none"
+    )
+
+    _bound: list[Resource] = PrivateAttr(default_factory=list)
+
+    @field_validator("resource", mode="before")
+    @classmethod
+    def _refs(cls, value: Any) -> list[ResourceRef]:
+        refs = resource_refs(value)
+        if any(ref.walk for ref in refs):
+            raise ValueError("'walk' is for instructions: a skills folder is always walked")
+        return refs
+
+    @field_validator("path")
+    @classmethod
+    def _relative(cls, value: str) -> str:
+        return relative_path(value) or "."
+
+    @property
+    def ids(self) -> list[str]:
+        return [ref.id for ref in self.resource]
+
+    def bind(self, declared: Mapping[str, Resource]) -> ResourceSkillSource:
+        self._bound = bind_resources(self.ids, declared, "the skills source")
+        return self
+
+    @property
+    def bound(self) -> list[Resource]:
+        return list(self._bound)
+
+    def _reads(self) -> list[tuple[Resource, str]]:
+        return [
+            (one, ref.subpath(self.path))
+            for one, ref in zip(self._bound, self.resource, strict=True)
+        ]
+
+    def local_paths(self) -> list[Path] | None:
+        """The folders read, when every bound resource is on this machine."""
+        paths: list[Path] = []
+        for one, subpath in self._reads():
+            roots = one.local_roots()
+            if roots is None:
+                return None
+            paths.extend(root / subpath for root in roots)
+        return paths
+
+    async def load(self, query: SkillQuery) -> LoadedSkills:
+        if not self._bound:
+            raise ResourceError(
+                f"The skills source names resource {', '.join(self.ids)} but was never "
+                "bound to it: load the configuration through ConfigurationV1, or call bind()."
+            )
+        descriptors: dict[str, SkillDescriptor] = {}
+        bodies: dict[str, SkillContent] = {}
+        for one, subpath in self._reads():
+            roots = one.local_roots()
+            if roots is not None:
+                local = LocalDirSkillSource(paths=[root / subpath for root in roots])
+                loaded = await local.load(query)
+            else:
+                loaded = await self._load_remote(one, subpath, query)
+            for descriptor in loaded.index.skills:
+                if descriptor.name in descriptors:
+                    continue
+                descriptors[descriptor.name] = descriptor
+                if (body := loaded.body(descriptor.name)) is not None:
+                    bodies[descriptor.name] = body
+        return LoadedSkills(index=SkillIndex(skills=list(descriptors.values())), bodies=bodies)
+
+    async def _load_remote(
+        self, resource: Resource, subpath: str, query: SkillQuery
+    ) -> LoadedSkills:
+        files = await _remote_skill_files(resource, "" if subpath == "." else subpath)
+        texts = await asyncio.gather(
+            *(resource.read_text(one) for one in files), return_exceptions=True
+        )
+        descriptors: list[SkillDescriptor] = []
+        bodies: dict[str, SkillContent] = {}
+        for file, text in zip(files, texts, strict=True):
+            if isinstance(text, BaseException):
+                if not isinstance(text, Exception):
+                    raise text
+                get_logger().warning(
+                    f"skipping unreadable skill {file} in resource {resource.id!r}: "
+                    f"{type(text).__name__}"
+                )
+                get_logger().debug(f"skill read detail for {file}: {text}")
+                continue
+            folder, name = posixpath.split(file)
+            fallback = posixpath.basename(folder) if name in SKILL_FILENAMES else name[:-3]
+            try:
+                descriptor, content = parse_skill_text(
+                    text, fallback_name=fallback or name, source=self.type
+                )
+            except ValueError as exc:
+                get_logger().warning(f"skipping unparsable skill {file}: {type(exc).__name__}")
+                get_logger().debug(f"skill parse detail for {file}: {exc}")
+                continue
+            if descriptor.name in bodies:
+                continue
+            descriptors.append(
+                evaluate_requirements(descriptor, available_tools=query.available_tools)
+            )
+            bodies[descriptor.name] = content
+        return LoadedSkills(index=SkillIndex(skills=descriptors), bodies=bodies)
+
+    async def index(self, query: SkillQuery) -> SkillIndex:
+        return (await self.load(query)).index
+
+    async def fetch(self, ref: SkillRef, query: SkillQuery) -> SkillContent:
+        content = (await self.load(query)).body(ref.name)
+        if content is None:
+            raise SkillNotFoundError(ref.name)
+        return narrow_to_section(content, ref)
+
+    def describe(self) -> str:
+        shown = []
+        for ref in self.resource:
+            subpath = ref.subpath(self.path)
+            shown.append(ref.id if subpath == "." else f"{ref.id}/{subpath}")
+        return f"{self.type}({', '.join(shown)})"
+
+
+def local_source_paths(source: Any) -> list[Path] | None:
+    """The folders a skills or instructions source reads, when they are all on this
+    machine: a ``local_dir`` source's paths, or the paths a bound ``resource`` source
+    reads under its local resources. ``None`` for anything else."""
+    if isinstance(getattr(source, "paths", None), list) and getattr(source, "type", None) == (
+        "local_dir"
+    ):
+        return list(source.paths)
+    local_paths = getattr(source, "local_paths", None)
+    if callable(local_paths) and getattr(source, "bound", None):
+        found = local_paths()
+        return list(found) if found is not None else None
+    return None
+
+
+async def _remote_skill_files(resource: Resource, base: str) -> list[str]:
+    """The skill files under ``base`` of a resource, in the layout's order: depth
+    first, sorted by name in each folder, hidden and dependency folders skipped."""
+    found: list[str] = []
+
+    async def walk(folder: str, depth: int) -> None:
+        if depth > REMOTE_SKILL_DEPTH or len(found) >= REMOTE_SKILL_LIMIT:
+            return
+        entries = await resource.list(folder)
+        names = {posixpath.basename(one.path): one for one in entries}
+        own = next((names[n] for n in SKILL_FILENAMES if n in names and not names[n].is_dir), None)
+        if own is not None:
+            # A folder holding its own SKILL.md is one skill, and is not entered.
+            found.append(own.path)
+            return
+        for name in sorted(names):
+            entry = names[name]
+            if name.startswith(".") or name in SKIPPED_DIRS:
+                continue
+            if entry.is_dir:
+                await walk(entry.path, depth + 1)
+            elif depth == 0 and name.lower().endswith(".md"):
+                found.append(entry.path)
+
+    await walk(base, 0)
+    return found[:REMOTE_SKILL_LIMIT]
 
 
 def _load_skill_file(

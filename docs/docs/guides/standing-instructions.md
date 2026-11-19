@@ -61,14 +61,21 @@ The text of all standing instructions together, not counting the headers, is lim
 Any agent can declare its own standing instructions, in YAML or in Python. An agent that declares none has none: a team member does not inherit them from the main agent.
 
 ```yaml
+resources:
+  - id: notes
+    type: local_dir
+    paths: [./instructions, ~/notes/brief.md]
+
 agents:
   - name: Assistant
     ...
     standing_instructions:
       source:
-        type: local_dir
-        paths: [./instructions, ~/notes/brief.md]
+        type: resource
+        resource: notes
 ```
+
+A folder is read flat: its `SOUL.md` and `AGENTS.md`. To read its subfolders too, as `domyn setup` does for a project's `.domyn` and `.agents`, the entry says so: `resource: [{id: notes, walk: true}]`. A `local_dir` source, which lists the paths itself, is for agents built in Python; a configuration file refuses it.
 
 ```python
 from domyn.agents.instructions import InstructionRuntime, LocalDirInstructionsSource
@@ -105,14 +112,22 @@ When such an agent is run with `domyn run`, its source is used as it is declared
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `source` | source | required | Where the instructions come from: `local_dir` or `memory`. |
+| `source` | source | required | Where the instructions come from: `resource` or `memory` (and `LocalDirInstructionsSource` in Python). |
 | `max_bytes` | `int` | `32768` | Limit on the text of all instructions together, in bytes. See [Size limit](#size-limit). |
 
-`local_dir` source:
+`local_dir` source (`LocalDirInstructionsSource`, in Python only):
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `paths` | list of paths | `[]` | Directories, from which `SOUL.md` and `AGENTS.md` (or `AGENT.md`) are read, and files, read whatever their name. Only the files directly in a directory are read, except `.domyn` and `.agents` written as relative paths, which are searched with their subfolders. `~` is expanded. |
+| `paths` | list of paths | `[]` | Directories, from which `SOUL.md` and `AGENTS.md` (or `AGENT.md`) are read, and files, read whatever their name. Only the files directly in a directory are read, except those also in `walk`. `~` is expanded. |
+| `walk` | list of paths | `[]` | Entries of `paths` searched with their subfolders, hidden and dependency folders skipped and no link followed. |
+
+`resource` source, in a YAML file that declares [`resources`](../reference/yaml-schema.md#resources):
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `resource` | id, or list | required | The resources to read, earlier first: an id, or `{id, path, walk}` to read another folder in it (`path`) or its subfolders too (`walk: true`). For a `local_dir` resource, each of its folders is read as a `local_dir` source reads a path. |
+| `path` | `str` | `.` | The folder read in each of them, for an entry naming none. |
 
 `memory` source:
 
