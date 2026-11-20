@@ -951,7 +951,10 @@ class ConfigurationV1(BaseModel):
             for bundle_name in agent_config.get("tool_bundles", []):
                 if bundle_name not in tool_bundles:
                     raise ValueError(f"Tool bundle '{bundle_name}' not found in configuration")
-                built = tool_bundles[bundle_name].build(extra_roots=extra_workspace_roots)
+                built = tool_bundles[bundle_name].build(
+                    extra_roots=extra_workspace_roots,
+                    llm_provider=agent_config.get("llm_provider"),
+                )
                 agent_builtin_tools.append(built)
                 new_tools.extend(built.tools)
 

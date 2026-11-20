@@ -200,7 +200,22 @@ class AnthropicProvider(BaseLLMProvider):
             else:
                 # Regular user/assistant message
                 if isinstance(msg.content, list):
-                    anthropic_messages.append({"role": msg.role, "content": msg.content})
+                    blocks: list[dict[str, Any]] = []
+                    for part in msg.content:
+                        url = (part.get("image_url") or {}).get("url")
+                        if part.get("type") != "image_url" or not isinstance(url, str):
+                            blocks.append(part)
+                            continue
+                        if url.startswith("data:"):
+                            # "data:image/png;base64,<data>"
+                            header, data = url.split(",", 1)
+                            media_type = header.removeprefix("data:").split(";")[0]
+                            source = {"type": "base64", "media_type": media_type, "data": data}
+                        else:
+                            source = {"type": "url", "url": url}
+                        blocks.append({"type": "image", "source": source})
+                    if blocks:
+                        anthropic_messages.append({"role": msg.role, "content": blocks})
                 else:
                     content_str = (msg.content or "").strip()
                     if (

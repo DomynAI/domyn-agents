@@ -119,6 +119,59 @@ class TestOpenAIProvider:
         assert "reasoning_effort" not in params
         assert "reasoning" not in params
 
+    def test_max_tokens_becomes_max_output_tokens(self):
+        """The Responses API refuses max_tokens (a 400): setup writes it, so it is renamed."""
+        provider = OpenAIProvider(
+            model_name="gpt-4o-mini",
+            api_key="test-key",
+            generation_params={"max_tokens": 16000},
+        )
+        params = provider.compute_generation_params
+
+        assert "max_tokens" not in params
+        assert params["max_output_tokens"] == 16000
+
+    def test_max_output_tokens_default_without_max_tokens(self):
+        """Without max_tokens the default limit is sent as it was."""
+        params = self.provider.compute_generation_params
+
+        assert "max_tokens" not in params
+        assert params["max_output_tokens"] == 4000
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("streaming", [False, True])
+    @respx.mock
+    async def test_max_tokens_never_reaches_the_request(self, streaming):
+        """Both calls send the limit as max_output_tokens, never as max_tokens."""
+        provider = OpenAIProvider(
+            model_name="gpt-4o-mini",
+            api_key="test-key",
+            generation_params={"max_tokens": 16000},
+        )
+        captured: dict = {}
+
+        def capture(request):
+            captured["body"] = json.loads(request.content)
+            if streaming:
+                return httpx.Response(
+                    200,
+                    content=_sse(_text_delta("Hi")),
+                    headers={"Content-Type": "text/event-stream"},
+                )
+            return httpx.Response(200, json={"output": [], "usage": {}})
+
+        respx.post(OPENAI_URL).mock(side_effect=capture)
+
+        messages = [LLMMessage(role="user", content="Hello")]
+        if streaming:
+            async for _ in provider.generate_streaming(messages):
+                pass
+        else:
+            await provider.generate(messages)
+
+        assert "max_tokens" not in captured["body"]
+        assert captured["body"]["max_output_tokens"] == 16000
+
     def test_init_without_api_key(self):
         """Test provider initialization rejects explicit None API key."""
         from unittest.mock import patch

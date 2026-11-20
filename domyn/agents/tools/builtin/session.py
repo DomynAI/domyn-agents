@@ -10,8 +10,9 @@ timestamp so it can be found again from a transcript, a log line or a
 folder nobody will ever open.
 
     <state folder>/conversations/<conversation_id>/
-        venv/      where the agent's `pip install` goes
-        output/    files it produced and may want to hand back
+        venv/         where the agent's `pip install` goes
+        output/       files it produced and may want to hand back
+        attachments/  images the user attached in the CLI, for ``read_image``
 
 **The venv is the point of this module.** Without it a command inherits the
 environment the CLI was launched from, and `pip install requests` lands in
@@ -133,6 +134,12 @@ class SessionPaths:
         return self.home / "output"
 
     @property
+    def attachments(self) -> Path:
+        """Images the user attached to the conversation (Ctrl-V, a pasted or
+        dragged path), which ``read_image`` may read for that conversation alone."""
+        return self.home / "attachments"
+
+    @property
     def python(self) -> Path:
         bindir = "Scripts" if os.name == "nt" else "bin"
         return self.venv / bindir / ("python.exe" if os.name == "nt" else "python")
@@ -140,6 +147,29 @@ class SessionPaths:
     @property
     def bin(self) -> Path:
         return self.venv / ("Scripts" if os.name == "nt" else "bin")
+
+
+def default_state_dir() -> str:
+    """The state folder a backend built without one uses: ``DOMYN_PROJECT_DIR``, else
+    ``HOME_DIRNAME`` relative to the workspace (``CommandBackend.state_dir``'s form)."""
+    return str(state_dir_from_environment() or HOME_DIRNAME)
+
+
+def state_base(root: Path, state_dir: str) -> Path:
+    """A backend's state folder (``CommandBackend.state_dir``: absolute, or relative
+    to the workspace ``root``) as a path."""
+    state = Path(state_dir).expanduser()
+    return state if state.is_absolute() else root / state
+
+
+def attachments_dir(root: Path, state_dir: str, conversation_id: str) -> Path:
+    """The folder of the images attached to one conversation.
+
+    One function for the CLI, which writes the files, and for ``read_image``, which
+    reads them, so the two cannot disagree on where they are."""
+    return SessionPaths(
+        root=root, conversation_id=conversation_id, state_dir=state_base(root, state_dir)
+    ).attachments
 
 
 class SessionEnvironment:

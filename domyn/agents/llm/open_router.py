@@ -252,12 +252,6 @@ class OpenRouterProvider(BaseLLMProvider):
             structured_outputs_params = await self.preprocess_structured_outputs(
                 client=client, structured_outputs=structured_outputs
             )
-            if self.append_text_system_prompt:
-                messages[0].content += "\n" + self.append_text_system_prompt
-
-            if self.append_text_last_message:
-                messages[-1].content += "\n" + self.append_text_last_message
-
             serialized_messages = [message.to_dict() for message in messages]
             # Sanitize tool names at the boundary; name_map restores originals in the response.
             tools, tool_choice, name_map = sanitize_tool_names(
@@ -474,7 +468,5 @@ class OpenRouterProvider(BaseLLMProvider):
             or {"temperature": 0.7, "max_tokens": 2000},
             api_key=config.get("api_key"),
             name=config.get("name") or config["model_name"],
-            append_text_last_message=config.get("append_text_last_message"),
-            append_text_system_prompt=config.get("append_text_system_prompt"),
             reasoning_supported=config.get("reasoning_supported", False),
         )

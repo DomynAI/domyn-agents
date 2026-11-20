@@ -18,9 +18,13 @@ On a terminal, Ctrl-B goes back to the previous question (`run_setup`, `_Recall`
 
 from __future__ import annotations
 
+import asyncio
 import copy
+import json
+import logging
 import os
 import shutil
+import sys
 from collections.abc import Callable, Collection, Iterable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -84,6 +88,9 @@ from domyn.agents.interfaces.cli.config import (
 )
 from domyn.agents.interfaces.cli.prompt import GoBack, back_key, interactive_terminal, read_line
 from domyn.agents.interfaces.cli.select import multiselect, select
+from domyn.agents.llm import LLMProviderFactory
+from domyn.agents.llm.base import image_message
+from domyn.agents.planner_strategy.context_management.compaction import CompactionConfig
 from domyn.agents.skills.catalog import (
     BuiltinSkill,
     SkillInstallError,
@@ -224,6 +231,8 @@ class _Draft:
     configuration_id: str = ""
     max_tokens: int = 0
     context_window: int | None = None
+    vision: bool = False
+    """Whether the model took the image setup sent it (`_image_rejection`)."""
     decisions: DecisionsChoice | None = None
     memory: MemoryChoice | None = None
     discard: list[Path] = field(default_factory=list)
@@ -350,6 +359,79 @@ def _decision_endpoint_answers(base_url: str, model: str, api_key: str | None = 
     if response.status_code >= 400:
         detail = response.text.strip().replace("\n", " ")[:120]
         return f"{base_url} answered {response.status_code}: {detail}"
+    return None
+
+
+def _image_rejection(provider: ProviderConfig) -> str | None:
+    """``None`` if the model took an image, else one line saying what happened.
+
+    Asked with a real request.
+
+    The image is 64 pixels a side and not one: some image processors may refuse an
+    image smaller than a patch.
+
+    An endpoint that does not answer leaves the agent without ``read_image`` until setup runs again.
+    """
+    import io
+
+    from PIL import Image
+
+    picture = io.BytesIO()
+    Image.new("RGB", (64, 64), "red").save(picture, format="PNG")
+    # The entry the file gets, so the request is the one a session would send,
+    # with the key itself in place of the variable naming it and a short answer.
+    entry = configuration_v1_dict_from(provider, AgentConfig(), CompactionConfig())[
+        "llm_providers"
+    ][0]
+    entry = {
+        **entry,
+        "api_key": resolve_api_key(provider),
+        "generation_params": {"max_tokens": 16},
+        "body": {"max_tokens": 16},
+    }
+
+    # The provider logs a refused request as an error, written to stderr outside the
+    # wizard's console: a row `_Screen` does not count, so going back left the question
+    # before it on screen twice. The refusal is said on the wizard's own line instead.
+    library_logger = logging.getLogger("domyn.agents")
+    level = library_logger.level
+    library_logger.setLevel(logging.CRITICAL + 1)
+    try:
+        model = LLMProviderFactory.from_config(entry)
+        run_sync(
+            asyncio.wait_for(
+                model.generate(
+                    [image_message("What colour is this image?", picture.getvalue(), "image/png")]
+                ),
+                timeout=20.0,
+            )
+        )
+    except Exception as exc:
+        http_response = getattr(exc, "response", None)
+        status = getattr(http_response, "status_code", None)
+        if isinstance(status, int):
+            text = str(getattr(http_response, "text", "")).strip()
+            # The message written for people, where the usual error bodies put it:
+            # {"error": {"message": …}} (OpenAI, Anthropic, LiteLLM, OpenRouter, recent
+            # vLLM), {"message": …} (older vLLM), {"detail": …} (FastAPI), {"error": "…"}.
+            # Any other body is shown as it came.
+            try:
+                body = json.loads(text)
+            except ValueError:
+                body = None
+            if isinstance(body, dict):
+                error = body.get("error")
+                message = error.get("message") if isinstance(error, dict) else error
+                message = message or body.get("message") or body.get("detail")
+                if isinstance(message, str) and message.strip():
+                    text = message
+            # One line: a carriage return left in it would move the cursor back.
+            detail = " ".join(text.split())[:120]
+            return f"HTTP {status}: {detail}" if detail else f"HTTP {status}"
+        return type(exc).__name__
+    finally:
+        library_logger.setLevel(level)
+
     return None
 
 
@@ -1630,6 +1712,9 @@ def run_setup(
     # The space's models by what they were asked with. Outside the draft, so going
     # back over the lookup does not ask the platform again.
     domyn_models: dict[tuple[str, ...], dict[str, str]] = {}
+    # What each provider answered to an image, by the settings it was sent with.
+    # Outside the draft for the same reason: going back over the check sends nothing.
+    image_rejections: dict[tuple[str, str | None], str | None] = {}
 
     console.print()
     title = (
@@ -1924,6 +2009,57 @@ def run_setup(
         decisions = decisions_after(d)
         return bool(d.memory and d.memory.enabled and decisions and decisions.decides_memory)
 
+    def drafted_provider(d: _Draft) -> ProviderConfig:
+        """The provider the model answers describe. Not for a kept model, which answers none."""
+        return ProviderConfig(
+            type=d.provider_type,
+            model_name=d.model_name,
+            url=d.url or None,
+            space_id=d.space_id or None,
+            configuration_id=d.configuration_id or None,
+            api_key_env=PROVIDER_HINTS.get(d.provider_type, {}).get("env", "LLM_API_KEY"),
+            max_tokens=d.max_tokens,
+            context_window=d.context_window,
+        )
+
+    def check_vision(d: _Draft) -> None:
+        asked = provider if d.keep_model else drafted_provider(d)
+        asked_with = asked.model_dump_json()
+        api_key = resolve_api_key(asked)
+        if (asked_with, api_key) not in image_rejections:
+            console.print(
+                "  Checking whether the model reads images…",
+                style=theme.style("meta"),
+                highlight=False,
+            )
+            # No question reads the keys pressed while the model is asked: the terminal
+            # would echo them, a row going back does not erase, and pass them to the next
+            # question, which an impatient Enter then answered unseen. Neither is done:
+            # not echoed, and dropped when the answer comes (TCSAFLUSH). Ctrl-C still aborts.
+            terminal_settings = None
+            if sys.platform != "win32" and sys.stdin.isatty():
+                import termios
+
+                terminal_settings = termios.tcgetattr(sys.stdin.fileno())
+                silent = copy.deepcopy(terminal_settings)
+                silent[3] &= ~termios.ECHO
+                termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, silent)
+            try:
+                image_rejections[(asked_with, api_key)] = _image_rejection(asked)
+            finally:
+                if terminal_settings is not None:
+                    termios.tcsetattr(sys.stdin.fileno(), termios.TCSAFLUSH, terminal_settings)
+        rejection = image_rejections[(asked_with, api_key)]
+        d.vision = rejection is None
+        console.print(
+            "  Vision: enabled"
+            if d.vision
+            else f"  Vision: not supported by this model ({rejection})",
+            style=theme.style("meta"),
+            highlight=False,
+            markup=False,
+        )
+
     def asks_model(d: _Draft) -> bool:
         return not d.keep_model
 
@@ -1958,6 +2094,14 @@ def run_setup(
         ),
         _Step("max tokens", ask_max_tokens, asks_model),
         _Step("context window", ask_context_window, asks_model),
+        # Asks nothing, and runs for a kept model too: a config written before
+        # `read_image` existed says nothing about images, and keeping its model
+        # would otherwise never find out.
+        _Step(
+            "vision",
+            check_vision,
+            lambda d: bool(provider.model_name if d.keep_model else d.model_name),
+        ),
     ]
     section_steps = [
         _Step("keep instructions", keep_instructions, lambda d: ask_keep),
@@ -2046,18 +2190,8 @@ def run_setup(
         _screen.reset(screen_token)
 
     agent = draft.agent
-    new_provider = provider
-    if not draft.keep_model:
-        new_provider = ProviderConfig(
-            type=draft.provider_type,
-            model_name=draft.model_name,
-            url=draft.url or None,
-            space_id=draft.space_id or None,
-            configuration_id=draft.configuration_id or None,
-            api_key_env=PROVIDER_HINTS.get(draft.provider_type, {}).get("env", "LLM_API_KEY"),
-        ).model_copy(
-            update={"max_tokens": draft.max_tokens, "context_window": draft.context_window}
-        )
+    new_provider = provider if draft.keep_model else drafted_provider(draft)
+    new_provider = new_provider.model_copy(update={"vision": draft.vision})
     # `None` unless the wizard actually asked, so a `provider_only` run leaves
     # whatever the file says about decisions and memory exactly where it found it.
     config_dict = configuration_v1_dict_from(

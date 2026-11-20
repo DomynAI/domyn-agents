@@ -52,6 +52,7 @@ dependencies = [
     # A PDF is read page by page with anydoc's own PDF engine, so a page with
     # no text is named instead of vanishing or stopping the whole document.
     "pdf-inspector>=1.25.2,<2",
+    "pillow>=13.0.0",
 ]
 
 [project.urls]

@@ -24,8 +24,6 @@ class TestCerebrasProvider:
         assert provider.url == "https://api.cerebras.ai/v1/chat/completions"
         assert provider.generation_params["temperature"] == 0.7
         assert provider.generation_params["max_tokens"] == 8000
-        assert provider.append_text_system_prompt is None
-        assert provider.append_text_last_message is None
         assert provider.type == "cerebras"
 
     def test_generation_params_merging(self):
@@ -86,27 +84,6 @@ class TestCerebrasProvider:
         assert response.content == "Hi there! How can I help you?"
         assert response.generated_tokens == 15
         assert response.execution_time > 0
-
-    @pytest.mark.asyncio
-    @respx.mock
-    async def test_generate_with_append_text(self):
-        """Test generation with appended text to prompt."""
-        messages = [LLMMessage(role="user", content="Hello")]
-
-        mock_response_data = {
-            "choices": [{"message": {"content": "Response"}}],
-            "usage": {"completion_tokens": 5},
-        }
-
-        route = respx.post("https://api.cerebras.ai/v1/chat/completions").mock(
-            return_value=httpx.Response(200, json=mock_response_data)
-        )
-
-        await self.provider.generate(messages)
-
-        # Verify that the append_text was added to the last message
-        request_body = json.loads(route.calls.last.request.content)
-        assert request_body["messages"][-1]["content"] == "Hello"
 
     @pytest.mark.asyncio
     @respx.mock
@@ -488,33 +465,6 @@ class TestCerebrasProvider:
         """Test that name defaults to model_name if not provided."""
         provider = CerebrasProvider(model_name="llama3.1-8b", api_key="test-key")
         assert provider.name == "llama3.1-8b"
-
-    def test_from_config_with_custom_append_text(self):
-        """Test provider creation from config with custom append_text."""
-        config = {
-            "url": "https://api.cerebras.ai/v1/chat/completions",
-            "model_name": "llama3.1-8b",
-            "api_key": "test-key",
-            "append_text_last_message": " /custom_suffix",
-        }
-
-        provider = CerebrasProvider.from_config(config)
-
-        assert provider.append_text_last_message == " /custom_suffix"
-
-    def test_from_config_with_default_append_text(self):
-        """Test provider creation from config uses default append_text when not specified."""
-        config = {
-            "url": "https://api.cerebras.ai/v1/chat/completions",
-            "model_name": "llama3.1-8b",
-            "api_key": "test-key",
-        }
-
-        provider = CerebrasProvider.from_config(config)
-
-        # Should use the default append_text value
-        assert provider.append_text_last_message is None
-        assert provider.append_text_system_prompt is None
 
 
 # ---------------------------------------------------------------------------

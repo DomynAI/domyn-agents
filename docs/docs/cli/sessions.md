@@ -71,6 +71,17 @@ Ctrl-D and `/exit` also end the session. When it ends, if anything was said, it 
 
 A terminal reports when a key is pressed, not when it is let go, so the release is read from the key repeat stopping: the message is sent a fraction of a second after you let go. `/voice` again turns it off. The language is detected from what you say; to transcribe somewhere else, or to fix the language, see [Voice](configuration.md#voice).
 
+### Attaching images
+
+With a model that reads images (the agent then has [`read_image`](tools-and-approvals.md)), an image can go with a message in two ways:
+
+- **Ctrl-V** pastes the image in the clipboard, a screenshot for example. Not Cmd+V: the terminal pastes text only. On Linux it needs `wl-paste` (Wayland) or `xclip` (X11).
+- **Dragging an image file** onto the terminal, or pasting its path, attaches it. Several at once work too. A path to any other file is pasted as text.
+
+Each image shows as `[Image #1]` where you put it, and you write your question around it; deleting the tag leaves the image out. The image is copied, under its own name (a pasted screenshot is `pasted-1.png`), into the conversation's folder (`conversations/<id>/attachments` beside the history), the message tells the agent where it is, and the agent looks at it with `read_image` when it needs to. Nothing is sent to the model until then. The copies are removed with the conversation by `domyn clean`, and never exported.
+
+When the model does not read images, or the clipboard holds none, a line above the prompt says so. Over SSH the clipboard is the one on your own computer, which the session cannot read: paste the path of an image on the machine the session runs on instead.
+
 ## Commands
 
 Type `/help` in a session for this list. Commands complete with Tab.

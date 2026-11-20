@@ -571,14 +571,28 @@ class TestTheKeyIsAnnouncedAtStartup:
     """Nothing shows auto-approve while it is off, so the startup line is where
     the key is learnt."""
 
-    async def _status_line(self, monkeypatch: pytest.MonkeyPatch, terminal: bool) -> str:
-        from domyn.agents import Agent
+    async def _status_line(
+        self, monkeypatch: pytest.MonkeyPatch, terminal: bool, reads_images: bool = False
+    ) -> str:
+        from domyn.agents import Agent, FunctionTool
         from domyn.agents.cli.commands.run import command
 
         buffer = io.StringIO()
         monkeypatch.setattr(command, "console", Console(file=buffer, width=200))
         monkeypatch.setattr(command, "interactive_terminal", lambda: terminal)
-        agent = Agent(name="Assistant", description="d", instruction="i", llm_provider=MagicMock())
+
+        def read_image(path: str, query: str) -> str:
+            """Look at an image."""
+            return ""
+
+        tools = [FunctionTool(func=read_image)] if reads_images else []
+        agent = Agent(
+            name="Assistant",
+            description="d",
+            instruction="i",
+            llm_provider=MagicMock(),
+            tools=tools,
+        )
 
         async def done() -> int:
             return 0
@@ -603,6 +617,21 @@ class TestTheKeyIsAnnouncedAtStartup:
     @pytest.mark.asyncio
     async def test_a_pipe_is_not(self, monkeypatch: pytest.MonkeyPatch) -> None:
         assert "shift+tab" not in await self._status_line(monkeypatch, terminal=False)
+
+    @pytest.mark.asyncio
+    async def test_ctrl_v_is_announced_when_the_agent_reads_images(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        line = await self._status_line(monkeypatch, terminal=True, reads_images=True)
+        assert "Ctrl-V pastes an image" in line
+
+    @pytest.mark.asyncio
+    async def test_ctrl_v_is_not_announced_when_it_cannot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        assert "Ctrl-V" not in await self._status_line(monkeypatch, terminal=True)
+        line = await self._status_line(monkeypatch, terminal=False, reads_images=True)
+        assert "Ctrl-V" not in line
 
 
 class _Clock:
@@ -930,3 +959,162 @@ class TestGoingBackInReadLine:
         with prompt_mod.back_key():
             assert prompt_mod.back_key_on()
         assert not prompt_mod.back_key_on()
+
+
+class TestAttachingImagesInTheEditor:
+    """Ctrl-V and a pasted path attach an image; the line sent names the file.
+    Through a real editor, as the keys a terminal sends: a bracketed paste is
+    ``ESC [200~ … ESC [201~``, Ctrl-V is the control character 0x16."""
+
+    @staticmethod
+    def _attachments(tmp_path: Path, *, readable: bool = True) -> Any:
+        from domyn.agents.interfaces.cli.attachments import Attachments, Place
+
+        state = tmp_path / "state"
+        state.mkdir(exist_ok=True)
+        place = Place(state=state, folder=state / "conversations" / "c1" / "attachments")
+        return Attachments(lambda: place if readable else None)
+
+    @staticmethod
+    def _picture(tmp_path: Path) -> Path:
+        from PIL import Image
+
+        shot = tmp_path / "My Shot.png"
+        Image.new("RGB", (4, 4), "red").save(shot)
+        return shot
+
+    @pytest.mark.asyncio
+    async def test_a_pasted_image_path_is_attached(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        shot = self._picture(tmp_path)
+        with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
+            session.attachments = self._attachments(tmp_path)
+            dragged = str(shot).replace(" ", "\\ ")
+            keys.send_text(f"\x1b[200~{dragged}\x1b[201~what is it?\r")
+            sent = await session.ask()
+        assert sent.startswith("[Image #1, attached by the user: ")
+        assert str(tmp_path / "state" / "conversations" / "c1" / "attachments") in sent
+        assert sent.endswith("Look at it with read_image.] what is it?")
+
+    @pytest.mark.asyncio
+    async def test_a_pasted_text_is_pasted_as_before(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
+            session.attachments = self._attachments(tmp_path)
+            keys.send_text("\x1b[200~line one\r\nline two\x1b[201~\r")
+            assert await session.ask() == "line one\nline two"
+
+    @pytest.mark.asyncio
+    async def test_a_path_that_cannot_be_attached_stays_as_text(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """And the editor says why, so the path in the line is not taken for an image."""
+        shot = self._picture(tmp_path)
+        with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
+            session.attachments = self._attachments(tmp_path, readable=False)
+            keys.send_text(f"\x1b[200~'{shot}'\x1b[201~\r")
+            assert await session.ask() == f"'{shot}'"
+            assert session._notice is not None
+            assert "cannot look at images" in session._notice[0]
+
+    @pytest.mark.asyncio
+    async def test_ctrl_v_attaches_the_clipboard(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from PIL import Image
+
+        from domyn.agents.interfaces.cli import attachments as attachments_mod
+
+        monkeypatch.setattr(attachments_mod, "_clipboard_file", lambda: None)
+        monkeypatch.setattr(
+            attachments_mod.ImageGrab, "grabclipboard", lambda: Image.new("RGB", (4, 4))
+        )
+        with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
+            session.attachments = self._attachments(tmp_path)
+            read = asyncio.ensure_future(session.ask())
+            keys.send_text("\x16")
+            await _until(lambda: "[Image #1]" in session.draft())
+            keys.send_text("look\r")
+            sent = await read
+        assert sent.startswith("[Image #1, attached by the user: ")
+        assert sent.endswith(" look")
+
+    @pytest.mark.asyncio
+    async def test_ctrl_v_with_nothing_in_the_clipboard_says_so(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from domyn.agents.interfaces.cli import attachments as attachments_mod
+
+        monkeypatch.setattr(attachments_mod, "_clipboard_file", lambda: None)
+        monkeypatch.setattr(attachments_mod.ImageGrab, "grabclipboard", lambda: None)
+        with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
+            session.attachments = self._attachments(tmp_path)
+            read = asyncio.ensure_future(session.ask())
+            keys.send_text("\x16")
+            await _until(lambda: session._notice is not None)
+            keys.send_text("hi\r")
+            assert await read == "hi"
+        assert session._notice is not None
+        assert "No image in the clipboard" in session._notice[0]
+
+    @pytest.mark.asyncio
+    async def test_without_attachments_the_keys_keep_their_meaning(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        shot = self._picture(tmp_path)
+        with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
+            keys.send_text(f"\x16\x1b[200~{shot}\x1b[201~\r")
+            assert await session.ask() == str(shot)
+
+    @pytest.mark.asyncio
+    async def test_a_path_dropped_without_a_paste_is_attached(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """VS Code's terminal sends a dropped file's path as if it were typed, with no
+        bracketed paste around it: it arrives in one read, so one batch of keys."""
+        shot = self._picture(tmp_path)
+        with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
+            session.attachments = self._attachments(tmp_path)
+            read = asyncio.ensure_future(session.ask())
+            keys.send_text(f"'{shot}' ")
+            await _until(lambda: session.draft() == "[Image #1] ")
+            keys.send_text("w")
+            keys.send_text("\r")
+            sent = await read
+        assert sent.startswith("[Image #1, attached by the user: ")
+        assert sent.endswith("Look at it with read_image.] w")
+
+    @pytest.mark.asyncio
+    async def test_a_dropped_path_lands_where_the_cursor_is(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        shot = self._picture(tmp_path)
+        dragged = str(shot).replace(" ", "\\ ")
+        with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
+            session.attachments = self._attachments(tmp_path)
+            read = asyncio.ensure_future(session.ask())
+            for char in "see ":
+                keys.send_text(char)
+                await asyncio.sleep(0.01)
+            keys.send_text(dragged)
+            await _until(lambda: session.draft() == "see [Image #1] ")
+            read.cancel()
+
+    @pytest.mark.asyncio
+    async def test_a_path_typed_by_hand_stays_text(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """One character at a time, as typing comes: it may be meant as a path."""
+        shot = self._picture(tmp_path)
+        typed = str(shot).replace(" ", "\\ ")
+        with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
+            session.attachments = self._attachments(tmp_path)
+            read = asyncio.ensure_future(session.ask())
+            for char in typed:
+                keys.send_text(char)
+                await asyncio.sleep(0.005)
+            await _until(lambda: session.draft() == typed)
+            keys.send_text("\r")
+            assert await read == typed

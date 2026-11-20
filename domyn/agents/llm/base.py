@@ -1,5 +1,6 @@
 """LLM provider system for domyn agents framework."""
 
+import base64
 import re
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator
@@ -102,6 +103,24 @@ class LLMMessage(BaseModel):
         if self.name is not None:
             result["name"] = self.name
         return result
+
+
+def image_message(text: str, image: bytes, media_type: str) -> LLMMessage:
+    """A user message asking ``text`` about one image.
+
+    The one shape an image is given to a provider in: OpenAI's chat format, a
+    ``data:`` URL in an ``image_url`` part, which the OpenAI-compatible
+    endpoints take as it is and the others convert at their boundary
+    (Anthropic to an ``image`` block, OpenAI's Responses API to ``input_image``).
+    """
+    encoded = base64.b64encode(image).decode("ascii")
+    return LLMMessage(
+        role="user",
+        content=[
+            {"type": "text", "text": text},
+            {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{encoded}"}},
+        ],
+    )
 
 
 class LLMResponse(BaseModel):
@@ -458,6 +477,16 @@ class BaseLLMProvider(BaseModel, ABC):
     id. Only for hosted APIs: on a self-hosted endpoint the window is how the server was
     started, and the name of the weights says nothing about it."""
 
+    vision: bool = Field(
+        default=False,
+        description=(
+            "Whether the model reads images. Off unless declared: nothing asks the "
+            "model at run time. `domyn setup` finds it out by sending the provider a "
+            "small image and writes the answer here. An agent whose provider has it "
+            "gets `read_image` with the `files` bundle (`tools/builtin/images.py`)."
+        ),
+    )
+
     max_sensitivity: str | None = Field(
         default=None,
         description=(
@@ -469,13 +498,6 @@ class BaseLLMProvider(BaseModel, ABC):
             "above it. It is a deployment's data boundary expressed as "
             "configuration rather than as discipline."
         ),
-    )
-
-    append_text_system_prompt: str | None = Field(
-        default=None, description="System prompt text to append to each request"
-    )
-    append_text_last_message: str | None = Field(
-        default=None, description="Text to append to the last user message"
     )
 
     @model_validator(mode="before")

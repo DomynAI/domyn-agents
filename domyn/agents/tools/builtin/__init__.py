@@ -39,6 +39,7 @@ from typing import Any
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
 
+from domyn.agents.llm.base import BaseLLMProvider
 from domyn.agents.logger import get_logger
 from domyn.agents.tools.builtin.backends import (
     BackendUnavailableError,
@@ -52,6 +53,7 @@ from domyn.agents.tools.builtin.backends import (
 from domyn.agents.tools.builtin.browser import browser_tools
 from domyn.agents.tools.builtin.browser_sessions import BrowserOptions, BrowserSessions
 from domyn.agents.tools.builtin.files import file_tools
+from domyn.agents.tools.builtin.images import image_tools
 from domyn.agents.tools.builtin.shell import run_command_tool, shell_tools
 from domyn.agents.tools.builtin.workspace import Workspace, WorkspaceError, is_ignored
 
@@ -87,6 +89,10 @@ BUNDLE_TOOL_NAMES: dict[str, tuple[str, ...]] = {
         "browser_press",
     ),
 }
+# What the `files` bundle mounts besides, for an agent whose model reads images
+# (`BaseLLMProvider.vision`). Apart from `BUNDLE_TOOL_NAMES` because whether they
+# are there depends on the provider, not on the bundle being listed.
+VISION_TOOL_NAMES: tuple[str, ...] = ("read_image",)
 
 # What each bundle is for, in one line — what `domyn setup` shows beside its name
 # when asking which to mount. A new bundle needs an entry here, in `BUNDLES` and in
@@ -136,6 +142,7 @@ def bundle(
     backend: CommandBackend | str | None = None,
     allowed_env: Iterable[str] = (),
     browser: BrowserOptions | None = None,
+    llm_provider: BaseLLMProvider | None = None,
 ) -> BuiltinTools:
     """Build the tools in the named bundles, bound to one workspace.
 
@@ -154,6 +161,9 @@ def bundle(
             *backend* is a name or omitted — a backend passed in already has
             its own environment policy.
         browser: How the ``browser`` bundle launches and fences its browser.
+        llm_provider: The provider of the agent the tools are for. When its model
+            reads images (``vision``), ``files`` also mounts ``read_image``, which
+            asks that same provider.
 
     Returns:
         A :class:`BuiltinTools`, which iterates as the list of tools.
@@ -170,6 +180,13 @@ def bundle(
     for name in names:
         if name == "files":
             tools.extend(file_tools(space, host=resolved))
+            # `is True`, on a real provider: a mocked one answers every attribute
+            # with something truthy, and one mocked to the class has no fields.
+            if (
+                isinstance(llm_provider, BaseLLMProvider)
+                and getattr(llm_provider, "vision", False) is True
+            ):
+                tools.extend(image_tools(space, llm_provider, backend=resolved))
         elif name == "shell":
             resolved = resolved or LocalBackend(space, allowed_env=allowed_env)
             tools.extend(shell_tools(space, backend=resolved))
@@ -226,6 +243,7 @@ class BuiltinBundleConfig(BaseModel):
         self,
         *,
         extra_roots: Iterable[str | os.PathLike[str]] = (),
+        llm_provider: BaseLLMProvider | None = None,
     ) -> BuiltinTools:
         """Build the bundle's tools.
 
@@ -241,6 +259,9 @@ class BuiltinBundleConfig(BaseModel):
         folder a session runs in, so the ungated file tools would read the logs and
         output of conversations started anywhere. Those are read through the shell
         (``check_command``, ``run_command``), as the browser's files already are.
+
+        ``llm_provider`` is the provider of the agent the bundle is built for,
+        which decides whether ``files`` comes with ``read_image`` (see `bundle`).
         """
         space = Workspace.at(self.workspace, also=list(extra_roots))
         backend = build_backend(
@@ -250,7 +271,13 @@ class BuiltinBundleConfig(BaseModel):
             allowed_env=self.allowed_env,
             docker=self.docker,
         )
-        return bundle(*self.bundles, workspace=space, backend=backend, browser=self.browser)
+        return bundle(
+            *self.bundles,
+            workspace=space,
+            backend=backend,
+            browser=self.browser,
+            llm_provider=llm_provider,
+        )
 
 
 __all__ = [
@@ -258,6 +285,7 @@ __all__ = [
     "BUNDLE_DESCRIPTIONS",
     "BUNDLE_TOOL_NAMES",
     "DEFAULT_BUNDLES",
+    "VISION_TOOL_NAMES",
     "BackendUnavailableError",
     "BrowserOptions",
     "BrowserSessions",
@@ -274,6 +302,7 @@ __all__ = [
     "build_backend",
     "bundle",
     "file_tools",
+    "image_tools",
     "is_ignored",
     "run_command_tool",
     "shell_tools",
