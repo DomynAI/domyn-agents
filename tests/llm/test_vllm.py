@@ -266,6 +266,34 @@ class TestVLLMGenerate:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_generate_sends_an_assistant_messages_reasoning_back(self):
+        """Thinking models read their reasoning back from the assistant message."""
+        captured = {}
+
+        def capture(request):
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "ok", "tool_calls": None}}],
+                    "usage": {"completion_tokens": 1},
+                },
+            )
+
+        respx.post(VLLM_URL).mock(side_effect=capture)
+        await self.provider.generate(
+            [
+                LLMMessage(role="user", content="weather?"),
+                LLMMessage(role="assistant", content="sunny", reasoning_content="I checked"),
+                LLMMessage(role="user", content="sure?"),
+            ]
+        )
+        assistant = captured["body"]["messages"][1]
+        assert assistant["reasoning_content"] == "I checked"
+        assert "reasoning_content" not in captured["body"]["messages"][0]
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_generate_sends_tool_choice(self):
         """tool_choice must appear in the payload when provided."""
         captured = {}

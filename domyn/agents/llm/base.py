@@ -53,6 +53,15 @@ class LLMMessage(BaseModel):
         default=None, description="ID of the tool call this message is a result for"
     )
     name: str | None = Field(default=None, description="Tool name for tool result messages")
+    reasoning_content: str | None = Field(
+        default=None,
+        description=(
+            "The model's own reasoning behind an assistant message, sent back to it "
+            "with the message. Serialized only when asked (`to_dict(reasoning=True)`), "
+            "by the providers whose API accepts the field "
+            "(`BaseLLMProvider.sends_reasoning_content`)."
+        ),
+    )
 
     source_event_id: str | None = Field(
         default=None,
@@ -90,11 +99,16 @@ class LLMMessage(BaseModel):
         ),
     )
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert message to a dictionary format suitable for LLM input."""
+    def to_dict(self, *, reasoning: bool = False) -> dict[str, Any]:
+        """Convert message to a dictionary format suitable for LLM input.
+
+        ``reasoning`` adds ``reasoning_content`` when the message has one: only for
+        an API that accepts the field, as others reject it."""
         result: dict[str, Any] = {"role": self.role}
         if self.content is not None:
             result["content"] = self.content
+        if reasoning and self.reasoning_content:
+            result["reasoning_content"] = self.reasoning_content
         if self.tool_calls:
             result["tool_calls"] = [call.model_dump() for call in self.tool_calls]
         if self.tool_call_id is not None:
@@ -457,6 +471,13 @@ class BaseLLMProvider(BaseModel, ABC):
     """The request keys that carry the reply's ceiling (``max_reply_tokens``): the
     chat-completions spellings, ``max_completion_tokens`` being OpenAI's newer one. A
     provider whose API names it otherwise declares its own."""
+
+    sends_reasoning_content: ClassVar[bool] = False
+    """Whether this provider's API takes ``reasoning_content`` on an assistant
+    message. The context manager then puts the model's whole reasoning on the
+    assistant messages of the current user turn, and the provider sends it
+    (`LLMMessage.to_dict(reasoning=True)`); otherwise those messages carry the short
+    thoughts as their content, like earlier turns."""
 
     context_window_catalog: ClassVar[str | None] = None
     """The models.dev provider whose catalogue knows this provider's windows by model

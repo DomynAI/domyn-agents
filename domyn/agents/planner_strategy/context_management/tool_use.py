@@ -12,6 +12,7 @@ from typing import Any
 from domyn.agents.core import (
     METADATA_CONVERTED_TO_AGENT_END,
     METADATA_EXTERNAL_PART_AGENT_VISIBLE,
+    METADATA_REASONING_CONTENT,
     METADATA_TOOL_BATCH,
     BaseAgent,
     BaseEvent,
@@ -138,7 +139,16 @@ class ToolUseContextManager(ContextManager):
         # an assistant message, which some models answer with nothing.
         texts = ShownTexts()
 
-        for event in event_to_parse:
+        # The model's whole reasoning goes back with its assistant messages while
+        # the user's turn lasts, to a provider that sends it: the assistant
+        # messages after the last request. Earlier ones carry the short thoughts.
+        reasoning_from = (
+            _current_turn_start(event_to_parse)
+            if getattr(getattr(agent, "llm_provider", None), "sends_reasoning_content", False)
+            else None
+        )
+
+        for position, event in enumerate(event_to_parse):
             boundaries.append((event.event_id, len(messages)))
 
             match event.event_type:
@@ -174,17 +184,23 @@ class ToolUseContextManager(ContextManager):
                             and messages[-1].tool_calls
                         ):
                             messages[-1].tool_calls.append(tool_call)
-                            # Merge thought if present
-                            if thought:
+                            # The whole reasoning, when the message has it, covers
+                            # every call of the response: their thoughts add nothing.
+                            if thought and not messages[-1].reasoning_content:
                                 existing = messages[-1].content or ""
                                 messages[-1].content = (
                                     f"{existing}\n{thought}".strip() if existing else thought
                                 )
                         else:
+                            reasoning = _reasoning_of(event, position, reasoning_from)
                             messages.append(
                                 LLMMessage(
                                     role=self.assistant_role,
                                     tool_calls=[tool_call],
+                                    reasoning_content=reasoning,
+                                    # Without it, the short thought of every call,
+                                    # the first included.
+                                    content=None if reasoning else (thought or None),
                                 )
                             )
 
@@ -411,7 +427,11 @@ class ToolUseContextManager(ContextManager):
                         messages[-1].tool_calls.append(tool_call)
                     else:
                         messages.append(
-                            LLMMessage(role=self.assistant_role, tool_calls=[tool_call])
+                            LLMMessage(
+                                role=self.assistant_role,
+                                tool_calls=[tool_call],
+                                reasoning_content=_reasoning_of(event, position, reasoning_from),
+                            )
                         )
 
                 case ExecutionEventType.AGENT_START:
@@ -715,6 +735,25 @@ class ToolUseWithThoughtContextManager(ToolUseContextManager):
         """Build system prompt with an added reasoning instruction."""
         base = super()._build_system_prompt(agent, context, instruction)
         return f"{base}\n\n{self.thought_instruction}"
+
+
+def _current_turn_start(events: list[BaseEvent]) -> int:
+    """Where the current user turn starts in ``events``: its last ``USER_INPUT``,
+    or the start when none is visible."""
+    for position in range(len(events) - 1, -1, -1):
+        if events[position].event_type == ExecutionEventType.USER_INPUT:
+            return position
+    return 0
+
+
+def _reasoning_of(event: BaseEvent, position: int, reasoning_from: int | None) -> str | None:
+    """The whole reasoning the planner stored on the first call of a response
+    (``METADATA_REASONING_CONTENT``), when it is sent back: the provider takes it
+    (``reasoning_from`` is set) and the call belongs to the current user turn."""
+    if reasoning_from is None or position < reasoning_from:
+        return None
+    reasoning = event.metadata.get(METADATA_REASONING_CONTENT)
+    return reasoning if isinstance(reasoning, str) and reasoning else None
 
 
 def _rendered_events(context: InteractionContext) -> list[BaseEvent]:
