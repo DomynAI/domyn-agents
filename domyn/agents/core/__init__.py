@@ -371,10 +371,11 @@ class BaseEvent(BaseModel):
     # short `thought` on the action does not carry. Set by a tool-use planner on
     # the first TOOL_START (or AGENT_CALL) of a response, only when the model
     # returned one; the context manager puts it on the assistant message of that
-    # response while the user's turn lasts, for a provider that sends it back
+    # response, in every turn, for a provider that sends it back
     # (`BaseLLMProvider.reasoning_key_in_use`).
     reasoning_content: str | None = Field(
-        default=None, description="The model's reasoning, sent back to it in the current turn"
+        default=None,
+        description="The model's reasoning, sent back to it with its assistant message",
     )
 
     # other info

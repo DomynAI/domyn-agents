@@ -138,18 +138,15 @@ class ToolUseContextManager(ContextManager):
         # an assistant message, which some models answer with nothing.
         texts = ShownTexts()
 
-        # The model's whole reasoning goes back with its assistant messages while
-        # the user's turn lasts, to a provider that sends it: the assistant
-        # messages after the last request. Earlier ones carry the short thoughts.
-        # The position of the first event whose reasoning is sent back, or None
-        # when the provider takes none.
-        send_reasoning_from = (
-            _current_turn_start(event_to_parse)
-            if getattr(getattr(agent, "llm_provider", None), "reasoning_key_in_use", None)
-            else None
+        # The model's whole reasoning goes back with its assistant messages, every
+        # turn's, to a provider that sends it (DeepSeek's API rejects a request
+        # with tools that leaves it out). A message without stored reasoning, or
+        # for a provider that sends none, carries the short thoughts instead.
+        sends_reasoning = bool(
+            getattr(getattr(agent, "llm_provider", None), "reasoning_key_in_use", None)
         )
 
-        for position, event in enumerate(event_to_parse):
+        for event in event_to_parse:
             boundaries.append((event.event_id, len(messages)))
 
             match event.event_type:
@@ -193,9 +190,7 @@ class ToolUseContextManager(ContextManager):
                                     f"{existing}\n{thought}".strip() if existing else thought
                                 )
                         else:
-                            reasoning = _reasoning_to_send_back(
-                                event, position, send_reasoning_from
-                            )
+                            reasoning = event.reasoning_content if sends_reasoning else None
                             messages.append(
                                 LLMMessage(
                                     role=self.assistant_role,
@@ -433,8 +428,8 @@ class ToolUseContextManager(ContextManager):
                             LLMMessage(
                                 role=self.assistant_role,
                                 tool_calls=[tool_call],
-                                reasoning_content=_reasoning_to_send_back(
-                                    event, position, send_reasoning_from
+                                reasoning_content=(
+                                    event.reasoning_content if sends_reasoning else None
                                 ),
                             )
                         )
@@ -740,26 +735,6 @@ class ToolUseWithThoughtContextManager(ToolUseContextManager):
         """Build system prompt with an added reasoning instruction."""
         base = super()._build_system_prompt(agent, context, instruction)
         return f"{base}\n\n{self.thought_instruction}"
-
-
-def _current_turn_start(events: list[BaseEvent]) -> int:
-    """Where the current user turn starts in ``events``: its last ``USER_INPUT``,
-    or the start when none is visible."""
-    for position in range(len(events) - 1, -1, -1):
-        if events[position].event_type == ExecutionEventType.USER_INPUT:
-            return position
-    return 0
-
-
-def _reasoning_to_send_back(
-    event: BaseEvent, position: int, send_reasoning_from: int | None
-) -> str | None:
-    """The reasoning stored on ``event`` (at ``position`` in the events rendered),
-    when it goes back to the model: the provider takes it (``send_reasoning_from``
-    is set) and the event belongs to the current user turn."""
-    if send_reasoning_from is None or position < send_reasoning_from:
-        return None
-    return event.reasoning_content or None
 
 
 def _rendered_events(context: InteractionContext) -> list[BaseEvent]:
