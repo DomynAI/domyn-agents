@@ -40,6 +40,7 @@ import asyncio
 import inspect
 import io
 import json
+import os
 import re
 import sys
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
@@ -718,6 +719,30 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
     }
 
 
+def host_path(path: object, workspace: Workspace) -> object:
+    """A path as the user means it on this machine, for a body that runs in a container.
+
+    The container's ``~`` is its own scratch home, and the workspace is mounted at its
+    *resolved* host path, so ``~/work/a.md`` or ``/tmp/work/a.md`` (``/private/tmp`` on
+    macOS) would name nothing there. Expanded and resolved here, where the user's
+    filesystem is, they name what is mounted. Only a result inside a mounted root is
+    used: any other absolute path is the container's own (its ``/tmp``, ``/etc``) and
+    is left as written, and a ``~`` that leads outside the mounts becomes the host path,
+    which the container does not have: not found, the boundary working. Relative paths
+    stay relative to the workspace root.
+    """
+    if not isinstance(path, str) or not (path.startswith("~") or os.path.isabs(path)):
+        return path
+    try:
+        expanded = Path(path).expanduser()
+        resolved = expanded.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return path
+    if workspace.contains(resolved):
+        return str(resolved)
+    return str(expanded) if path.startswith("~") else path
+
+
 def _hosted(
     name: str, func: Callable[..., str], workspace: Workspace, host: "CommandBackend"
 ) -> Callable[..., Awaitable[str]]:
@@ -733,6 +758,8 @@ def _hosted(
         # says to do next.
         await host.start()
         where = host.tool_host
+        if where is not None and "path" in arguments:
+            arguments["path"] = host_path(arguments["path"], workspace)
         if where is None:
             return await asyncio.to_thread(
                 run_file_operation,

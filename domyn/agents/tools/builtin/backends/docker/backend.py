@@ -55,6 +55,7 @@ from domyn.agents.tools.builtin.backends.docker.cli import (
 from domyn.agents.tools.builtin.backends.docker.containers import (
     ContainerLauncher,
     DockerContainer,
+    container_home,
 )
 from domyn.agents.tools.builtin.backends.docker.images import ensure_image
 from domyn.agents.tools.builtin.backends.docker.installs import InstallLog
@@ -406,6 +407,7 @@ class DockerBackend(CommandBackend):
             "image": self._prepared_image,
             "workspace": str(self._workspace.root),
             "state": str(self._state.root),
+            "home": container_home(),
             "roots": sorted(_identity(path) for path in skill_roots(self._workspace)),
             # A file mount pins the inode, so a config the host rewrites (it replaces the
             # file) is a new mount.

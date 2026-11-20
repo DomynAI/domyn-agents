@@ -19,9 +19,8 @@ keep a history of its own without seeing the real one.
 from collections.abc import Iterator
 from pathlib import Path
 
-from domyn.agents.logger import get_logger
 from domyn.agents.tools.builtin.backends.base import BackendUnavailableError
-from domyn.agents.tools.builtin.backends.docker.containers import CONTAINER_HOME
+from domyn.agents.tools.builtin.backends.docker.containers import container_home
 from domyn.agents.tools.builtin.backends.docker.state import StateFolder
 from domyn.agents.tools.builtin.session import HOME_DIRNAME
 from domyn.agents.tools.builtin.workspace import Workspace
@@ -48,14 +47,14 @@ def _hidden_global_home(root: Path, state: StateFolder) -> Path | None:
     """
     hidden = Path.home().absolute() / HOME_DIRNAME
     inside = root == hidden or root in hidden.parents
-    if not inside or hidden == state.project_dir or "," in str(hidden):
+    if not inside or hidden == state.project_dir:
         return None
     return hidden
 
 
 def skill_roots(workspace: Workspace) -> list[Path]:
     """The skill folders that exist, which builtin skills run their scripts from."""
-    return [p for p in workspace.extra_roots if p.is_dir() and "," not in str(p)]
+    return [p for p in workspace.extra_roots if p.is_dir()]
 
 
 def build_mounts(workspace: Workspace, state: StateFolder, conversation: str) -> list[str]:
@@ -67,33 +66,66 @@ def build_mounts(workspace: Workspace, state: StateFolder, conversation: str) ->
     root = workspace.root
     state.prepare(conversation)
     mounts = _Mounts()
+    home = Path(container_home())
+    scratch = state.scratch_home(conversation) if state.project_dir else None
+    # The folder the container's own `~/.domyn` is: the same scratch folder as the state
+    # folder's place, so a `domyn run` without `--project` keeps the history of one
+    # conversation and sees none of the real one. Not when the state folder is that folder
+    # already, or below it (a project under `~/.domyn`): the scratch would hold itself.
+    alias = home / HOME_DIRNAME
+    if (
+        scratch is None
+        or state.project_dir == alias
+        or alias in (state.project_dir or alias).parents
+    ):
+        alias_scratch = None
+    else:
+        alias_scratch = scratch
+    hidden = _hidden_global_home(root, state)
+    if root != home:
+        # The home folder is empty and writable, with what is mounted below it: Docker
+        # makes the parents of a mount as root, so without it nothing could be created
+        # there (`~/.cache`, a `.local` of a tool). A workspace that *is* the home is
+        # writable already, and a tmpfs would hide it.
+        mounts.arguments += ["--tmpfs", f"{home}:rw,mode=1777,exec"]
     mounts.add(root, readonly=False)
-    if (hidden := _hidden_global_home(root, state)) is not None:
+    if hidden is not None and not (alias_scratch is not None and alias == hidden):
         # An empty folder where the global `~/.domyn` is: nothing of it is reachable.
         # A project of the session, which lives below it, is mounted over this one.
-        mounts.arguments += ["--tmpfs", f"{hidden}:rw,size=1m,mode=0755"]
-    if (scratch := state.scratch_home(conversation)) is not None and state.project_dir:
+        # Skipped only when the scratch folder is mounted at that very place: the
+        # container's home is `CONTAINER_HOME` when the real one has a colon, and then
+        # the alias is elsewhere and the real folder would be left open. `--mount`, not
+        # `--tmpfs`: that one splits its value at the first colon.
+        mounts.arguments += [
+            "--mount",
+            f"type=tmpfs,{_field('target', hidden)},tmpfs-size=1048576,tmpfs-mode=0755",
+        ]
+    if scratch is not None and state.project_dir:
         mounts.add(scratch, readonly=False, target=state.project_dir)
-        # A `domyn` run without `--project` reads `~/.domyn`, which is here the
-        # container's home: the same folder, with the same configuration. Docker
-        # makes the parents of a mount as root, so the home is a tmpfs anyone can
-        # write in, or the container's user could not make its `.local` there.
-        mounts.arguments += ["--tmpfs", f"{CONTAINER_HOME}:rw,mode=1777,exec"]
-        mounts.add(scratch, readonly=False, target=Path(CONTAINER_HOME) / ".domyn")
+    if alias_scratch is not None:
+        mounts.add(alias_scratch, readonly=False, target=alias)
     mounts.add(state.processes, readonly=False)
     mounts.add(state.browser, readonly=False)
     mounts.add(state.conversation_home(conversation), readonly=False)
     if state.config is not None and _is_plain_file(state.config):
         mounts.add(state.config, readonly=True)
-        if scratch is not None:
-            mounts.add(
-                state.config, readonly=True, target=Path(CONTAINER_HOME) / ".domyn" / "config.yaml"
-            )
+        if alias_scratch is not None:
+            mounts.add(state.config, readonly=True, target=alias / "config.yaml")
     for masked in _masked_in(root):
         mounts.add(masked, readonly=True)
     for skills in skill_roots(workspace):
         mounts.add(skills, readonly=False)
     return mounts.arguments
+
+
+def _field(key: str, value: object) -> str:
+    """``key=value`` for a ``--mount`` spec. The spec is read as CSV, so a comma, a double
+    quote or a line break in a path needs the field quoted, a quote inside it doubled
+    (measured with Docker: all three mount). Left as it is otherwise."""
+    text = str(value)
+    if not any(c in text for c in ',"\n\r'):
+        return f"{key}={text}"
+    return '"' + f"{key}={text}".replace('"', '""') + '"'
 
 
 class _Mounts:
@@ -102,10 +134,9 @@ class _Mounts:
 
     def add(self, path: Path, *, readonly: bool, target: Path | None = None) -> None:
         where = target or path
-        if "," in str(path) or "," in str(where):
-            get_logger().warning("docker: a path with a comma cannot be mounted; skipped")
-            return
-        spec = f"type=bind,source={path},target={where}" + (",readonly" if readonly else "")
+        spec = f"type=bind,{_field('source', path)},{_field('target', where)}" + (
+            ",readonly" if readonly else ""
+        )
         self.arguments += ["--mount", spec]
 
 

@@ -249,7 +249,8 @@ class TestWhatIsMounted:
     def test_nothing_else_is_mounted(self, tmp_path: Path) -> None:
         _, specs = self._specs(tmp_path)
         home = str(Path.home())
-        assert not any(home in s and "/ws" not in s for s in specs)
+        # The home folder itself is an empty tmpfs, which mounts nothing of the host's.
+        assert not any(home in s and "/ws" not in s and ":rw,mode=1777" not in s for s in specs)
         assert not any("docker.sock" in s for s in specs)
 
     def test_a_linked_agent_home_is_refused(self, tmp_path: Path) -> None:
@@ -316,7 +317,7 @@ class TestRefusals:
         state = StateFolder.resolve(home, project)
         arguments = build_mounts(Workspace.at(home), state, "c1")
 
-        hidden = f"{home}/.domyn:rw,size=1m,mode=0755"
+        hidden = f"type=tmpfs,target={home}/.domyn,tmpfs-size=1048576,tmpfs-mode=0755"
         assert hidden in arguments
         assert arguments.index(f"type=bind,source={home},target={home}") < arguments.index(hidden)
         assert arguments.index(hidden) < arguments.index(
@@ -334,7 +335,7 @@ class TestRefusals:
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
         state = StateFolder.resolve(home, home / ".domyn")
         arguments = build_mounts(Workspace.at(home), state, "c1")
-        assert not any(a.endswith("size=1m,mode=0755") for a in arguments)
+        assert not any("tmpfs-size=1048576" in a for a in arguments)
 
     @pytest.mark.asyncio
     async def test_a_missing_docker_binary_says_so(self, tmp_path: Path) -> None:

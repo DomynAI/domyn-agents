@@ -43,7 +43,7 @@ _TIMED_OUT = (124, 137)
 
 # Everything a command needs on its PATH inside the container: the user prefixes
 # `pip install --user` and `npm install -g` write to.
-_PATH_PREFIX = 'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"\n'
+_PATH_PREFIX = 'export PATH="$PYTHONUSERBASE/bin:$NPM_CONFIG_PREFIX/bin:$PATH"\n'
 
 
 class DockerOutput(NamedTuple):
