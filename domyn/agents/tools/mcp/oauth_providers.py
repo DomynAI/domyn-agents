@@ -330,25 +330,29 @@ def _parse_oauth_token(content: bytes) -> OAuthToken:
         return OAuthToken.model_validate(form)
 
 
+def _token_problems(error: PydanticValidationError) -> str:
+    """The fields a token response got wrong, and how, without their values: those are the
+    tokens, which pydantic's own message quotes."""
+    return ", ".join(
+        f"{'.'.join(map(str, problem['loc'])) or 'body'} ({problem['type']})"
+        for problem in error.errors(include_url=False, include_context=False, include_input=False)
+    )
+
+
 async def _patched_handle_token_response_scopes(response: httpx2.Response) -> OAuthToken:
     content = await response.aread()
     try:
         return _parse_oauth_token(content)
     except PydanticValidationError as e:
-        # Pydantic's message quotes the response, which can hold the tokens, and this text reaches
-        # the conversation as the tool's error: name the fields only, and drop the chained cause.
-        problems = ", ".join(
-            f"{'.'.join(map(str, error['loc'])) or 'body'} ({error['type']})"
-            for error in e.errors(include_url=False, include_context=False, include_input=False)
-        )
-        raise OAuthTokenError(f"Invalid token response: {problems}") from None
+        # Raised into the conversation as the tool's error: `from None` keeps pydantic's out.
+        raise OAuthTokenError(f"Invalid token response: {_token_problems(e)}") from None
 
 
 async def _patched_handle_refresh_response(
     self: OAuthClientProvider, response: httpx2.Response
 ) -> bool:
-    # The SDK's own method with the parse swapped for `_parse_oauth_token`:
-    # keep the rest in step with it on every `mcp` upgrade.
+    # The SDK's own method with the parse swapped for `_parse_oauth_token`, and a failure logged
+    # without the response: keep the rest in step with it on every `mcp` upgrade.
     if response.status_code != 200:
         _mcp_oauth2.logger.warning(
             f"Token refresh failed: {response.status_code}{redirect_note(response)}"
@@ -369,9 +373,8 @@ async def _patched_handle_refresh_response(
         self.context.update_token_expiry(token_response)
         await self.context.storage.set_tokens(token_response)
         return True
-    except PydanticValidationError:
-        _mcp_oauth2.logger.error("Invalid refresh response")
-        _mcp_oauth2.logger.debug("Invalid refresh response detail", exc_info=True)
+    except PydanticValidationError as e:
+        _mcp_oauth2.logger.error(f"Invalid refresh response: {_token_problems(e)}")
         self.context.clear_tokens()
         return False
 

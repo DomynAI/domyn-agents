@@ -266,14 +266,13 @@ class WebSocketTransport(RunnerTransport):
                             boundary_event = event
                             break  # close connection, surface event to caller
             except TimeoutError:
+                endpoint = url_origin(self._ws_url)
                 error_msg = (
                     f"The delegated agent '{agent_name}' could not be reached "
-                    f"(connection timeout to {self._ws_url}). "
+                    f"(connection timeout to {endpoint}). "
                     "The connection has been closed. Please check the agent's availability and connection."
                 )
-                get_logger().warning(
-                    f"[WS transport] Connect timeout to {url_origin(self._ws_url)} — stopping"
-                )
+                get_logger().warning(f"[WS transport] Connect timeout to {endpoint} — stopping")
                 yield BaseEvent(
                     event_type=ExecutionEventType.AGENT_END,
                     author=agent_name,

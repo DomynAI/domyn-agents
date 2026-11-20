@@ -225,7 +225,7 @@ class TestProviderWiring:
     @respx.mock
     async def test_a_credential_in_the_endpoint_url_reaches_no_level(self, recording_logger):
         """Only scheme and host of the endpoint are named: a token in its query reaches no line,
-        and not the raised error either, whose message callers log and copy into events."""
+        nor the raised error's message, which callers log and copy into events."""
         url = "https://llm.test/v1/chat/completions?api-key=endpoint-secret"
         respx.post(url).mock(return_value=httpx.Response(500, json={"error": "boom"}))
         provider = VLLMProvider(url=url, model_name="test-model", api_key="k")

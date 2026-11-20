@@ -1854,10 +1854,8 @@ def build_compactor(config: CompactionConfig) -> Compactor:
     try:
         strategy = build_strategy(config.strategy)
     except ValueError as exc:
-        get_logger().warning(
-            f"compaction: {type(exc).__name__} building the strategy, using the default instead"
-        )
-        get_logger().debug(f"compaction strategy build detail: {exc}")
+        # The error names the configured strategy and the known ones: configuration, no content.
+        get_logger().warning(f"{exc}; using the default compaction strategy instead")
         strategy = build_strategy(CompactionConfig().strategy)
 
     # Built field by field rather than from a dict of overrides: `**kwargs` into a

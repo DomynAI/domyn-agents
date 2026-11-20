@@ -45,10 +45,7 @@ from domyn.agents.planner_strategy.prompting.data import ResponseType
 from domyn.agents.planner_strategy.prompting.structural_tags_prompting import (
     StructuralTagMessagePrompting,
 )
-from domyn.agents.planner_strategy.utils import (
-    FORWARD_VERBATIM_MISS_UNRESOLVED,
-    resolve_verbatim,
-)
+from domyn.agents.planner_strategy.utils import resolve_verbatim
 
 
 def create_response_event(message: str, metadata: dict[str, Any] | None = None) -> BaseEvent:
@@ -523,14 +520,8 @@ class ReactPlannerStrategy(BasePlannerStrategy):
                     # FORWARD_VERBATIM is a special action, not a registered
                     # tool. Emit ERROR_OCCURRED and terminate rather than
                     # retry — parity with the tool-use strategies and with
-                    # the LLM-exception break path.
-                    logger = get_logger()
-                    observation = FORWARD_VERBATIM_MISS_UNRESOLVED.format(
-                        source_id=source_id,
-                        source_key=source_key,
-                    )
-                    logger.warning("FORWARD_VERBATIM could not resolve its source")
-                    logger.debug(observation)
+                    # the LLM-exception break path. resolve_verbatim has
+                    # logged why it missed.
                     yield create_error_event(
                         AGENT_ERROR_MESSAGE,
                         agent.name,

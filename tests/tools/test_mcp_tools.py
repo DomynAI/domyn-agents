@@ -450,6 +450,23 @@ async def test_mcp_tool_initialize_tool_not_found():
 
 
 @pytest.mark.asyncio
+async def test_a_recent_list_tools_failure_names_the_server_by_its_origin():
+    """The error reaches the conversation: a token in the server URL must not."""
+    url = "https://mcp.example.com/api/v1/connect?token=s3cr3t"
+    mock_client = AsyncMock(spec=Client)
+    mock_client.list_tools = AsyncMock(side_effect=RuntimeError("unreachable"))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with pytest.raises(RuntimeError):
+        await MCPTool._cached_list_tools(url, mock_client)
+    with pytest.raises(ClientError) as raised:
+        await MCPTool._cached_list_tools(url, mock_client)
+
+    assert str(raised.value) == "MCP server https://mcp.example.com: list_tools recently failed"
+
+
+@pytest.mark.asyncio
 async def test_mcp_tool_initialize_caching():
     """Test that client is cached and not recreated."""
     tool = MCPTool(

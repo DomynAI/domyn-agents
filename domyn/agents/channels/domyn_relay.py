@@ -245,12 +245,8 @@ class DomynRelayChannel:
                 logger.debug("DomynRelayChannel: connection failure detail: %s", exc, exc_info=True)
             except Exception as exc:
                 if "InvalidStatus" in type(exc).__name__:
-                    logger.error(
-                        "DomynRelayChannel: server rejected connection: %s", type(exc).__name__
-                    )
-                    logger.debug(
-                        "DomynRelayChannel: rejected connection detail: %s", exc, exc_info=True
-                    )
+                    # websockets says only "server rejected WebSocket connection: HTTP <status>".
+                    logger.error("DomynRelayChannel: server rejected connection: %s", exc)
                 else:
                     logger.warning(
                         "DomynRelayChannel: unexpected error: %s",

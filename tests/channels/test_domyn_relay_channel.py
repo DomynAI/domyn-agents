@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from typing import Any
 
@@ -21,6 +22,7 @@ import pytest
 
 from domyn.agents.channels import DomynRelayChannel, InMemoryCursorStore
 from domyn.agents.core import BaseEvent, ExecutionEventType, Part, RelayMessage
+from tests.logs import split_at_debug
 
 # ---------------------------------------------------------------------------
 # Mock WebSocket
@@ -463,3 +465,97 @@ async def test_receive_persists_cursor_as_events_arrive(monkeypatch: pytest.Monk
         await channel.close()
 
     assert store.data["chan-1"] == ev.event_id
+
+
+# ---------------------------------------------------------------------------
+# A failure is named by its type above debug: what its text quotes stays at debug.
+# ---------------------------------------------------------------------------
+
+_DETAIL = "text the error quotes"
+
+
+async def _connect_failing_once(monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
+    import websockets
+
+    channel = DomynRelayChannel("wss://x/relay/v1/ws", {})
+
+    def connect(*_args: Any, **_kwargs: Any) -> Any:
+        channel._stop.set()  # one attempt, no reconnect
+        raise error
+
+    monkeypatch.setattr(websockets, "connect", connect)
+    async for _ in channel.receive():
+        pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [OSError(_DETAIL), RuntimeError(_DETAIL)])
+async def test_a_failed_connection_keeps_the_errors_text_at_debug(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, error: Exception
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    await _connect_failing_once(monkeypatch, error)
+
+    above, debug = split_at_debug(caplog)
+    assert type(error).__name__ in above and _DETAIL not in above
+    assert _DETAIL in debug
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_connection_is_logged_with_its_status(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A rejected handshake keeps its HTTP status above debug: 401 or 404 is what says why."""
+    from websockets.datastructures import Headers
+    from websockets.exceptions import InvalidStatus
+    from websockets.http11 import Response
+
+    rejected = InvalidStatus(Response(401, "Unauthorized", Headers()))
+    caplog.set_level(logging.DEBUG)
+
+    await _connect_failing_once(monkeypatch, rejected)
+
+    above, _ = split_at_debug(caplog)
+    assert "HTTP 401" in above
+
+
+@pytest.mark.asyncio
+async def test_a_failed_cursor_save_keeps_the_errors_text_at_debug(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _FailingStore(_FakeCursorStore):
+        async def save(self, key: str, event_id: str) -> None:
+            raise RuntimeError(_DETAIL)
+
+    channel = DomynRelayChannel("wss://x/relay/v1/ws", {}, cursor_store=_FailingStore())
+    caplog.set_level(logging.DEBUG)
+
+    await channel.send_event_priority("conv-1", _agent_start_event())
+
+    above, debug = split_at_debug(caplog)
+    assert "cursor_store.save failed" in above and _DETAIL not in above
+    assert _DETAIL in debug
+
+
+@pytest.mark.asyncio
+async def test_a_failed_send_keeps_the_errors_text_at_debug(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _FailingWS(_MockWS):
+        async def send(self, payload: str) -> None:
+            raise RuntimeError(_DETAIL)
+
+    channel = DomynRelayChannel("wss://x/relay/v1/ws", {})
+    await channel.send_event_priority("conv-1", _agent_start_event())
+    caplog.set_level(logging.DEBUG)
+
+    drain = asyncio.create_task(channel._drain_loop(_FailingWS([])))
+    await channel._outbound.join()
+    drain.cancel()
+    await drain
+
+    assert channel.events_dropped == 1
+    above, debug = split_at_debug(caplog)
+    assert "drain send failed" in above and _DETAIL not in above
+    assert _DETAIL in debug

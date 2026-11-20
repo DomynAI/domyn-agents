@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import websockets.asyncio.client as ws_client
 
 from domyn.agents.core import AgentAction, BaseEvent, ExecutionEventType, InteractionContext, Part
 from domyn.agents.runner.websocket_transport import WebSocketTransport
@@ -524,3 +525,20 @@ class TestWebSocketTurnFilter:
             ctx,
         )
         assert got == ["e1", "e2"]
+
+
+@pytest.mark.asyncio
+async def test_a_connect_timeout_names_the_relay_by_its_origin(monkeypatch) -> None:
+    """The timeout's AGENT_END reaches the conversation: a token in the relay URL must not."""
+
+    def connect(*_args: Any, **_kwargs: Any) -> Any:
+        raise TimeoutError
+
+    monkeypatch.setattr(ws_client, "connect", connect)
+    transport = WebSocketTransport(ws_url="wss://relay.example.com/ws?token=s3cr3t", timeout=1)
+
+    events = [event async for event in transport.execute("Remote", create_test_context())]
+
+    assert events[-1].error_code == "delegate_timeout"
+    assert "wss://relay.example.com" in events[-1].error_message
+    assert "s3cr3t" not in events[-1].model_dump_json()

@@ -64,21 +64,6 @@ consistent header regardless of planner strategy.  Usage::
 
 _EVENT_ID_HEADER_EXAMPLE = EVENT_ID_HEADER_FMT.format(event_id="...")
 
-FORWARD_VERBATIM_MISS_UNRESOLVED = (
-    "FORWARD_VERBATIM could not resolve source_id={source_id!r} / "
-    "source_key={source_key!r}. Either the event_id does not match any "
-    "prior TOOL_END/AGENT_END event, or the dot-path did not resolve on "
-    f"the observation. Retry with the correct event_id from the "
-    f"{_EVENT_ID_HEADER_EXAMPLE} header, or respond to the user in your "
-    "own words without calling FORWARD_VERBATIM."
-)
-"""Internal diagnostic logged when resolve_verbatim returns not-found.
-
-Usage::
-
-    FORWARD_VERBATIM_MISS_UNRESOLVED.format(source_id=..., source_key=...)
-"""
-
 # ---------------------------------------------------------------------------
 # Source_id format validation
 # ---------------------------------------------------------------------------
