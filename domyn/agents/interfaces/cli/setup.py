@@ -20,8 +20,11 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
+import logging
 import os
 import shutil
+import sys
 from collections.abc import Callable, Collection, Iterable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -386,9 +389,16 @@ def _image_rejection(provider: ProviderConfig) -> str | None:
         "generation_params": {"max_tokens": 16},
         "body": {"max_tokens": 16},
     }
+
+    # The provider logs a refused request as an error, written to stderr outside the
+    # wizard's console: a row `_Screen` does not count, so going back left the question
+    # before it on screen twice. The refusal is said on the wizard's own line instead.
+    library_logger = logging.getLogger("domyn.agents")
+    level = library_logger.level
+    library_logger.setLevel(logging.CRITICAL + 1)
     try:
         model = LLMProviderFactory.from_config(entry)
-        response = run_sync(
+        run_sync(
             asyncio.wait_for(
                 model.generate(
                     [image_message("What colour is this image?", picture.getvalue(), "image/png")]
@@ -397,12 +407,31 @@ def _image_rejection(provider: ProviderConfig) -> str | None:
             )
         )
     except Exception as exc:
-        response = getattr(exc, "response", None)
-        status = getattr(response, "status_code", None)
+        http_response = getattr(exc, "response", None)
+        status = getattr(http_response, "status_code", None)
         if isinstance(status, int):
-            detail = str(getattr(response, "text", "")).strip().replace("\n", " ")[:120]
+            text = str(getattr(http_response, "text", "")).strip()
+            # The message written for people, where the usual error bodies put it:
+            # {"error": {"message": …}} (OpenAI, Anthropic, LiteLLM, OpenRouter, recent
+            # vLLM), {"message": …} (older vLLM), {"detail": …} (FastAPI), {"error": "…"}.
+            # Any other body is shown as it came.
+            try:
+                body = json.loads(text)
+            except ValueError:
+                body = None
+            if isinstance(body, dict):
+                error = body.get("error")
+                message = error.get("message") if isinstance(error, dict) else error
+                message = message or body.get("message") or body.get("detail")
+                if isinstance(message, str) and message.strip():
+                    text = message
+            # One line: a carriage return left in it would move the cursor back.
+            detail = " ".join(text.split())[:120]
             return f"HTTP {status}: {detail}" if detail else f"HTTP {status}"
         return type(exc).__name__
+    finally:
+        library_logger.setLevel(level)
+
     return None
 
 
@@ -1685,7 +1714,7 @@ def run_setup(
     domyn_models: dict[tuple[str, ...], dict[str, str]] = {}
     # What each provider answered to an image, by the settings it was sent with.
     # Outside the draft for the same reason: going back over the check sends nothing.
-    image_rejections: dict[str, str | None] = {}
+    image_rejections: dict[tuple[str, str | None], str | None] = {}
 
     console.print()
     title = (
@@ -1998,14 +2027,31 @@ def run_setup(
     def check_vision(d: _Draft) -> None:
         asked = provider if d.keep_model else drafted_provider(d)
         asked_with = asked.model_dump_json()
-        if asked_with not in image_rejections:
+        api_key = resolve_api_key(asked)
+        if (asked_with, api_key) not in image_rejections:
             console.print(
                 "  Checking whether the model reads images…",
                 style=theme.style("meta"),
                 highlight=False,
             )
-            image_rejections[asked_with] = _image_rejection(asked)
-        rejection = image_rejections[asked_with]
+            # No question reads the keys pressed while the model is asked: the terminal
+            # would echo them, a row going back does not erase, and pass them to the next
+            # question, which an impatient Enter then answered unseen. Neither is done:
+            # not echoed, and dropped when the answer comes (TCSAFLUSH). Ctrl-C still aborts.
+            terminal_settings = None
+            if sys.platform != "win32" and sys.stdin.isatty():
+                import termios
+
+                terminal_settings = termios.tcgetattr(sys.stdin.fileno())
+                silent = copy.deepcopy(terminal_settings)
+                silent[3] &= ~termios.ECHO
+                termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, silent)
+            try:
+                image_rejections[(asked_with, api_key)] = _image_rejection(asked)
+            finally:
+                if terminal_settings is not None:
+                    termios.tcsetattr(sys.stdin.fileno(), termios.TCSAFLUSH, terminal_settings)
+        rejection = image_rejections[(asked_with, api_key)]
         d.vision = rejection is None
         console.print(
             "  Vision: enabled"
