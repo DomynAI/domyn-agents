@@ -232,6 +232,26 @@ class TestDockerAsASubprocess:
         assert result.code == 124 and "timed out" in result.stderr
 
     @pytest.mark.asyncio
+    async def test_a_call_that_takes_too_long_leaves_nothing_running(self, tmp_path: Path) -> None:
+        """What the client started (a credential helper during a pull) ends with it.
+        Left alive, it held the output pipes open, and they were closed only after
+        the event loop was gone ("Event loop is closed" in the test output)."""
+        pid_file = tmp_path / "child.pid"
+        cli = _fake_docker(tmp_path, f'sleep 30 & echo $! > "{pid_file}"; wait\n')
+        # Long enough for the script to write the pid on a loaded runner.
+        result = await cli("pull", "x", timeout=2)
+        assert result.code == 124
+        child = int(pid_file.read_text())
+        for _ in range(50):
+            try:
+                os.kill(child, 0)
+            except ProcessLookupError:
+                return
+            await asyncio.sleep(0.02)
+        os.kill(child, 9)
+        raise AssertionError("the child of a timed-out docker call is still running")
+
+    @pytest.mark.asyncio
     async def test_a_missing_docker_says_so(self, tmp_path: Path) -> None:
         with pytest.raises(BackendUnavailableError, match="was not found"):
             await DockerCli(str(tmp_path / "no-docker"))("info")

@@ -1163,6 +1163,7 @@ class Runner:
                 queue_task.cancel()
             if source_task is not None:
                 source_task.cancel()
+                await asyncio.wait({source_task})
             with contextlib.suppress(Exception):
                 await source.aclose()
 

@@ -96,7 +96,10 @@ class DockerCli:
         self, *args: str, timeout: float = 60.0, stdin: str | None = None
     ) -> DockerOutput:
         try:
-            process = await self._spawn(args, piped_stdin=stdin is not None)
+            # A session of its own, so a timeout ends what it started too (a
+            # credential helper during a pull): one left alive holds the output
+            # pipes open, and they are only closed once the event loop is gone.
+            process = await self._spawn(args, piped_stdin=stdin is not None, new_session=True)
         except FileNotFoundError as exc:
             raise BackendUnavailableError(
                 f"Docker was not found ('{self.binary}' is not on your PATH).",
@@ -107,7 +110,7 @@ class DockerCli:
                 process.communicate(input=_encode(stdin)), timeout=timeout
             )
         except TimeoutError:
-            await _terminate(process, whole_group=False)
+            await _terminate(process, whole_group=True)
             verb = args[0] if args else ""
             return DockerOutput(124, "", f"docker {verb} timed out after {timeout:.0f}s")
         return DockerOutput(_exit_code(process), _decode(out), _decode(err))

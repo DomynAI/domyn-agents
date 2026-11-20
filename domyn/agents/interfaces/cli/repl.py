@@ -982,6 +982,7 @@ class Repl:
         finally:
             if next_event is not None:
                 next_event.cancel()
+                await asyncio.wait({next_event})
             with contextlib.suppress(Exception):
                 await stream.aclose()
         return needs_feedback
