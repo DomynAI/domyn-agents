@@ -6,10 +6,12 @@ from collections.abc import AsyncGenerator
 from enum import StrEnum, auto
 from typing import Any, ClassVar
 
+import httpx
 from pydantic import BaseModel, Field, model_validator
 
 from domyn.agents.core import TOKEN_USAGE_METADATA_KEY
 from domyn.agents.llm.context_window import models_url, window_from_models_listing
+from domyn.agents.logger import url_origin
 
 
 class StructuredOutputType(StrEnum):
@@ -157,7 +159,7 @@ def log_inference_request(
     marker = "[Inference Stream Request]" if stream else "[Inference Request]"
     messages = payload.get("messages") or payload.get("input") or []
     logger.info(
-        f"{marker}: {url}",
+        f"{marker}: {url_origin(url)}",
         payload={
             "model": payload.get("model"),
             "messages_count": len(messages),
@@ -165,7 +167,7 @@ def log_inference_request(
             "stream": stream,
         },
     )
-    logger.debug(f"{marker} full payload: {url}", payload=payload)
+    logger.debug(f"{marker} full payload: {url_origin(url)}", payload=payload)
 
 
 def log_inference_response(logger: Any, url: str, payload: dict[str, Any]) -> None:
@@ -177,7 +179,7 @@ def log_inference_response(logger: Any, url: str, payload: dict[str, Any]) -> No
     """
     tool_calls = payload.get("tool_calls") or []
     logger.info(
-        f"[Inference Response]: {url}",
+        f"[Inference Response]: {url_origin(url)}",
         payload={
             "generated_tokens": payload.get("generated_tokens"),
             "execution_time": payload.get("execution_time"),
@@ -188,7 +190,31 @@ def log_inference_response(logger: Any, url: str, payload: dict[str, Any]) -> No
             "usage": payload.get("usage") or {},
         },
     )
-    logger.debug(f"[Inference Response] full payload: {url}", payload=payload)
+    logger.debug(f"[Inference Response] full payload: {url_origin(url)}", payload=payload)
+
+
+async def raise_for_status(logger: Any, response: httpx.Response, provider: str) -> None:
+    """``response.raise_for_status()`` for a provider's call, with the lines every provider logs.
+
+    A failure logs its status at error and its body at debug. The endpoint is named by its origin
+    (`url_origin`), in the raised error's message too: httpx quotes the whole URL there, a
+    credential can sit in it, and callers log that message and copy it into events. The error
+    keeps its class, ``request`` and ``response``.
+    """
+    if response.is_success:
+        return
+    origin = url_origin(response.request.url)
+    if response.is_error:
+        body = (await response.aread()).decode("utf-8", "ignore")
+        logger.error(f"{provider} API {response.status_code} on {origin}")
+        logger.debug(f"{provider} API error body", payload={"body": body[:2000]})
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as error:
+        message = str(error).replace(str(error.request.url), origin)
+        raise httpx.HTTPStatusError(
+            message, request=error.request, response=error.response
+        ) from None
 
 
 _VLLM_ENGINE_TOO_LONG = r"decoder prompt \(length \d+\)[^.]*maximum model length"

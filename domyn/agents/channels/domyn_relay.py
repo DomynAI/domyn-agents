@@ -52,7 +52,7 @@ from domyn.agents.channels.cursor_store import InMemoryCursorStore
 from domyn.agents.core import BaseEvent, ExecutionEventType, RelayMessage
 from domyn.agents.integrations.utils import SeenWindow, resume_headers
 from domyn.agents.interfaces import CursorStore
-from domyn.agents.logger import get_logger
+from domyn.agents.logger import get_logger, url_origin
 
 logger = get_logger()
 
@@ -197,7 +197,7 @@ class DomynRelayChannel:
                     self._ws_url,
                     additional_headers=headers,
                 ) as ws:
-                    logger.info("DomynRelayChannel: connected to %s", self._ws_url)
+                    logger.info("DomynRelayChannel: connected to %s", url_origin(self._ws_url))
                     attempt = 0
                     drain_task = asyncio.create_task(self._drain_loop(ws), name="relay-ws-drain")
                     try:
@@ -241,15 +241,19 @@ class DomynRelayChannel:
                 )
 
             except OSError as exc:
-                logger.warning("DomynRelayChannel: connection failed: %s", exc)
+                logger.warning("DomynRelayChannel: connection failed: %s", type(exc).__name__)
+                logger.debug("DomynRelayChannel: connection failure detail: %s", exc, exc_info=True)
             except Exception as exc:
                 if "InvalidStatus" in type(exc).__name__:
+                    # websockets says only "server rejected WebSocket connection: HTTP <status>".
                     logger.error("DomynRelayChannel: server rejected connection: %s", exc)
                 else:
                     logger.warning(
                         "DomynRelayChannel: unexpected error: %s",
-                        exc,
-                        exc_info=True,
+                        type(exc).__name__,
+                    )
+                    logger.debug(
+                        "DomynRelayChannel: unexpected error detail: %s", exc, exc_info=True
                     )
 
             if self._stop.is_set():
@@ -281,8 +285,9 @@ class DomynRelayChannel:
             return
         try:
             await self._cursor_store.save(self._cursor_key, event_id)
-        except Exception:
-            logger.warning("DomynRelayChannel: cursor_store.save failed", exc_info=True)
+        except Exception as exc:
+            logger.warning("DomynRelayChannel: cursor_store.save failed")
+            logger.debug("DomynRelayChannel: cursor_store.save detail: %s", exc, exc_info=True)
 
     async def _drain_loop(self, ws: Any) -> None:
         """Drain the outbound queue to the given WebSocket connection."""
@@ -298,9 +303,10 @@ class DomynRelayChannel:
             except asyncio.CancelledError:
                 self._outbound.task_done()
                 return
-            except Exception:
+            except Exception as exc:
                 self.events_dropped += 1
-                logger.warning("DomynRelayChannel: drain send failed", exc_info=True)
+                logger.warning("DomynRelayChannel: drain send failed")
+                logger.debug("DomynRelayChannel: drain send detail: %s", exc, exc_info=True)
             finally:
                 self._outbound.task_done()
 

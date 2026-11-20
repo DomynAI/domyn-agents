@@ -4,6 +4,7 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any, Protocol, runtime_checkable
+from urllib.parse import urlsplit
 
 logging.getLogger("domyn.agents").addHandler(logging.NullHandler())
 
@@ -113,3 +114,21 @@ def set_logger(logger: LoggerProtocol) -> None:
 
 def get_logger() -> LoggerProtocol:
     return _library_logger
+
+
+def url_origin(url: object) -> str:
+    """``scheme://host[:port]`` of ``url``: all a log line says about an endpoint.
+
+    Endpoints come from configuration, and a credential can sit anywhere after the host: in the
+    query (a Zapier MCP connection token is ``?token=``), in the path, or as ``user:password@``.
+    The rest of the URL is left out at every level, because a credential belongs at none.
+    """
+    try:
+        parts = urlsplit(str(url))
+        port = parts.port
+    except ValueError:
+        return "<invalid url>"
+    if not parts.scheme or not parts.hostname:
+        return "<invalid url>"
+    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    return f"{parts.scheme}://{host}" + (f":{port}" if port is not None else "")

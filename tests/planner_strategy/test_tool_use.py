@@ -3480,10 +3480,11 @@ class TestResolveVerbatimLogging:
 
         assert found is False
         assert text == ""
+        # The warning says what failed; the id the model wrote, which can be free text, stays out.
         assert any(
-            "forward_verbatim" in r.message and "missing_call_id" in r.message
-            for r in caplog.records
+            "forward_verbatim" in r.message and "not found" in r.message for r in caplog.records
         )
+        assert not any("missing_call_id" in r.message for r in caplog.records)
 
     def test_warning_when_observation_is_none(self, caplog):
         tool_end = make_event(
@@ -3513,10 +3514,11 @@ class TestResolveVerbatimLogging:
 
         assert found is False
         assert text == ""
+        # The warning names the event that was found; the key the model wrote stays out.
         assert any(
-            "source_key='missing.path'" in r.message and "did not resolve" in r.message
-            for r in caplog.records
+            "did not resolve" in r.message and "evt_key" in r.message for r in caplog.records
         )
+        assert not any("missing.path" in r.message for r in caplog.records)
 
     def test_info_on_successful_forward(self, caplog):
         tool_end = make_event(

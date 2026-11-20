@@ -48,7 +48,7 @@ import httpx
 from httpx_sse import aconnect_sse
 
 from domyn.agents.core import BaseEvent, ExecutionEventType, InteractionContext, Part, RelayMessage
-from domyn.agents.logger import get_logger
+from domyn.agents.logger import get_logger, url_origin
 from domyn.agents.runner.transport import RunnerTransport
 from domyn.agents.tracing import inject_trace_headers
 
@@ -402,7 +402,7 @@ class SSETransport(RunnerTransport):
         }
 
         get_logger().debug(
-            f"[SSE transport] Connecting to {self._url} "
+            f"[SSE transport] Connecting to {url_origin(self._url)} "
             f"(body={body.event_type.value if body else None}, conv={conversation_id})"
         )
 

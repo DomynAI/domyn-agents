@@ -2293,11 +2293,17 @@ class Runner:
                     pattern=getattr(tool_feedback_input.action, "remember_pattern", None),
                 )
                 if stored:
+                    # The subject is the call itself (a command line, a path, a URL), so it
+                    # stays at debug; info names only the tool.
                     remembered = (
                         getattr(tool_feedback_input.action, "remember_pattern", None)
                         or grant_request.subject
                     )
-                    logger.info(f"approval: remembered '{remembered}' for {requested_scope}")
+                    logger.info(
+                        f"approval: grant for '{grant_request.tool_name}' remembered for "
+                        f"{requested_scope}"
+                    )
+                    logger.debug(f"approval: remembered '{remembered}' for {requested_scope}")
                 else:
                     logger.warning(
                         f"approval: no store for scope '{requested_scope}'; "

@@ -18,6 +18,7 @@ from domyn.agents.llm.base import (
     ToolCallFunction,
     log_inference_request,
     log_inference_response,
+    raise_for_status,
 )
 from domyn.agents.logger import get_logger
 from domyn.agents.tools.base import sanitize_tool_names
@@ -136,14 +137,7 @@ class CerebrasProvider(BaseLLMProvider):
             count = 0
             while count < self.max_retries:  # fix for cerebras that return invalid json response
                 response = await client.post(self.url, headers=headers, json=payload)
-                if response.is_error:
-                    body_bytes = await response.aread()
-                    logger.error(f"Cerebras API {response.status_code} on {self.url}")
-                    logger.debug(
-                        "Cerebras API error body",
-                        payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},
-                    )
-                response.raise_for_status()
+                await raise_for_status(logger, response, "Cerebras")
                 data = json.loads(response.text.strip())
 
                 if not data:
@@ -264,14 +258,7 @@ class CerebrasProvider(BaseLLMProvider):
             httpx.AsyncClient(timeout=60.0) as client,
             client.stream("POST", self.url, headers=headers, json=payload) as response,
         ):
-            if response.is_error:
-                body_bytes = await response.aread()
-                logger.error(f"Cerebras API {response.status_code} on {self.url}")
-                logger.debug(
-                    "Cerebras API error body",
-                    payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},
-                )
-            response.raise_for_status()
+            await raise_for_status(logger, response, "Cerebras")
             async for line in response.aiter_lines():
                 line = line.strip()
                 if not line.startswith("data:"):

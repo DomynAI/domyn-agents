@@ -24,7 +24,7 @@ from pydantic.json_schema import SkipJsonSchema
 
 from domyn.agents.core import ApprovalType, VisibilityScope
 from domyn.agents.hooks import HookPhase
-from domyn.agents.logger import get_logger
+from domyn.agents.logger import get_logger, url_origin
 from domyn.agents.tools.base import (
     _MISSING,
     FunctionDeclaration,
@@ -156,13 +156,17 @@ class MCPTool(FunctionTool):
         cached = await cache.get(key)
         if cached is not None:
             if cached == _LIST_TOOLS_FAILURE_SENTINEL:
-                raise ClientError(f"MCP server {server_url}: list_tools recently failed")
+                raise ClientError(
+                    f"MCP server {url_origin(server_url)}: list_tools recently failed"
+                )
             return cast(list[Tool], cached)
         async with cache.lock(f"{key}:lock", expire=30):
             cached = await cache.get(key)
             if cached is not None:
                 if cached == _LIST_TOOLS_FAILURE_SENTINEL:
-                    raise ClientError(f"MCP server {server_url}: list_tools recently failed")
+                    raise ClientError(
+                        f"MCP server {url_origin(server_url)}: list_tools recently failed"
+                    )
                 return cast(list[Tool], cached)
             try:
                 async with client as c:
@@ -240,7 +244,9 @@ class MCPTool(FunctionTool):
         await self.get_tool_schema()
 
         if self._tool_schema is None:
-            raise RuntimeError(f"Tool '{self.tool_name}' not found on MCP server {self.server_url}")
+            raise RuntimeError(
+                f"Tool '{self.tool_name}' not found on MCP server {url_origin(self.server_url)}"
+            )
 
         return self._client
 
@@ -288,12 +294,14 @@ class MCPTool(FunctionTool):
                     input_schema = inline_schema_refs(
                         server_schema,
                         on_unresolved=lambda ref: logger.warning(
-                            f"MCP tool '{self.tool_name}' on {self.server_url}: schema "
+                            f"MCP tool '{self.tool_name}' on server '{self.group}' "
+                            f"({url_origin(self.server_url)}): schema "
                             f"reference {ref} does not resolve — dropped from the schema "
                             f"sent to the model"
                         ),
                         on_truncated=lambda cut: logger.warning(
-                            f"MCP tool '{self.tool_name}' on {self.server_url}: schema too "
+                            f"MCP tool '{self.tool_name}' on server '{self.group}' "
+                            f"({url_origin(self.server_url)}): schema too "
                             f"large to inline in full — {cut} references left as "
                             f"placeholders"
                         ),
@@ -572,7 +580,8 @@ class MCPTool(FunctionTool):
                                 await probe_client.ping()
                 except Exception as exc:
                     raise RuntimeError(
-                        f"MCP server at {self.server_url} stopped responding during tool execution"
+                        f"MCP server at {url_origin(self.server_url)} stopped responding during "
+                        "tool execution"
                     ) from exc
 
             async def _run_call_and_healthcheck() -> None:

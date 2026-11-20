@@ -154,7 +154,10 @@ class AgentServer:
         try:
             allowed = await self._auth.authenticate(event)
         except Exception as exc:
-            logger.warning("AgentServer: auth.authenticate raised: %s — rejecting event", exc)
+            logger.warning(
+                "AgentServer: auth.authenticate raised: %s — rejecting event", type(exc).__name__
+            )
+            logger.debug("AgentServer: authenticate failure detail: %s", exc, exc_info=True)
             return False
         if not allowed:
             logger.info(
@@ -171,7 +174,15 @@ class AgentServer:
             return self._normalizer.normalize(event)
         except Exception as exc:
             logger.warning(
-                "AgentServer: normalizer raised for conv=%s: %s — skipping", conv_id, exc
+                "AgentServer: normalizer raised for conv=%s: %s — skipping",
+                conv_id,
+                type(exc).__name__,
+            )
+            logger.debug(
+                "AgentServer: normalizer failure for conv=%s, detail: %s",
+                conv_id,
+                exc,
+                exc_info=True,
             )
             return None
 

@@ -19,6 +19,7 @@ from domyn.agents.llm.base import (
     ToolCallFunction,
     log_inference_request,
     log_inference_response,
+    raise_for_status,
 )
 from domyn.agents.logger import get_logger
 from domyn.agents.tools.base import sanitize_tool_names
@@ -76,14 +77,7 @@ class OpenRouterProvider(BaseLLMProvider):
             response = await client.get(
                 url="https://openrouter.ai/api/v1/models?supported_parameters=structured_outputs"
             )
-            if response.is_error:
-                body_bytes = await response.aread()
-                logger.error(f"OpenRouter API {response.status_code} on {response.request.url}")
-                logger.debug(
-                    "OpenRouter API error body",
-                    payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},
-                )
-            response.raise_for_status()
+            await raise_for_status(logger, response, "OpenRouter")
             data = response.json()
             supported_models = [model["id"] for model in data["data"]]
             has_structured_output_support = self.model_name in supported_models
@@ -176,14 +170,7 @@ class OpenRouterProvider(BaseLLMProvider):
             count = 0
             while count < self.max_retries:  # retry on empty response
                 response = await client.post(self.url, headers=headers, json=payload)
-                if response.is_error:
-                    body_bytes = await response.aread()
-                    logger.error(f"OpenRouter API {response.status_code} on {self.url}")
-                    logger.debug(
-                        "OpenRouter API error body",
-                        payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},
-                    )
-                response.raise_for_status()
+                await raise_for_status(logger, response, "OpenRouter")
                 data = json.loads(response.text.strip())
 
                 if not data:
@@ -309,14 +296,7 @@ class OpenRouterProvider(BaseLLMProvider):
             # mid-JSON, dropping tool-call argument deltas and corrupting the
             # accumulated arguments string.
             async with client.stream("POST", self.url, headers=headers, json=payload) as response:
-                if response.is_error:
-                    body_bytes = await response.aread()
-                    logger.error(f"OpenRouter API {response.status_code} on {self.url}")
-                    logger.debug(
-                        "OpenRouter API error body",
-                        payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},
-                    )
-                response.raise_for_status()
+                await raise_for_status(logger, response, "OpenRouter")
                 async for line in response.aiter_lines():
                     line = line.strip()
                     # Skip blank lines and SSE comments (e.g. ": OPENROUTER PROCESSING").

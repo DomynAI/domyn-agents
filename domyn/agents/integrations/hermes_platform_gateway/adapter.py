@@ -523,7 +523,8 @@ class DomynPlatformAdapter(BasePlatformAdapter):
             await self._send_traced(event)
         except Exception as exc:
             self._pending_slash_confirms.pop(turn.turn_id, None)
-            logger.warning("domyn-adapter: send_slash_confirm failed - %s", exc)
+            logger.warning("domyn-adapter: send_slash_confirm failed - %s", type(exc).__name__)
+            logger.debug("domyn-adapter: send_slash_confirm failure detail", exc_info=True)
             return SendResult(success=False, error=str(exc), retryable=True)
         return SendResult(success=True, message_id=event.event_id)
 
@@ -620,7 +621,8 @@ class DomynPlatformAdapter(BasePlatformAdapter):
             await self._send_traced(event)
         except Exception as exc:
             self._pending_exec_approvals.pop(turn.turn_id, None)
-            logger.warning("domyn-adapter: send_exec_approval failed - %s", exc)
+            logger.warning("domyn-adapter: send_exec_approval failed - %s", type(exc).__name__)
+            logger.debug("domyn-adapter: send_exec_approval failure detail", exc_info=True)
             return SendResult(success=False, error=str(exc), retryable=True)
         return SendResult(success=True, message_id=event.event_id)
 
@@ -682,7 +684,8 @@ class DomynPlatformAdapter(BasePlatformAdapter):
         try:
             from tools.approval import resolve_gateway_approval
         except Exception as exc:
-            logger.warning("domyn-adapter: tools.approval import failed - %s", exc)
+            logger.warning("domyn-adapter: tools.approval import failed - %s", type(exc).__name__)
+            logger.debug("domyn-adapter: tools.approval import failure detail", exc_info=True)
             return True
 
         try:
@@ -694,7 +697,10 @@ class DomynPlatformAdapter(BasePlatformAdapter):
                 resolved,
             )
         except Exception as exc:
-            logger.warning("domyn-adapter: resolve_gateway_approval failed - %s", exc)
+            logger.warning(
+                "domyn-adapter: resolve_gateway_approval failed - %s", type(exc).__name__
+            )
+            logger.debug("domyn-adapter: resolve_gateway_approval failure detail", exc_info=True)
         return True
 
     async def _handle_slash_confirm_feedback(self, event: Any) -> None:
@@ -750,7 +756,10 @@ class DomynPlatformAdapter(BasePlatformAdapter):
         try:
             from tools import slash_confirm as _slash_confirm_mod
         except Exception as exc:
-            logger.warning("domyn-adapter: tools.slash_confirm import failed - %s", exc)
+            logger.warning(
+                "domyn-adapter: tools.slash_confirm import failed - %s", type(exc).__name__
+            )
+            logger.debug("domyn-adapter: tools.slash_confirm import failure detail", exc_info=True)
             return
 
         try:
@@ -761,7 +770,8 @@ class DomynPlatformAdapter(BasePlatformAdapter):
             )
             result_text = await _slash_confirm_mod.resolve(session_key, turn_id, choice)
         except Exception as exc:
-            logger.warning("domyn-adapter: slash_confirm.resolve failed - %s", exc)
+            logger.warning("domyn-adapter: slash_confirm.resolve failed - %s", type(exc).__name__)
+            logger.debug("domyn-adapter: slash_confirm.resolve failure detail", exc_info=True)
             return
 
         if result_text:
@@ -934,7 +944,10 @@ class DomynPlatformAdapter(BasePlatformAdapter):
                     turn.event_id,
                 )
             except Exception as exc:
-                logger.warning("domyn-adapter: failed to send cancel AGENT_END - %s", exc)
+                logger.warning(
+                    "domyn-adapter: failed to send cancel AGENT_END - %s", type(exc).__name__
+                )
+                logger.debug("domyn-adapter: cancel AGENT_END send failure detail", exc_info=True)
         else:
             logger.warning("domyn-adapter: no active turn for cancelled session %s", session_key)
 
@@ -952,7 +965,10 @@ class DomynPlatformAdapter(BasePlatformAdapter):
             await self.handle_message(stop_msg)
             logger.info("domyn-adapter: dispatched /stop for cancelled session %s", session_key)
         except Exception as exc:
-            logger.warning("domyn-adapter: /stop dispatch failed for %s - %s", session_key, exc)
+            logger.warning(
+                "domyn-adapter: /stop dispatch failed for %s - %s", session_key, type(exc).__name__
+            )
+            logger.debug("domyn-adapter: /stop dispatch failure detail", exc_info=True)
 
     async def _handle_agent_start(
         self,
@@ -1299,7 +1315,8 @@ class DomynPlatformAdapter(BasePlatformAdapter):
         try:
             await self._send_traced(event)
         except Exception as exc:
-            logger.warning("domyn-adapter: send_event failed - %s", exc)
+            logger.warning("domyn-adapter: send_event failed - %s", type(exc).__name__)
+            logger.debug("domyn-adapter: send_event failure detail", exc_info=True)
             return SendResult(success=False, error=str(exc), retryable=True)
         # Keep the turn open across a background delegation so its completion can
         # re-enter and send the real final AGENT_END against this turn; popping
@@ -1395,7 +1412,11 @@ class DomynPlatformAdapter(BasePlatformAdapter):
             logger.warning(
                 "domyn-adapter: emit_visibility_tool_start %s failed - %s",
                 tool_name,
-                exc,
+                type(exc).__name__,
+            )
+            logger.debug(
+                "domyn-adapter: emit_visibility_tool_start failure detail",
+                exc_info=True,
             )
 
     async def emit_visibility_tool_end(
@@ -1440,8 +1461,9 @@ class DomynPlatformAdapter(BasePlatformAdapter):
             logger.warning(
                 "domyn-adapter: emit_visibility_tool_end %s failed - %s",
                 tool_name,
-                exc,
+                type(exc).__name__,
             )
+            logger.debug("domyn-adapter: emit_visibility_tool_end failure detail", exc_info=True)
 
     async def emit_visibility_tool_error(
         self,
@@ -1483,7 +1505,11 @@ class DomynPlatformAdapter(BasePlatformAdapter):
             logger.warning(
                 "domyn-adapter: emit_visibility_tool_error %s failed - %s",
                 tool_name,
-                exc,
+                type(exc).__name__,
+            )
+            logger.debug(
+                "domyn-adapter: emit_visibility_tool_error failure detail",
+                exc_info=True,
             )
 
     async def emit_llm_start(self, *, chat_id: str, model: str, call_id: str) -> None:
@@ -1503,7 +1529,8 @@ class DomynPlatformAdapter(BasePlatformAdapter):
         try:
             await self._send_traced(event)
         except Exception as exc:
-            logger.warning("domyn-adapter: emit_llm_start failed - %s", exc)
+            logger.warning("domyn-adapter: emit_llm_start failed - %s", type(exc).__name__)
+            logger.debug("domyn-adapter: emit_llm_start failure detail", exc_info=True)
 
     async def emit_llm_end(
         self,
@@ -1529,7 +1556,8 @@ class DomynPlatformAdapter(BasePlatformAdapter):
         try:
             await self._send_traced(event)
         except Exception as exc:
-            logger.warning("domyn-adapter: emit_llm_end failed - %s", exc)
+            logger.warning("domyn-adapter: emit_llm_end failed - %s", type(exc).__name__)
+            logger.debug("domyn-adapter: emit_llm_end failure detail", exc_info=True)
 
     # =====================================================================
     # Tool-call routing (real platform tools — round-trip via the relay)
@@ -1585,8 +1613,9 @@ class DomynPlatformAdapter(BasePlatformAdapter):
                     "domyn-adapter: TOOL_START send failed for %s call_id=%s - %s",
                     self._tool_rename_mapping.get(tool_name, tool_name),
                     call_id,
-                    exc,
+                    type(exc).__name__,
                 )
+                logger.debug("domyn-adapter: TOOL_START send failure detail", exc_info=True)
                 return json.dumps({"error": f"send failed: {exc}"})
 
             observation = await asyncio.wait_for(fut, timeout=timeout)
@@ -1613,8 +1642,9 @@ class DomynPlatformAdapter(BasePlatformAdapter):
                 "domyn-adapter: TOOL future raised name=%s call_id=%s - %s",
                 self._tool_rename_mapping.get(tool_name, tool_name),
                 call_id,
-                exc,
+                type(exc).__name__,
             )
+            logger.debug("domyn-adapter: TOOL future failure detail", exc_info=True)
             return json.dumps({"error": str(exc)})
         finally:
             # Every exit drops this call's bookkeeping, cancellation included: a stale

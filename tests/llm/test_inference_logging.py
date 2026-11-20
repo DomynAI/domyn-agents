@@ -6,6 +6,9 @@ arguments) must never appear at info level — only usage metadata does. The
 full payload is available at debug only.
 """
 
+import json
+import traceback
+
 import httpx
 import pytest
 import respx
@@ -18,6 +21,7 @@ URL = "https://llm.test/v1/chat/completions"
 USER_SECRET = "super-secret-user-question"
 ASSISTANT_SECRET = "super-secret-assistant-answer"
 TOOL_ARG_SECRET = "super-secret-tool-argument"
+SECRETS = (USER_SECRET, ASSISTANT_SECRET, TOOL_ARG_SECRET)
 
 
 class RecordingLogger:
@@ -46,6 +50,17 @@ class RecordingLogger:
 
     def dump(self, level):
         return " | ".join(f"{m} {p}" for lv, m, p in self.records if lv == level)
+
+
+ABOVE_DEBUG = ("info", "warning", "error", "critical")
+
+
+def assert_content_stays_below_info(recording_logger):
+    """No record at info or above carries conversation content."""
+    for level in ABOVE_DEBUG:
+        dumped = recording_logger.dump(level)
+        for secret in SECRETS:
+            assert secret not in dumped, f"{level} record carries conversation content: {dumped}"
 
 
 @pytest.fixture
@@ -151,3 +166,75 @@ class TestProviderWiring:
         debug = recording_logger.dump("debug")
         assert USER_SECRET in debug
         assert ASSISTANT_SECRET in debug
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_vllm_tool_call_content_stays_out_of_info(self, recording_logger):
+        """Response text and tool-call arguments reach debug only."""
+        respx.post(URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": ASSISTANT_SECRET,
+                                "tool_calls": [
+                                    {
+                                        "id": "tc-1",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "search",
+                                            "arguments": json.dumps({"q": TOOL_ARG_SECRET}),
+                                        },
+                                    }
+                                ],
+                            },
+                            "finish_reason": "tool_calls",
+                        }
+                    ],
+                    "usage": {"completion_tokens": 4},
+                },
+            )
+        )
+        provider = VLLMProvider(url=URL, model_name="test-model", api_key="k")
+        await provider.generate([LLMMessage(role="user", content=USER_SECRET)])
+
+        assert_content_stays_below_info(recording_logger)
+
+        # The test proves something only if the content did flow through the call.
+        debug = recording_logger.dump("debug")
+        assert "[Inference Request]" in debug
+        assert TOOL_ARG_SECRET in debug
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_vllm_error_body_stays_out_of_error_logs(self, recording_logger):
+        """A provider error body is debug material; the error line keeps the status."""
+        respx.post(URL).mock(return_value=httpx.Response(500, json={"error": USER_SECRET}))
+        provider = VLLMProvider(url=URL, model_name="test-model", api_key="k")
+        with pytest.raises(httpx.HTTPStatusError):
+            await provider.generate([LLMMessage(role="user", content=USER_SECRET)])
+
+        assert_content_stays_below_info(recording_logger)
+        assert "vLLM API 500" in recording_logger.dump("error")
+        assert USER_SECRET in recording_logger.dump("debug")
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_a_credential_in_the_endpoint_url_reaches_no_level(self, recording_logger):
+        """Only scheme and host of the endpoint are named: a token in its query reaches no line,
+        nor the raised error's message, which callers log and copy into events."""
+        url = "https://llm.test/v1/chat/completions?api-key=endpoint-secret"
+        respx.post(url).mock(return_value=httpx.Response(500, json={"error": "boom"}))
+        provider = VLLMProvider(url=url, model_name="test-model", api_key="k")
+        with pytest.raises(httpx.HTTPStatusError) as raised:
+            await provider.generate([LLMMessage(role="user", content="hi")])
+
+        assert raised.value.response.status_code == 500
+        assert "endpoint-secret" not in "".join(traceback.format_exception(raised.value))
+        assert "vLLM API 500 on https://llm.test" in recording_logger.dump("error")
+        assert "[Inference Request]: https://llm.test" in recording_logger.dump("info")
+        for level in ("debug", *ABOVE_DEBUG):
+            assert "endpoint-secret" not in recording_logger.dump(level)
