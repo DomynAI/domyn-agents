@@ -5,6 +5,7 @@ from typing import Self
 
 from pydantic import Field, model_validator
 
+from domyn.agents.approvals import append_user_edit_note
 from domyn.agents.core import BaseAgent, BaseEvent, InteractionContext
 from domyn.agents.core.utils import parts_to_text
 from domyn.agents.llm import LLMMessage, LLMResponse, StructuredOutput, StructuredOutputType
@@ -393,6 +394,7 @@ class StructuralTagMessagePrompting(StructuralTagsPrompting, MessageBuilder):
             if isinstance(event.action.observation, dict | list)
             else event.action.observation
         )
+        obs = append_user_edit_note(obs, event)
         # The event_id header lets the LLM reference this observation by
         # event_id in a later FORWARD_VERBATIM call.
         if event.event_id and forward_verbatim_enabled:
@@ -424,7 +426,7 @@ class StructuralTagMessagePrompting(StructuralTagsPrompting, MessageBuilder):
                 messages.append(
                     LLMMessage(
                         role=self.feedback_role,
-                        content=f"Agent: {event.author}\n\nTool error: {event.action.observation}",
+                        content=f"Agent: {event.author}\n\nTool error: {append_user_edit_note(event.action.observation, event)}",
                     ),
                 )
             elif ("response" in event.action.parameters) and ("error" in event.action.parameters):

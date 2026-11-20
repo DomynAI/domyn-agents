@@ -1132,7 +1132,7 @@ async def test_flow_user_confirm_executes_tool_start_params_not_feedback_echo(
     assert events[0].action.parameters == {"query": "SELECT 1"}
     # Parameters match the TOOL_START, so no "user updated tool parameters" nudge.
     assert events[0].action.observation is not None
-    assert "update tool parameters" not in str(events[0].action.observation)
+    assert "rejected the arguments you proposed" not in str(events[0].action.observation)
 
 
 @pytest.mark.asyncio
@@ -5273,8 +5273,12 @@ class _HitlTransport(RunnerTransport):
 def _make_delegate_agent(
     transport: _HitlTransport,
     approval_type: ApprovalType,
+    *,
+    fail_when_b_above: int | None = None,
 ) -> DelegateAgent:
     def add_tool(a: int, b: int) -> int:
+        if fail_when_b_above is not None and b > fail_when_b_above:
+            raise ValueError(f"b={b} is not allowed")
         return a + b
 
     return DelegateAgent(
@@ -5584,17 +5588,76 @@ async def test_flow_delegate_agent_tool_feedback_params_update(runner: Runner) -
     ]
 
     tool_end = next(e for e in run2 if e.event_type == ExecutionEventType.TOOL_END)
-    # Tool ran with updated b=3 → 1 + 3 = 4; observation has result + params-changed notice
-    assert str(tool_end.action.observation).startswith("4")
-    assert "IMPORTANT" in str(tool_end.action.observation)
+    # Tool ran with updated b=3 → 1 + 3 = 4; the result users see is the tool's own
+    assert tool_end.action.observation == 4
 
     # Transport receives enriched TOOL_END with param-change notice
     assert len(transport.sent_results) == 1
     sent = transport.sent_results[0]
     assert sent.event_type == ExecutionEventType.TOOL_END
-    assert "IMPORTANT" in str(sent.action.observation), (
+    assert str(sent.action.observation).startswith("4\n\n")
+    assert "rejected the arguments you proposed" in str(sent.action.observation), (
         "params-changed notice must appear in the observation sent to the remote agent"
     )
+
+
+async def _execute_tool_yielding_nothing(
+    *args: Any, **kwargs: Any
+) -> AsyncGenerator[BaseEvent, None]:
+    return
+    yield
+
+
+@pytest.mark.parametrize("tool_yields_nothing", [False, True], ids=["raises", "yields_nothing"])
+@pytest.mark.asyncio
+async def test_flow_delegate_agent_edited_call_that_fails(
+    runner: Runner, monkeypatch: pytest.MonkeyPatch, tool_yields_nothing: bool
+) -> None:
+    """A remote reads only the error message of a failed call: the note goes there too."""
+    transport = _HitlTransport(
+        initial_events=[
+            BaseEvent(
+                event_type=ExecutionEventType.TOOL_START,
+                author="RemoteAgent",
+                action=ToolAction(name="add_tool", parameters={"a": 1, "b": 2}),
+            )
+        ],
+        post_result_events=[],
+    )
+    agent = _make_delegate_agent(transport, ApprovalType.PARAMS_UPDATE, fail_when_b_above=2)
+    kwargs: dict[str, Any] = {
+        "application_name": "app",
+        "user_id": "user",
+        "root": agent,
+        "conversation_id": "test_delegate_hitl_params_update_error",
+    }
+    question = BaseEvent(
+        event_type=ExecutionEventType.USER_INPUT, author="user", content=[Part(text="go")]
+    )
+    _ = [e async for e in runner.run(user_input=question, **kwargs)]
+    reply = BaseEvent(
+        event_type=ExecutionEventType.TOOL_FEEDBACK,
+        author="user",
+        action=FeedbackAction(
+            name="add_tool",
+            parameters=[
+                FeedbackParameters(name="a", value=1, type="int"),
+                FeedbackParameters(name="b", value=3, type="int"),
+            ],
+            approval_type=ApprovalType.PARAMS_UPDATE,
+            approve=True,
+        ),
+    )
+    if tool_yields_nothing:
+        monkeypatch.setattr(Runner, "_execute_tool", _execute_tool_yielding_nothing)
+    events = [e async for e in runner.run(user_input=reply, **kwargs)]
+
+    tool_error = next(e for e in events if e.event_type == ExecutionEventType.TOOL_ERROR)
+    assert "rejected the arguments you proposed" not in str(tool_error.error_message)
+    (result_sent_to_remote,) = transport.sent_results
+    expected_error = "did not yield any events" if tool_yields_nothing else "b=3 is not allowed"
+    assert expected_error in str(result_sent_to_remote.error_message)
+    assert "rejected the arguments you proposed" in str(result_sent_to_remote.error_message)
 
 
 @pytest.mark.asyncio

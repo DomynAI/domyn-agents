@@ -145,7 +145,7 @@ Final Response: <final agent response>
                         event = self.add_default_agent_start_content(event=event, context=context)
                     messages.extend(self.prompting.get_agent_start_messages(event))
 
-                case ExecutionEventType.TOOL_END | ExecutionEventType.TOOL_FEEDBACK:
+                case ExecutionEventType.TOOL_END:
                     messages.extend(
                         self.prompting.get_tool_end_messages(
                             event,
