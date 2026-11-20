@@ -206,10 +206,12 @@ The runner sends a `POST` with a JSON body. Without `input_fields`, the body hol
 
 | Phase | `input_fields` available |
 |---|---|
-| `pre_agent_call`, `post_agent_call` | `agent_name`, `agent_input` (the text of the request), `last_event`, `interaction_history`, `interaction_context` |
+| `pre_agent_call`, `post_agent_call` | `agent_name`, `agent_input` (the text of the request), `last_event`, `interaction_history`, `conversation_history`, `interaction_context` |
 | `pre_tool_approval`, `pre_tool_call` | `tool_name`, `tool_args` |
 | `post_tool_call` | `tool_name`, `tool_result` |
-| `on_agent_event` | `current_event`, `last_event`, `interaction_history`, `interaction_context` |
+| `on_agent_event` | `current_event`, `last_event`, `interaction_history`, `conversation_history`, `interaction_context` |
+
+`interaction_history` holds the events of the agent's current run, and `conversation_history` the events of the conversation before it that the agent can see: the earlier turns, and the events of this turn before a sub-agent handed back. After a pause for the user's answer, both hold the events from before the pause, so a hook that reads both should skip repeated `event_id`s.
 
 The endpoint answers with status 200 and a JSON object, read as a function's return value: `{}` for a listener, `{"new_tool_args": {...}}` or `{"new_result": {...}}` for a tool updater. Any other status is a hook error, with the status code as `error_code`.
 

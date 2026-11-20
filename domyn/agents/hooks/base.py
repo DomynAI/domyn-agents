@@ -41,6 +41,7 @@ class InputFields(StrEnum):
     LAST_EVENT = "last_event"
     CURRENT_EVENT = "current_event"
     INTERACTION_HISTORY = "interaction_history"
+    CONVERSATION_HISTORY = "conversation_history"
     INTERACTION_CONTEXT = "interaction_context"
     TOOL_NAME = "tool_name"
     TOOL_ARGS = "tool_args"

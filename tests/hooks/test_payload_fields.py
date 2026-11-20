@@ -394,6 +394,48 @@ async def test_interaction_history_empty_when_context_none(agent: BaseAgent) -> 
 
 
 @pytest.mark.asyncio
+async def test_conversation_history_projected_as_list(
+    agent: BaseAgent, last_event: BaseEvent
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def hook_fn(conversation_history: list) -> None:
+        captured["conversation_history"] = conversation_history
+
+    hook = FunctionHook(
+        trigger=HookPhase.PRE_AGENT_CALL,
+        type=HookType.LISTENER,
+        fun=hook_fn,
+        input_fields=[InputFields.CONVERSATION_HISTORY],
+    )
+    context = InteractionContext(
+        conversation_id="c1",
+        user_id="u1",
+        agent_input=last_event,
+        conversation_history=[last_event],
+    )
+    await _drain(hook, context=context, agent=agent)
+    assert [e.event_id for e in captured["conversation_history"]] == [last_event.event_id]
+
+
+@pytest.mark.asyncio
+async def test_conversation_history_empty_when_context_none(agent: BaseAgent) -> None:
+    captured: dict[str, Any] = {}
+
+    def hook_fn(conversation_history: list) -> None:
+        captured["conversation_history"] = conversation_history
+
+    hook = FunctionHook(
+        trigger=HookPhase.PRE_AGENT_CALL,
+        type=HookType.LISTENER,
+        fun=hook_fn,
+        input_fields=[InputFields.CONVERSATION_HISTORY],
+    )
+    await _drain(hook, agent=agent)
+    assert captured["conversation_history"] == []
+
+
+@pytest.mark.asyncio
 async def test_last_event_none_when_history_empty(
     agent: BaseAgent, empty_history_context: InteractionContext
 ) -> None:
@@ -531,6 +573,31 @@ def test_post_tool_call_rejects_tool_args() -> None:
             type=HookType.LISTENER,
             fun=hook_fn,
             input_fields=[InputFields.TOOL_ARGS],
+        )
+
+
+def test_on_agent_event_accepts_conversation_history() -> None:
+    def hook_fn(current_event: BaseEvent, conversation_history: list) -> None:
+        pass
+
+    FunctionHook(
+        trigger=HookPhase.ON_AGENT_EVENT,
+        type=HookType.LISTENER,
+        fun=hook_fn,
+        input_fields=[InputFields.CURRENT_EVENT, InputFields.CONVERSATION_HISTORY],
+    )
+
+
+def test_pre_tool_call_rejects_conversation_history() -> None:
+    def hook_fn(conversation_history: list) -> None:
+        pass
+
+    with pytest.raises(ValueError, match="Invalid input fields"):
+        FunctionHook(
+            trigger=HookPhase.PRE_TOOL_CALL,
+            type=HookType.LISTENER,
+            fun=hook_fn,
+            input_fields=[InputFields.CONVERSATION_HISTORY],
         )
 
 
@@ -711,6 +778,39 @@ async def test_rest_on_agent_event_current_event_serialized(last_event: BaseEven
     body = captured["body"]
     assert isinstance(body["current_event"], dict)
     assert body["current_event"]["event_id"] == last_event.event_id
+
+
+@pytest.mark.asyncio
+async def test_rest_on_agent_event_conversation_history_serialized(last_event: BaseEvent) -> None:
+    captured: dict[str, Any] = {}
+    client = httpx.AsyncClient(transport=_capture_transport(captured))
+    hook = FunctionHook(
+        trigger=HookPhase.ON_AGENT_EVENT,
+        type=HookType.LISTENER,
+        fun=None,
+        rest_api=HookRestAPIData(url="http://x", method="POST"),
+        httpx_client=client,
+        input_fields=[InputFields.CURRENT_EVENT, InputFields.CONVERSATION_HISTORY],
+    )
+    earlier = BaseEvent(
+        event_type=ExecutionEventType.USER_INPUT,
+        author="user",
+        timestamp=datetime(2024, 1, 1),
+        content=[Part(text="earlier question")],
+        event_id="evt-earlier",
+    )
+    context = InteractionContext(
+        conversation_id="c1",
+        user_id="u1",
+        agent_input=last_event,
+        conversation_history=[earlier],
+    )
+    async for _ in hook.run(event=last_event, context=context):
+        pass
+
+    body = captured["body"]
+    assert set(body) == {"current_event", "conversation_history"}
+    assert body["conversation_history"] == [earlier.model_dump(mode="json")]
 
 
 @pytest.mark.asyncio
