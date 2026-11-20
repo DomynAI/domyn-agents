@@ -107,6 +107,35 @@ class TestOpenRouterProvider:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_an_assistant_messages_reasoning_is_sent_back_as_reasoning(self):
+        respx.get(
+            url__regex=r"https://openrouter\.ai/api/v1/models\?supported_parameters=\w+"
+        ).mock(return_value=httpx.Response(200, content=b'{"data":[]}'))
+        post_route = respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "hi"}}],
+                    "usage": {"completion_tokens": 1},
+                },
+            )
+        )
+
+        await self.provider.generate(
+            [
+                LLMMessage(role="user", content="weather?"),
+                LLMMessage(role="assistant", content="sunny", reasoning_content="I checked"),
+                LLMMessage(role="user", content="sure?"),
+            ]
+        )
+
+        sent = json.loads(post_route.calls.last.request.content)["messages"]
+        assert sent[1]["reasoning"] == "I checked"
+        assert "reasoning_content" not in sent[1]
+        assert "reasoning" not in sent[0]
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_reasoning_stripped_when_unsupported(self):
         """`reasoning_supported=False` is authoritative: a `reasoning` key injected
         via generation_params must NOT reach the model — the merge happens after the
