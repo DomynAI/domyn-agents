@@ -540,5 +540,5 @@ async def test_a_connect_timeout_names_the_relay_by_its_origin(monkeypatch) -> N
     events = [event async for event in transport.execute("Remote", create_test_context())]
 
     assert events[-1].error_code == "delegate_timeout"
-    assert "wss://relay.example.com" in events[-1].error_message
+    assert "timeout to wss://relay.example.com)" in events[-1].error_message
     assert "s3cr3t" not in events[-1].model_dump_json()
