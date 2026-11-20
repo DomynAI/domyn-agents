@@ -57,9 +57,9 @@ class LLMMessage(BaseModel):
         default=None,
         description=(
             "The model's own reasoning behind an assistant message, sent back to it "
-            "with the message. Serialized only when asked (`to_dict(reasoning=True)`), "
-            "by the providers whose API accepts the field "
-            "(`BaseLLMProvider.sends_reasoning_content`)."
+            "with the message. Serialized only when asked, under the key the provider's "
+            "API takes it in (`to_dict(reasoning_key=...)`, "
+            "`BaseLLMProvider.reasoning_content_key`)."
         ),
     )
 
@@ -99,16 +99,17 @@ class LLMMessage(BaseModel):
         ),
     )
 
-    def to_dict(self, *, reasoning: bool = False) -> dict[str, Any]:
+    def to_dict(self, *, reasoning_key: str | None = None) -> dict[str, Any]:
         """Convert message to a dictionary format suitable for LLM input.
 
-        ``reasoning`` adds ``reasoning_content`` when the message has one: only for
-        an API that accepts the field, as others reject it."""
+        ``reasoning_key`` adds the message's reasoning, when it has one, under that
+        key: the one the API takes it in. ``None`` leaves it out, as an API that
+        does not accept it may reject it."""
         result: dict[str, Any] = {"role": self.role}
         if self.content is not None:
             result["content"] = self.content
-        if reasoning and self.reasoning_content:
-            result["reasoning_content"] = self.reasoning_content
+        if reasoning_key and self.reasoning_content:
+            result[reasoning_key] = self.reasoning_content
         if self.tool_calls:
             result["tool_calls"] = [call.model_dump() for call in self.tool_calls]
         if self.tool_call_id is not None:
@@ -467,12 +468,13 @@ class BaseLLMProvider(BaseModel, ABC):
         ),
     )
 
-    sends_reasoning_content: ClassVar[bool] = False
-    """Whether this provider's API takes ``reasoning_content`` on an assistant
-    message. The context manager then puts the model's whole reasoning on the
-    assistant messages of the current user turn, and the provider sends it
-    (`LLMMessage.to_dict(reasoning=True)`); otherwise those messages carry the short
-    thoughts as their content, like earlier turns."""
+    reasoning_content_key: ClassVar[str | None] = None
+    """The key under which this provider's API takes the model's reasoning back on
+    an assistant message, or ``None`` when it does not take it. With a key, the
+    context manager puts the model's whole reasoning on the assistant messages of
+    the current user turn, and the provider sends it under that key
+    (`LLMMessage.to_dict(reasoning_key=...)`); without one, those messages carry
+    the short thoughts as their content, like earlier turns."""
 
     context_window_catalog: ClassVar[str | None] = None
     """The models.dev provider whose catalogue knows this provider's windows by model

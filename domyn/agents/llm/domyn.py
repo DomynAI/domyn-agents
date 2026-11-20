@@ -60,7 +60,7 @@ class DomynProvider(BaseLLMProvider):
 
     # The space's models are served by vLLM, whose chat templates read a thinking
     # model's reasoning back from the assistant messages.
-    sends_reasoning_content: ClassVar[bool] = True
+    reasoning_content_key: ClassVar[str | None] = "reasoning_content"
 
     def model_post_init(self, context: Any, /) -> None:
         if not self.name:
@@ -82,7 +82,7 @@ class DomynProvider(BaseLLMProvider):
         tool_choice: str | dict[str, Any] | None,
         kwargs: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, str]]:
-        serialized = [m.to_dict(reasoning=self.sends_reasoning_content) for m in messages]
+        serialized = [m.to_dict(reasoning_key=self.reasoning_content_key) for m in messages]
         # Sanitize tool names at the boundary; name_map restores originals in the response.
         tools, tool_choice, name_map = sanitize_tool_names(
             serialized, tools, tool_choice, logger=get_logger()

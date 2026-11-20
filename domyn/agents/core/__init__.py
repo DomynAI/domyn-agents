@@ -313,12 +313,6 @@ METADATA_BRANCH = "branch"
 # FORWARD_VERBATIM). It is stored with a result giving the reason, so the model
 # is told rather than left believing it ran.
 METADATA_NOT_RUN = "not_run"
-# Set by a tool-use planner on the first TOOL_START (or AGENT_CALL) of a model
-# response: the model's whole reasoning for that response (`reasoning_content`),
-# which the short `thought` on the action does not carry. The context manager
-# sends it back with the assistant message of the current user turn, to a
-# provider that accepts it (`BaseLLMProvider.sends_reasoning_content`).
-METADATA_REASONING_CONTENT = "reasoning_content"
 # Set on an EXTERNAL_PART event to say whether its content should be rendered
 # into the messages sent to the model. Defaults to False when absent: an
 # externally-injected part is for display/history only unless explicitly
@@ -372,6 +366,16 @@ class BaseEvent(BaseModel):
     # The event waits for an answer from the user, about a response or a tool
     # call; False for a final answer.
     need_feedback: bool = Field(default=False, description="If the event needs feedback from user")
+
+    # The model's whole reasoning for the response this call came from, which the
+    # short `thought` on the action does not carry. Set by a tool-use planner on
+    # the first TOOL_START (or AGENT_CALL) of a response, only when the model
+    # returned one; the context manager puts it on the assistant message of that
+    # response while the user's turn lasts, for a provider that sends it back
+    # (`BaseLLMProvider.reasoning_content_key`).
+    reasoning_content: str | None = Field(
+        default=None, description="The model's reasoning, sent back to it in the current turn"
+    )
 
     # other info
     metadata: dict[str, Any] = Field(

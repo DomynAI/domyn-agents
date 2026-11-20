@@ -12,7 +12,6 @@ from typing import Any
 from domyn.agents.core import (
     METADATA_CONVERTED_TO_AGENT_END,
     METADATA_EXTERNAL_PART_AGENT_VISIBLE,
-    METADATA_REASONING_CONTENT,
     METADATA_TOOL_BATCH,
     BaseAgent,
     BaseEvent,
@@ -142,9 +141,11 @@ class ToolUseContextManager(ContextManager):
         # The model's whole reasoning goes back with its assistant messages while
         # the user's turn lasts, to a provider that sends it: the assistant
         # messages after the last request. Earlier ones carry the short thoughts.
-        reasoning_from = (
+        # The position of the first event whose reasoning is sent back, or None
+        # when the provider takes none.
+        send_reasoning_from = (
             _current_turn_start(event_to_parse)
-            if getattr(getattr(agent, "llm_provider", None), "sends_reasoning_content", False)
+            if getattr(getattr(agent, "llm_provider", None), "reasoning_content_key", None)
             else None
         )
 
@@ -192,7 +193,9 @@ class ToolUseContextManager(ContextManager):
                                     f"{existing}\n{thought}".strip() if existing else thought
                                 )
                         else:
-                            reasoning = _reasoning_of(event, position, reasoning_from)
+                            reasoning = _reasoning_to_send_back(
+                                event, position, send_reasoning_from
+                            )
                             messages.append(
                                 LLMMessage(
                                     role=self.assistant_role,
@@ -430,7 +433,9 @@ class ToolUseContextManager(ContextManager):
                             LLMMessage(
                                 role=self.assistant_role,
                                 tool_calls=[tool_call],
-                                reasoning_content=_reasoning_of(event, position, reasoning_from),
+                                reasoning_content=_reasoning_to_send_back(
+                                    event, position, send_reasoning_from
+                                ),
                             )
                         )
 
@@ -746,14 +751,15 @@ def _current_turn_start(events: list[BaseEvent]) -> int:
     return 0
 
 
-def _reasoning_of(event: BaseEvent, position: int, reasoning_from: int | None) -> str | None:
-    """The whole reasoning the planner stored on the first call of a response
-    (``METADATA_REASONING_CONTENT``), when it is sent back: the provider takes it
-    (``reasoning_from`` is set) and the call belongs to the current user turn."""
-    if reasoning_from is None or position < reasoning_from:
+def _reasoning_to_send_back(
+    event: BaseEvent, position: int, send_reasoning_from: int | None
+) -> str | None:
+    """The reasoning stored on ``event`` (at ``position`` in the events rendered),
+    when it goes back to the model: the provider takes it (``send_reasoning_from``
+    is set) and the event belongs to the current user turn."""
+    if send_reasoning_from is None or position < send_reasoning_from:
         return None
-    reasoning = event.metadata.get(METADATA_REASONING_CONTENT)
-    return reasoning if isinstance(reasoning, str) and reasoning else None
+    return event.reasoning_content or None
 
 
 def _rendered_events(context: InteractionContext) -> list[BaseEvent]:

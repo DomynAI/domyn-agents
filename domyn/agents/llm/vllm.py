@@ -48,7 +48,7 @@ class VLLMProvider(BaseLLMProvider):
     # nothing had happened. Set it explicitly to opt into that.
     # DeepSeek, Kimi and Qwen thinking models expect their reasoning back on the
     # assistant messages, and vLLM's chat templates read it there.
-    sends_reasoning_content: ClassVar[bool] = True
+    reasoning_content_key: ClassVar[str | None] = "reasoning_content"
 
     default_generation_params: ClassVar[dict[str, Any]] = {
         "temperature": 0.7,
@@ -126,7 +126,7 @@ class VLLMProvider(BaseLLMProvider):
             messages[-1].content += "\n" + self.append_text_last_message
 
         serialized_messages = [
-            message.to_dict(reasoning=self.sends_reasoning_content) for message in messages
+            message.to_dict(reasoning_key=self.reasoning_content_key) for message in messages
         ]
         # Sanitize tool names at the boundary; name_map restores originals in the response.
         tools, tool_choice, name_map = sanitize_tool_names(
@@ -228,7 +228,7 @@ class VLLMProvider(BaseLLMProvider):
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         serialized_messages = [
-            message.to_dict(reasoning=self.sends_reasoning_content) for message in messages
+            message.to_dict(reasoning_key=self.reasoning_content_key) for message in messages
         ]
         # Sanitize tool names at the boundary; name_map restores originals in the response.
         tools, tool_choice, name_map = sanitize_tool_names(
