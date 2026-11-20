@@ -1,4 +1,4 @@
-"""Images the user attaches to a message: Ctrl+V, a pasted or dragged path.
+"""Images the user attaches to a message: Ctrl-V, a pasted or dragged path.
 
 A terminal hands an application text only: Cmd+V and a bracketed paste carry no
 pixels. So the image is fetched here — from the clipboard, or from the file a
@@ -21,6 +21,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -149,6 +150,10 @@ class Attachments:
     def __init__(self, place: Callable[[], Place | None]) -> None:
         self._place = place
         self._paths: dict[int, Path] = {}
+        # Each Ctrl-V reads the clipboard in a thread of its own, so two quick
+        # presses attach at once: held from picking a free name to numbering the
+        # chip, or both would write one file and could take one number.
+        self._lock = threading.Lock()
 
     def reset(self) -> None:
         """Forget every attachment: a new conversation starts at ``[Image #1]``."""
@@ -213,25 +218,28 @@ class Attachments:
         suffix = path.suffix.lower()
         if not _SUFFIX.fullmatch(suffix):
             suffix = f".{image_format.lower()}"
-        target = self._target(place, path.stem, suffix)
-        try:
-            shutil.copyfile(path, target)
-        except OSError as e:
-            get_logger().debug(f"attachments: could not copy an image, detail: {e}")
-            raise AttachmentError(f"'{path}' could not be copied.") from None
-        return self._register(target)
+        with self._lock:
+            target = self._target(place, path.stem, suffix)
+            try:
+                shutil.copyfile(path, target)
+            except OSError as e:
+                get_logger().debug(f"attachments: could not copy an image, detail: {e}")
+                raise AttachmentError(f"'{path}' could not be copied.") from None
+            return self._register(target)
 
     def add_image(self, image: Image.Image) -> str:
         """Save an image from the clipboard as PNG and return its chip."""
-        target = self._target(self.check(), "pasted", ".png", numbered=True)
+        place = self.check()
         if image.mode not in ("1", "L", "LA", "I", "P", "RGB", "RGBA"):
             image = image.convert("RGBA")
-        try:
-            image.save(target, "PNG")
-        except (OSError, ValueError) as e:
-            get_logger().debug(f"attachments: could not save a pasted image, detail: {e}")
-            raise AttachmentError("The image in the clipboard could not be saved.") from None
-        return self._register(target)
+        with self._lock:
+            target = self._target(place, "pasted", ".png", numbered=True)
+            try:
+                image.save(target, "PNG")
+            except (OSError, ValueError) as e:
+                get_logger().debug(f"attachments: could not save a pasted image, detail: {e}")
+                raise AttachmentError("The image in the clipboard could not be saved.") from None
+            return self._register(target)
 
     def from_clipboard(self) -> list[str]:
         """Attach what the clipboard holds: an image, or image files copied in a file

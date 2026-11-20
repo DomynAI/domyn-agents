@@ -2,6 +2,8 @@
 files go, the clipboard, and what the model is told."""
 
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -210,6 +212,28 @@ class TestTheClipboard:
         assert sorted(p.name for p in place.folder.iterdir()) == ["pasted-1.png", "pasted-2.png"]
         with Image.open(place.folder / "pasted-1.png") as image:
             assert image.format == "PNG"
+
+    def test_two_pastes_at_once_get_a_file_and_a_number_each(
+        self, attachments: Attachments, place: Place, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Each Ctrl-V reads the clipboard in a thread of its own. A slow save keeps
+        # the first paste between picking its name and writing it while the second
+        # picks one.
+        monkeypatch.setattr(
+            attachments_mod.ImageGrab, "grabclipboard", lambda: Image.new("RGB", (4, 4))
+        )
+        save = Image.Image.save
+
+        def slow_save(image: Image.Image, *args: object, **kwargs: object) -> None:
+            time.sleep(0.1)
+            save(image, *args, **kwargs)
+
+        monkeypatch.setattr(Image.Image, "save", slow_save)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            chips = list(pool.map(lambda _: attachments.from_clipboard(), range(2)))
+
+        assert sorted(chip for pasted in chips for chip in pasted) == ["[Image #1]", "[Image #2]"]
+        assert sorted(p.name for p in place.folder.iterdir()) == ["pasted-1.png", "pasted-2.png"]
 
     def test_files_copied_in_a_file_manager(
         self,

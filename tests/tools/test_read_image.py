@@ -248,6 +248,112 @@ class TestReading:
         assert "cut at the model's output limit" in await _read(workspace, model, "shot.png")
 
 
+ORIENTATION = 0x0112
+"""The EXIF tag a camera writes instead of turning the pixels."""
+
+
+def _photo(path: Path, size: tuple[int, int], orientation: int) -> Path:
+    """A white JPEG with a red block in the top-left corner of its stored pixels,
+    tagged as a camera tags a photo taken sideways."""
+    photo = Image.new("RGB", size, "white")
+    photo.paste((255, 0, 0), (0, 0, size[0] // 4, size[1] // 4))
+    exif = Image.Exif()
+    exif[ORIENTATION] = orientation
+    photo.save(path, exif=exif.tobytes(), quality=95)
+    return path
+
+
+def _red_corner(picture: Image.Image) -> str:
+    """Which corner the red block is in, as the image is seen."""
+    picture = picture.convert("RGB")
+    width, height = picture.size
+    corners = {
+        "top-left": (2, 2),
+        "top-right": (width - 3, 2),
+        "bottom-left": (2, height - 3),
+        "bottom-right": (width - 3, height - 3),
+    }
+    (corner,) = [name for name, xy in corners.items() if picture.getpixel(xy)[1] < 100]
+    return corner
+
+
+class TestOrientation:
+    """A phone stores a photo as the sensor saw it and says in EXIF how to turn it.
+    The model is sent the photo turned, never relying on the provider to read the tag."""
+
+    @pytest.mark.parametrize(
+        ("orientation", "corner"),
+        [
+            (1, "top-left"),
+            (3, "bottom-right"),  # upside down
+            (6, "top-right"),  # turned a quarter clockwise to be seen
+            (8, "bottom-left"),  # a quarter anticlockwise
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_a_large_photo_is_sent_upright(
+        self, workspace: Workspace, model: Model, tmp_path: Path, orientation: int, corner: str
+    ) -> None:
+        _photo(tmp_path / "phone.jpg", (images.MAX_IMAGE_EDGE * 2, 400), orientation)
+
+        await _read(workspace, model, "phone.jpg")
+
+        sent = Image.open(io.BytesIO(_sent(model)[2]))
+        turned = orientation in (6, 8)
+        assert sent.size == (
+            (200, images.MAX_IMAGE_EDGE) if turned else (images.MAX_IMAGE_EDGE, 200)
+        )
+        assert _red_corner(sent) == corner
+
+    @pytest.mark.asyncio
+    async def test_a_small_photo_is_sent_upright(
+        self, workspace: Workspace, model: Model, tmp_path: Path
+    ) -> None:
+        """Small enough to be sent as the file is, but the file is sideways."""
+        _photo(tmp_path / "phone.jpg", (400, 100), 6)
+
+        await _read(workspace, model, "phone.jpg")
+
+        sent = Image.open(io.BytesIO(_sent(model)[2]))
+        assert sent.size == (100, 400)
+        assert _red_corner(sent) == "top-right"
+
+    @pytest.mark.asyncio
+    async def test_the_tag_is_not_sent_with_the_turned_photo(
+        self, workspace: Workspace, model: Model, tmp_path: Path
+    ) -> None:
+        """A provider that does read the tag would turn the photo a second time."""
+        _photo(tmp_path / "phone.jpg", (images.MAX_IMAGE_EDGE * 2, 400), 6)
+
+        await _read(workspace, model, "phone.jpg")
+
+        sent = Image.open(io.BytesIO(_sent(model)[2]))
+        assert sent.getexif().get(ORIENTATION, 1) == 1
+
+    @pytest.mark.asyncio
+    async def test_an_upright_photo_is_still_sent_as_the_file_is(
+        self, workspace: Workspace, model: Model, tmp_path: Path
+    ) -> None:
+        path = _photo(tmp_path / "phone.jpg", (400, 100), 1)
+
+        await _read(workspace, model, "phone.jpg")
+
+        _, media_type, sent = _sent(model)
+        assert media_type == "image/jpeg"
+        assert sent == path.read_bytes()
+
+    @pytest.mark.asyncio
+    async def test_through_a_backend_too(
+        self, workspace: Workspace, model: Model, tmp_path: Path
+    ) -> None:
+        """The container's tool host turns it with the same code."""
+        _photo(tmp_path / "phone.jpg", (images.MAX_IMAGE_EDGE * 2, 400), 6)
+
+        await _read_through(_Elsewhere(), workspace, model, str(tmp_path / "phone.jpg"))
+
+        assert _red_corner(Image.open(io.BytesIO(_sent(model)[2]))) == "top-right"
+
+
 class TestRefusals:
     @pytest.mark.asyncio
     async def test_outside_the_workspace(self, workspace: Workspace, model: Model) -> None:

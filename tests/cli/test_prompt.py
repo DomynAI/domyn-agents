@@ -623,15 +623,15 @@ class TestTheKeyIsAnnouncedAtStartup:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         line = await self._status_line(monkeypatch, terminal=True, reads_images=True)
-        assert "Ctrl+v pastes an image" in line
+        assert "Ctrl-V pastes an image" in line
 
     @pytest.mark.asyncio
     async def test_ctrl_v_is_not_announced_when_it_cannot(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        assert "Ctrl+v" not in await self._status_line(monkeypatch, terminal=True)
+        assert "Ctrl-V" not in await self._status_line(monkeypatch, terminal=True)
         line = await self._status_line(monkeypatch, terminal=False, reads_images=True)
-        assert "Ctrl+v" not in line
+        assert "Ctrl-V" not in line
 
 
 class _Clock:
@@ -962,9 +962,9 @@ class TestGoingBackInReadLine:
 
 
 class TestAttachingImagesInTheEditor:
-    """Ctrl+V and a pasted path attach an image; the line sent names the file.
+    """Ctrl-V and a pasted path attach an image; the line sent names the file.
     Through a real editor, as the keys a terminal sends: a bracketed paste is
-    ``ESC [200~ … ESC [201~``, Ctrl+V is the control character 0x16."""
+    ``ESC [200~ … ESC [201~``, Ctrl-V is the control character 0x16."""
 
     @staticmethod
     def _attachments(tmp_path: Path, *, readable: bool = True) -> Any:

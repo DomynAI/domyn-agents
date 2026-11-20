@@ -9,7 +9,7 @@ editor to drive, so it is read with :func:`input`.
 
 Enter submits; Alt/Option+Enter and Ctrl+J insert a newline. Ctrl-C clears what
 is typed, and a second one right after quits, like Ctrl-D; while a turn runs it
-stops the turn instead. Ctrl+V attaches the image in the clipboard, and pasting
+stops the turn instead. Ctrl-V attaches the image in the clipboard, and pasting
 (or dragging in) the path of an image attaches it too: see `attachments.py`.
 """
 
@@ -313,7 +313,7 @@ class InputSession:
         # Push-to-talk, when voice is on: see `voice.py`. Held here because the
         # editor owns the keys and the rows above the prompt.
         self.voice = voice
-        # The images attached to the conversation (Ctrl+V, a pasted path), set by
+        # The images attached to the conversation (Ctrl-V, a pasted path), set by
         # the REPL; None leaves both keys as they were.
         self.attachments: Attachments | None = None
         # Why the last image was not attached, and when: drawn above the prompt.
@@ -606,7 +606,7 @@ class InputSession:
                 # the read that follows the interrupted turn.
                 event.app.exit(exception=KeyboardInterrupt(), style="class:aborting")
 
-        # Images. A terminal never hands over pixels, so Ctrl+V reads the clipboard
+        # Images. A terminal never hands over pixels, so Ctrl-V reads the clipboard
         # itself (Cmd+V is the terminal's, and pastes text only), in a thread: on
         # macOS and Linux that is a command, too slow for a key handler. Alongside
         # a turn too: it only edits the line being typed.
@@ -747,7 +747,7 @@ class InputSession:
             self._hint_repaint = None
 
     async def _paste_from_clipboard(self, attachments: Attachments, app: Any) -> None:
-        """What Ctrl+V does: attach the clipboard's image and put its chip at the
+        """What Ctrl-V does: attach the clipboard's image and put its chip at the
         cursor. Into whichever read is on screen when the clipboard has answered:
         the application is the session's, shared by every read."""
         from domyn.agents.interfaces.cli.attachments import AttachmentError
