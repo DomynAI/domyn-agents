@@ -46,6 +46,10 @@ class VLLMProvider(BaseLLMProvider):
     # compacting and retrying. `-1` cuts the prompt to fit by dropping its
     # beginning — the system prompt, the tool definitions — and answers as if
     # nothing had happened. Set it explicitly to opt into that.
+    # DeepSeek, Kimi and Qwen thinking models expect their reasoning back on the
+    # assistant messages, and vLLM's chat templates read it there.
+    sends_reasoning_content: ClassVar[bool] = True
+
     default_generation_params: ClassVar[dict[str, Any]] = {
         "temperature": 0.7,
         "max_tokens": 2000,
@@ -121,7 +125,9 @@ class VLLMProvider(BaseLLMProvider):
         if self.append_text_last_message:
             messages[-1].content += "\n" + self.append_text_last_message
 
-        serialized_messages = [message.to_dict() for message in messages]
+        serialized_messages = [
+            message.to_dict(reasoning=self.sends_reasoning_content) for message in messages
+        ]
         # Sanitize tool names at the boundary; name_map restores originals in the response.
         tools, tool_choice, name_map = sanitize_tool_names(
             serialized_messages, tools, tool_choice, logger=logger
@@ -221,7 +227,9 @@ class VLLMProvider(BaseLLMProvider):
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        serialized_messages = [message.to_dict() for message in messages]
+        serialized_messages = [
+            message.to_dict(reasoning=self.sends_reasoning_content) for message in messages
+        ]
         # Sanitize tool names at the boundary; name_map restores originals in the response.
         tools, tool_choice, name_map = sanitize_tool_names(
             serialized_messages, tools, tool_choice, logger=logger

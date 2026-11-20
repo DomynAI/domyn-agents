@@ -313,6 +313,12 @@ METADATA_BRANCH = "branch"
 # FORWARD_VERBATIM). It is stored with a result giving the reason, so the model
 # is told rather than left believing it ran.
 METADATA_NOT_RUN = "not_run"
+# Set by a tool-use planner on the first TOOL_START (or AGENT_CALL) of a model
+# response: the model's whole reasoning for that response (`reasoning_content`),
+# which the short `thought` on the action does not carry. The context manager
+# sends it back with the assistant message of the current user turn, to a
+# provider that accepts it (`BaseLLMProvider.sends_reasoning_content`).
+METADATA_REASONING_CONTENT = "reasoning_content"
 # Set on an EXTERNAL_PART event to say whether its content should be rendered
 # into the messages sent to the model. Defaults to False when absent: an
 # externally-injected part is for display/history only unless explicitly

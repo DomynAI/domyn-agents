@@ -38,6 +38,7 @@ from domyn.agents.core import (
     METADATA_FORWARD_VERBATIM_SOURCE_ID,
     METADATA_FORWARD_VERBATIM_SOURCE_KEY,
     METADATA_NOT_RUN,
+    METADATA_REASONING_CONTENT,
     METADATA_TOOL_BATCH,
     AgentAction,
     BaseAgent,
@@ -1062,8 +1063,18 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 batches = self.batches(
                     agent, getattr(response, "tool_calls", None) or [], interaction_context
                 )
+                # The response's whole reasoning, on its first call only: the
+                # context manager rebuilds one assistant message from the calls of
+                # a response, and sends it back while the user's turn lasts. The
+                # short `thought` each action carries is what the user is shown.
+                reasoning = (getattr(response, "reasoning_content", None) or "").strip()
                 for position, tool_call in enumerate(response.tool_calls):
                     args = parsed_tool_args.get(tool_call.id, {})
+                    metadata: dict[str, Any] = {}
+                    if tool_call.id in batches:
+                        metadata[METADATA_TOOL_BATCH] = batches[tool_call.id]
+                    if position == 0 and reasoning:
+                        metadata[METADATA_REASONING_CONTENT] = reasoning
                     # The reasoning behind this call, carried by the action it
                     # produced (``carries_thought``). Extraction tolerates malformed
                     # arguments: keeping the call's id intact through TOOL_START keeps
@@ -1084,11 +1095,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             event_type=ExecutionEventType.TOOL_START,
                             author=agent.name,
                             action=action,
-                            metadata=(
-                                {METADATA_TOOL_BATCH: batches[tool_call.id]}
-                                if tool_call.id in batches
-                                else {}
-                            ),
+                            metadata=metadata,
                         )
                     elif tool_name in [
                         a.name for a in interaction_context.handoff_targets_description
@@ -1104,11 +1111,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             event_type=ExecutionEventType.AGENT_CALL,
                             author=agent.name,
                             action=agent_action,
-                            metadata=(
-                                {METADATA_TOOL_BATCH: batches[tool_call.id]}
-                                if tool_call.id in batches
-                                else {}
-                            ),
+                            metadata=metadata,
                         )
                         if tool_call.id not in batches:
                             return
@@ -1254,13 +1257,14 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                                 event_type=ExecutionEventType.TOOL_START,
                                 author=agent.name,
                                 action=action,
-                                metadata={METADATA_TOOL_BATCH: batches[tool_call.id]},
+                                metadata=metadata,
                             )
                             continue
                         yield BaseEvent(
                             event_type=ExecutionEventType.TOOL_START,
                             author=agent.name,
                             action=action,
+                            metadata=metadata,
                         )
                         yield BaseEvent(
                             event_type=ExecutionEventType.TOOL_ERROR,
