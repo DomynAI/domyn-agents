@@ -145,7 +145,7 @@ class ToolUseContextManager(ContextManager):
         # when the provider takes none.
         send_reasoning_from = (
             _current_turn_start(event_to_parse)
-            if getattr(getattr(agent, "llm_provider", None), "reasoning_content_key", None)
+            if getattr(getattr(agent, "llm_provider", None), "reasoning_key_in_use", None)
             else None
         )
 

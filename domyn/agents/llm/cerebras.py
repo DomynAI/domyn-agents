@@ -116,7 +116,7 @@ class CerebrasProvider(BaseLLMProvider):
             messages[-1].content += "\n" + self.append_text_last_message
 
         serialized_messages = [
-            message.to_dict(reasoning_key=self.reasoning_content_key) for message in messages
+            message.to_dict(reasoning_key=self.reasoning_key_in_use) for message in messages
         ]
         # Sanitize tool names at the boundary; name_map restores originals in the response.
         tools, tool_choice, name_map = sanitize_tool_names(
@@ -232,7 +232,7 @@ class CerebrasProvider(BaseLLMProvider):
         headers["Authorization"] = f"Bearer {self.api_key}"
 
         serialized_messages = [
-            message.to_dict(reasoning_key=self.reasoning_content_key) for message in messages
+            message.to_dict(reasoning_key=self.reasoning_key_in_use) for message in messages
         ]
         # Sanitize tool names at the boundary; name_map restores originals in the response.
         tools, tool_choice, name_map = sanitize_tool_names(
