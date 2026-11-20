@@ -37,6 +37,11 @@ class OpenRouterProvider(BaseLLMProvider):
         description="API key for authentication",
     )
 
+    # Its API takes a model's plain-text reasoning back on an assistant message in
+    # `reasoning`, the field it returns it in. The structured `reasoning_details`,
+    # which models with encrypted or summarized reasoning need, is not carried.
+    reasoning_content_key: ClassVar[str | None] = "reasoning"
+
     default_generation_params: ClassVar[dict[str, Any]] = {
         "temperature": 0.7,
         "max_tokens": 8000,
@@ -146,7 +151,9 @@ class OpenRouterProvider(BaseLLMProvider):
             structured_outputs_params = await self.preprocess_structured_outputs(
                 client=client, structured_outputs=structured_outputs
             )
-            serialized_messages = [message.to_dict() for message in messages]
+            serialized_messages = [
+                message.to_dict(reasoning_key=self.reasoning_key_in_use) for message in messages
+            ]
             # Sanitize tool names at the boundary; name_map restores originals in the response.
             tools, tool_choice, name_map = sanitize_tool_names(
                 serialized_messages, tools, tool_choice, logger=logger
@@ -258,7 +265,9 @@ class OpenRouterProvider(BaseLLMProvider):
             if self.append_text_last_message:
                 messages[-1].content += "\n" + self.append_text_last_message
 
-            serialized_messages = [message.to_dict() for message in messages]
+            serialized_messages = [
+                message.to_dict(reasoning_key=self.reasoning_key_in_use) for message in messages
+            ]
             # Sanitize tool names at the boundary; name_map restores originals in the response.
             tools, tool_choice, name_map = sanitize_tool_names(
                 serialized_messages, tools, tool_choice, logger=logger

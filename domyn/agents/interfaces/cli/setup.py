@@ -2056,7 +2056,12 @@ def run_setup(
             configuration_id=draft.configuration_id or None,
             api_key_env=PROVIDER_HINTS.get(draft.provider_type, {}).get("env", "LLM_API_KEY"),
         ).model_copy(
-            update={"max_tokens": draft.max_tokens, "context_window": draft.context_window}
+            update={
+                "max_tokens": draft.max_tokens,
+                "context_window": draft.context_window,
+                # Not asked: a hand edit, kept across a change of model.
+                "send_reasoning": provider.send_reasoning,
+            }
         )
     # `None` unless the wizard actually asked, so a `provider_only` run leaves
     # whatever the file says about decisions and memory exactly where it found it.

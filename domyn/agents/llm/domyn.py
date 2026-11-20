@@ -3,7 +3,7 @@
 import os
 import time
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import AliasChoices, Field
 
@@ -58,6 +58,10 @@ class DomynProvider(BaseLLMProvider):
     )
     supported_structured_outputs: list[StructuredOutputType] | None = None
 
+    # The space's models are served by vLLM, whose chat templates read a thinking
+    # model's reasoning back from the assistant messages.
+    reasoning_content_key: ClassVar[str | None] = "reasoning_content"
+
     def model_post_init(self, context: Any, /) -> None:
         if not self.name:
             self.name = self.model_name
@@ -78,7 +82,7 @@ class DomynProvider(BaseLLMProvider):
         tool_choice: str | dict[str, Any] | None,
         kwargs: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, str]]:
-        serialized = [m.to_dict() for m in messages]
+        serialized = [m.to_dict(reasoning_key=self.reasoning_key_in_use) for m in messages]
         # Sanitize tool names at the boundary; name_map restores originals in the response.
         tools, tool_choice, name_map = sanitize_tool_names(
             serialized, tools, tool_choice, logger=get_logger()
