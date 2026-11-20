@@ -220,6 +220,12 @@ class ProviderConfig(BaseModel):
     the server was started, not a property of the weights.
     """
 
+    send_reasoning: bool = True
+    """Send the model's reasoning back to it during the current turn, on a provider
+    that takes it (`BaseLLMProvider.send_reasoning`). Not asked by the wizard: off
+    is a hand edit, for a model whose chat template does not read it, and is the
+    only value written, so that edit survives a re-run of setup or a `/model`."""
+
     max_tokens: int = 16000
     """Ceiling on one generation.
 
@@ -1196,6 +1202,8 @@ def configuration_v1_dict_from(
     # start (`apply_context_window`), which a written default would prevent.
     if provider.context_window is not None:
         provider_dict["context_window"] = provider.context_window
+    if not provider.send_reasoning:
+        provider_dict["send_reasoning"] = False
     # Only set when a key actually resolves right now (env, or the credentials
     # file — injected into the environment at CLI startup by
     # `_load_credentials` in `cli/main.py`). Omitting it otherwise matters:
@@ -1472,6 +1480,7 @@ def current_settings_from(
         configuration_id=provider_dict.get("configuration_id"),
         max_tokens=max_tokens,
         context_window=provider_dict.get("context_window"),
+        send_reasoning=provider_dict.get("send_reasoning", True),
     )
 
     bundles = {b.get("name"): b for b in raw.get("tool_bundles", []) if isinstance(b, dict)}

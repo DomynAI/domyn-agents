@@ -45,6 +45,17 @@ def base(**extra) -> dict:
     }
 
 
+class TestTheReasoningSwitch:
+    def test_turned_off_it_survives(self):
+        raw = base()
+        raw["llm_providers"][0]["send_reasoning"] = False
+
+        assert rebuild(raw)["llm_providers"][0]["send_reasoning"] is False
+
+    def test_on_it_is_not_written(self):
+        assert "send_reasoning" not in rebuild(base())["llm_providers"][0]
+
+
 class TestItKeepsWhatItDidNotWrite:
     def test_a_decision_provider_survives(self):
         raw = base(

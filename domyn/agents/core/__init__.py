@@ -372,7 +372,7 @@ class BaseEvent(BaseModel):
     # the first TOOL_START (or AGENT_CALL) of a response, only when the model
     # returned one; the context manager puts it on the assistant message of that
     # response while the user's turn lasts, for a provider that sends it back
-    # (`BaseLLMProvider.reasoning_content_key`).
+    # (`BaseLLMProvider.reasoning_key_in_use`).
     reasoning_content: str | None = Field(
         default=None, description="The model's reasoning, sent back to it in the current turn"
     )

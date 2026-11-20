@@ -475,11 +475,27 @@ class BaseLLMProvider(BaseModel, ABC):
 
     reasoning_content_key: ClassVar[str | None] = None
     """The key under which this provider's API takes the model's reasoning back on
-    an assistant message, or ``None`` when it does not take it. With a key, the
-    context manager puts the model's whole reasoning on the assistant messages of
-    the current user turn, and the provider sends it under that key
-    (`LLMMessage.to_dict(reasoning_key=...)`); without one, those messages carry
-    the short thoughts as their content, like earlier turns."""
+    an assistant message, or ``None`` when it does not take it. With a key, and
+    ``send_reasoning`` on, the context manager puts the model's whole reasoning on
+    the assistant messages of the current user turn, and the provider sends it
+    under that key (`LLMMessage.to_dict(reasoning_key=...)`); otherwise those
+    messages carry the short thoughts as their content, like earlier turns."""
+
+    send_reasoning: bool = Field(
+        default=True,
+        description=(
+            "Send the model's reasoning back to it during the current user turn, on a "
+            "provider whose API takes it (`reasoning_content_key`). Off for a model "
+            "that ignores it (a vLLM chat template that does not read "
+            "`reasoning_content`), which then gets the short thoughts instead."
+        ),
+    )
+
+    @property
+    def reasoning_key_in_use(self) -> str | None:
+        """The key the reasoning is sent back under, or ``None`` when it is not
+        sent: the API does not take it, or ``send_reasoning`` is off."""
+        return self.reasoning_content_key if self.send_reasoning else None
 
     context_window_catalog: ClassVar[str | None] = None
     """The models.dev provider whose catalogue knows this provider's windows by model

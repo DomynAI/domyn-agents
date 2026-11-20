@@ -23,6 +23,7 @@ from domyn.agents.core import (
     Part,
     ToolAction,
 )
+from domyn.agents.llm import LLMProviderFactory
 from domyn.agents.llm.anthropic import AnthropicProvider
 from domyn.agents.llm.base import (
     BaseLLMProvider,
@@ -268,6 +269,32 @@ class TestACurrentCallWithoutStoredReasoning:
         (message,) = _assistants_with_calls(messages)
         assert message.reasoning_content is None
         assert message.content == "why"
+
+
+class TestTheSwitch:
+    @pytest.mark.asyncio
+    async def test_off_sends_the_short_thoughts(self) -> None:
+        provider = _Script(replies=[_calls(), _answer("done")], send_reasoning=False)
+
+        events = await _turn(Runner(), _agent(provider), "list a and b", "switched off")
+
+        (message,) = _assistants_with_calls(provider.requests[1])
+        assert message.reasoning_content is None
+        assert message.content == "look at a\nlook at b"
+        starts = [e for e in events if e.event_type == ExecutionEventType.TOOL_START]
+        assert starts[0].reasoning_content == REASONING
+
+    def test_off_no_key_is_in_use(self) -> None:
+        assert _Script().reasoning_key_in_use == "reasoning_content"
+        assert _Script(send_reasoning=False).reasoning_key_in_use is None
+        assert _Silent().reasoning_key_in_use is None
+
+    def test_it_is_read_from_a_config(self) -> None:
+        provider = LLMProviderFactory.from_config(
+            {"type": "vllm", "model_name": "m", "url": "http://x", "send_reasoning": False}
+        )
+
+        assert provider.reasoning_key_in_use is None
 
 
 def test_the_reasoning_goes_under_the_providers_key() -> None:

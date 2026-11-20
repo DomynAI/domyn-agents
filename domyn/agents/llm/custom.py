@@ -64,9 +64,7 @@ class CustomLLMProvider(BaseLLMProvider):
         start = time.time()
         request_headers = {"Content-Type": "application/json", **self.headers}
 
-        serialized_messages = [
-            m.to_dict(reasoning_key=self.reasoning_content_key) for m in messages
-        ]
+        serialized_messages = [m.to_dict(reasoning_key=self.reasoning_key_in_use) for m in messages]
         # Sanitize tool names at the boundary; name_map restores originals in the response.
         tools, tool_choice, name_map = sanitize_tool_names(
             serialized_messages, tools, tool_choice, logger=logger
@@ -151,9 +149,7 @@ class CustomLLMProvider(BaseLLMProvider):
         start = time.time()
         request_headers = {"Content-Type": "application/json", **self.headers}
 
-        serialized_messages = [
-            m.to_dict(reasoning_key=self.reasoning_content_key) for m in messages
-        ]
+        serialized_messages = [m.to_dict(reasoning_key=self.reasoning_key_in_use) for m in messages]
         # Sanitize tool names at the boundary; name_map restores originals in the response.
         tools, tool_choice, name_map = sanitize_tool_names(
             serialized_messages, tools, tool_choice, logger=logger
