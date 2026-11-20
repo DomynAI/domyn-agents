@@ -68,6 +68,7 @@ Several agents can reference the same strategy. In a [team](orchestration.md), e
 |---|---|---|---|
 | `name` | `str` | the `type` | Name the strategy is referenced by in YAML. |
 | `max_iterations` | `int` | `25` | Maximum model calls in one turn of this agent. When reached, the agent stops and replies `Reached maximum iterations (<n>)`. |
+| `max_llm_retries` | `int` | `3` | How many times a model call is asked again after a transient failure — a 429, a 5xx, a connection or a stream lost. The wait doubles per attempt (honouring the provider's `Retry-After`, up to two minutes), and a retry does not count against `max_iterations`. Anything else — a bad key, a refused prompt — is not retried. |
 | `forward_verbatim_enabled` | `bool` | `True` | Offers the model the `FORWARD_VERBATIM` tool, which returns a previous tool or sub-agent result unchanged as the agent's reply. See [Orchestration](orchestration.md). |
 | `use_stop` | `bool` | `False` | For a sub-agent. Offers two extra tools: `STOP(info)`, which ends the agent's work and returns `info` to the calling agent, and `ASK_USER_MISSING_INFO(text)`, which ends it with a request for information. The calling agent receives the question with an instruction to ask the user and call the sub-agent again. |
 

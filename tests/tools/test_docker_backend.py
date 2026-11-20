@@ -927,7 +927,8 @@ class TestTheToolHostEntry:
 
         answer = self._run(tmp_path).stdout.strip().splitlines()[-1]
 
-        assert json.loads(answer) == {"ok": True, "result": "hello\n"}
+        # `read_file` numbers every line, the same through either backend.
+        assert json.loads(answer) == {"ok": True, "result": "     1\thello\n"}
 
     def test_it_does_not_import_the_agent_machinery(self, tmp_path: Path) -> None:
         """What makes a call quick: the MCP client alone is about half a second."""

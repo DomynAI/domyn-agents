@@ -28,6 +28,9 @@ class BasePlannerStrategy(BaseModel):
     name: str
     context_manager: MessageContextManager
     max_iterations: int = 25
+    # Transient LLM failures (429, 5xx, a connection or stream lost) are asked again rather than
+    # ending the turn; this is how many times, per model call. See ``llm/retry.py``.
+    max_llm_retries: int = 3
     verbose: bool = False
     forward_verbatim_enabled: bool = True
     parallel_handoffs: bool = True

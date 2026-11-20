@@ -197,6 +197,11 @@ def build_run_command(
     ) -> Any:
         r"""Run a shell command in the workspace and return its output.
 
+        For reading files and searching them, prefer read_file, grep and
+        glob_files: they page a large file, number its lines, and return what
+        was found instead of output to parse. Use this for building, testing and
+        running the programs you write.
+
         Use this to install packages, run tests, inspect the system, use git —
         anything a terminal can do. Pipes, redirection and `&&` all work.
 
