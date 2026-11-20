@@ -61,7 +61,7 @@ Ctrl-D and `/exit` also end the session. When it ends, if anything was said, it 
 
 ### Talking instead of typing
 
-`/voice`, or starting with `domyn run --voice`, turns on push-to-talk. It needs the `audio` extra, which the standalone installer already includes (with uv: `uv tool install 'domyn[cli,audio]'`), and a microphone; the first time, the speech model is downloaded (about 670 MB, into `~/.domyn/models`) and macOS asks whether the terminal may use the microphone.
+`/voice`, or starting with `domyn run --voice`, turns on push-to-talk. It needs the `audio` extra, which the standalone installer already includes, except on musl systems such as Alpine (with uv: `uv tool install 'domyn[cli,audio]'`), and a microphone; the first time, the speech model is downloaded (about 670 MB, into `~/.domyn/models`) and macOS asks whether the terminal may use the microphone.
 
 - **Hold the space bar** on an empty line and speak; **let go** to send. What you said is transcribed on your machine and sent as if you had typed it, so it appears as your message.
 - **Tap** it instead, and recording goes on until the next tap: for a long message, or a keyboard without key repeat.

@@ -556,8 +556,19 @@ class BrowserSessions:
                 or o.executable_path
                 or self.backend.name != "local"
                 or os.environ.get("AGENT_BROWSER_EXECUTABLE_PATH")
-                or browser_install.chrome_platform() is None
             ):
+                self._chrome_checked = True
+                return
+            if browser_install.chrome_platform() is None:
+                # Nothing to download here; on musl, say what to install instead
+                # of letting agent-browser fail on a Chrome it cannot find.
+                if browser_install.is_musl() and browser_install.system_chrome() is None:
+                    raise BrowserError(
+                        "The browser needs Chrome or Chromium, and there is none on this "
+                        "machine. None can be downloaded for a musl system (Alpine): install "
+                        "Chromium (`apk add chromium`), or set browser.executable_path to a "
+                        "browser you have, then try again."
+                    )
                 self._chrome_checked = True
                 return
             found = browser_install.downloaded_chrome()

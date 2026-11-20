@@ -49,6 +49,16 @@ case "$(uname -s)-$ARCH" in
   Linux-x86_64)  TARGET="x86_64-unknown-linux-gnu" ;;
   *) fail "unsupported platform: $(uname -s)-$(uname -m)" ;;
 esac
+# On musl (Alpine): pdf-inspector publishes no musllinux wheel, so pip builds it
+# from its sdist, which takes Rust 1.95 or newer (rustup's; Alpine's is older);
+# onnxruntime has neither, so the audio extra is left out.
+EXTRAS=(--extra cli --extra audio)
+if ls /lib/ld-musl-* >/dev/null 2>&1; then
+  TARGET="${TARGET%-gnu}-musl"
+  EXTRAS=(--extra cli)
+  command -v cargo >/dev/null 2>&1 || fail "building on musl needs Rust (cargo) to compile pdf-inspector: install it with rustup"
+  command -v patchelf >/dev/null 2>&1 || fail "building on musl needs patchelf (apk add patchelf)"
+fi
 info "target: $TARGET"
 
 WORK="$(mktemp -d)"
@@ -92,12 +102,25 @@ tar -xzf "$WORK/runtime.tar.gz" -C "$WORK/stage"
 # Dependencies pinned and hash-checked from uv.lock, then domyn itself.
 # --no-compile: no .pyc in the archive (a third smaller); Python writes them on
 # first import, and install.sh's pre-swap check already imports the main ones.
-info "installing domyn[cli,audio] into the runtime, pinned to uv.lock"
-uv export --frozen --no-dev --extra cli --extra audio --no-emit-project -o "$WORK/requirements.txt" >/dev/null
+info "installing domyn with ${EXTRAS[*]} into the runtime, pinned to uv.lock"
+uv export --frozen --no-dev "${EXTRAS[@]}" --no-emit-project -o "$WORK/requirements.txt" >/dev/null
 "$WORK/stage/python/bin/python3" -m pip install --quiet --no-warn-script-location --no-compile \
   --require-hashes -r "$WORK/requirements.txt"
 "$WORK/stage/python/bin/python3" -m pip install --quiet --no-warn-script-location --no-compile \
   --no-deps "$WHEEL"
+
+# A module compiled here (pdf-inspector, on musl) needs libgcc_s, which a clean
+# Alpine does not have: it gets a copy beside it, as auditwheel gives the
+# published wheels theirs (GCC Runtime Library Exception).
+if [[ "$TARGET" == *-musl ]]; then
+  while IFS= read -r so; do
+    if readelf -d "$so" | grep -q 'NEEDED.*\[libgcc_s\.so\.1\]'; then
+      cp /usr/lib/libgcc_s.so.1 "$(dirname "$so")/"
+      patchelf --set-rpath '$ORIGIN' "$so"
+      info "libgcc_s bundled for ${so#"$WORK/stage/"}"
+    fi
+  done < <(find "$WORK/stage/python/lib" -name '*.so')
+fi
 
 # Its shebang points at this build directory; install.sh writes its own launcher.
 rm -f "$WORK/stage/python/bin/domyn"
@@ -111,6 +134,8 @@ case "$TARGET" in
   aarch64-apple-darwin)      AB_ASSET="agent-browser-darwin-arm64"; AB_SHA="$AGENT_BROWSER_SHA256_aarch64_apple_darwin" ;;
   x86_64-unknown-linux-gnu)  AB_ASSET="agent-browser-linux-x64";    AB_SHA="$AGENT_BROWSER_SHA256_x86_64_unknown_linux_gnu" ;;
   aarch64-unknown-linux-gnu) AB_ASSET="agent-browser-linux-arm64";  AB_SHA="$AGENT_BROWSER_SHA256_aarch64_unknown_linux_gnu" ;;
+  x86_64-unknown-linux-musl)  AB_ASSET="agent-browser-linux-musl-x64";   AB_SHA="$AGENT_BROWSER_SHA256_x86_64_unknown_linux_musl" ;;
+  aarch64-unknown-linux-musl) AB_ASSET="agent-browser-linux-musl-arm64"; AB_SHA="$AGENT_BROWSER_SHA256_aarch64_unknown_linux_musl" ;;
   *) fail "no agent-browser binary for $TARGET" ;;
 esac
 info "downloading agent-browser $AGENT_BROWSER_VERSION ($AB_ASSET)"

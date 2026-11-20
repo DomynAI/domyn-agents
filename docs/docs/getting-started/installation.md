@@ -18,7 +18,7 @@ The installer downloads a build of the `domyn` command that carries its own Pyth
 curl -fsSL https://github.com/domynai/domyn-agents/releases/latest/download/install.sh | sh
 ```
 
-Builds exist for macOS on Apple Silicon and for Linux on x86-64 and ARM64 with glibc 2.33 or later (Ubuntu 22.04, Debian 12, RHEL 9 or newer). Intel Macs and musl systems such as Alpine are not supported.
+Builds exist for macOS on Apple Silicon and for Linux on x86-64 and ARM64, with glibc 2.33 or later (Ubuntu 22.04, Debian 12, RHEL 9 or newer) or with musl (Alpine); the installer picks the one for your system. Intel Macs are not supported.
 
 The installer checks the download against its published checksum, puts the runtime in `~/.local/share/domyn` and the `domyn` command in `~/.local/bin`, and adds that directory to your `PATH` in your shell profile if it is not there already. Open a new terminal afterwards, or reload the profile it names. Running it again replaces the installed version.
 
@@ -32,7 +32,7 @@ Set them for the `sh` that runs the script: `curl -fsSL …/install.sh | DOMYN_V
 
 To uninstall, delete the two paths: `rm -rf ~/.local/share/domyn ~/.local/bin/domyn`. Your configuration and conversations in `~/.domyn` stay where they are.
 
-The standalone build is the CLI only, with the `audio` extra included, so [`/voice`](../cli/sessions.md#talking-instead-of-typing) works without installing anything else. To use Domyn Agents as a library, [add it to a project](#add-it-to-a-project).
+The standalone build is the CLI only, with the `audio` extra included, so [`/voice`](../cli/sessions.md#talking-instead-of-typing) works without installing anything else. The musl build is the exception: onnxruntime, which the extra needs, is not built for musl, so that build leaves the extra out and has no `/voice`. To use Domyn Agents as a library, [add it to a project](#add-it-to-a-project).
 
 ### With uv
 

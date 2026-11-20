@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  # Resolved once, so all three builds embed the same Python: the newest
+  # Resolved once, so all the builds embed the same Python: the newest
   # python-build-standalone release at the time of the run.
   resolve:
     runs-on: ubuntu-latest
@@ -43,8 +43,16 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
+          # musl (Alpine), built in an Alpine container: pdf-inspector is compiled
+          # from its sdist there, which takes a few minutes.
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            alpine: true
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            alpine: true
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: ${{ matrix.alpine && 30 || 10 }}
     permissions:
       contents: read
       id-token: write      # provenance attestation
@@ -59,18 +67,40 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
+        if: ${{ !matrix.alpine }}
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Build
+        if: ${{ !matrix.alpine }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PBS_RELEASE: ${{ needs.resolve.outputs.pbs_release }}
         run: scripts/build_standalone.sh dist/standalone
 
-      - name: Smoke test
+      # Rust from rustup: pdf-inspector needs 1.95 or newer, Alpine's is older.
+      - name: Build in Alpine
+        if: ${{ matrix.alpine }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PBS_RELEASE: ${{ needs.resolve.outputs.pbs_release }}
         run: |
-          SMOKE_HOME="$RUNNER_TEMP/home"
-          mkdir -p "$SMOKE_HOME"
+          docker run --rm -v "$PWD:/src" -w /src -e GITHUB_TOKEN -e PBS_RELEASE \
+            ghcr.io/astral-sh/uv:alpine3.22 sh -euc '
+              apk add --no-cache bash curl git build-base rustup patchelf >/dev/null
+              rustup-init -y -q --profile minimal
+              . "$HOME/.cargo/env"
+              git config --global --add safe.directory /src
+              scripts/build_standalone.sh dist/standalone
+            '
+
+      - name: Smoke test
+        env:
+          # A clean Alpine, without the compilers and libraries of the build.
+          IMAGE: ${{ matrix.alpine && 'alpine:3.22' || '' }}
+        run: |
+          cat > "$RUNNER_TEMP/smoke.sh" <<'SMOKE'
+          set -eu
+          SMOKE_HOME="$(mktemp -d)"
           env -i HOME="$SMOKE_HOME" PATH=/usr/bin:/bin SHELL=/bin/bash \
             sh dist/standalone/install.sh dist/standalone
           GOT="$(env -i HOME="$SMOKE_HOME" PATH=/usr/bin:/bin "$SMOKE_HOME/.local/bin/domyn" --version | tail -1)"
@@ -87,6 +117,13 @@ jobs:
             "$SMOKE_HOME/.local/share/domyn/python/bin/python3" -c \
               'import sys; from pip._vendor.packaging.version import Version; sys.exit(Version(sys.argv[1]) != Version(sys.argv[2]))' \
               "$GOT" "$WANT"
+          fi
+          SMOKE
+          if [ -n "$IMAGE" ]; then
+            docker run --rm -v "$PWD:/src" -v "$RUNNER_TEMP:$RUNNER_TEMP" -w /src \
+              -e GITHUB_REF_TYPE -e GITHUB_REF_NAME "$IMAGE" sh "$RUNNER_TEMP/smoke.sh"
+          else
+            sh "$RUNNER_TEMP/smoke.sh"
           fi
 
       # Verifiable with `gh attestation verify <archive> --repo <owner>/<repo>`.
