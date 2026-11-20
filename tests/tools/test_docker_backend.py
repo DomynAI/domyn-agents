@@ -46,6 +46,7 @@ from domyn.agents.tools.builtin.backends.docker import (
     egress_proxy,
 )
 from domyn.agents.tools.builtin.backends.docker.cli import DockerCli, DockerOutput
+from domyn.agents.tools.builtin.backends.docker.containers import container_home
 from domyn.agents.tools.builtin.backends.docker.images import (
     IMAGE_REPOSITORY,
     IMAGE_TAG_ENVIRONMENT_VARIABLE,
@@ -1294,10 +1295,13 @@ class TestARealContainer:
     @pytest.mark.asyncio
     async def test_the_user_has_a_name(self, make_docker: Any) -> None:
         """Without one a shell in the container reads "I have no name!"."""
-        result = await _sh(make_docker(), "whoami && id -gn && echo ~")
+        result = await _sh(make_docker(), "whoami && id -gn && echo ~ && getent passwd $(id -u)")
         assert result.exit_code == 0, result.stderr
-        assert result.stdout.split()[0] in {"domyn", "root"}
-        assert result.stdout.split()[-1] == "/tmp/domyn-home"
+        name, _group, home, entry = result.stdout.split()
+        assert name in {"domyn", "root"}
+        assert home == container_home()
+        if name == "domyn":
+            assert entry.split(":")[5] == container_home()
 
     @pytest.mark.asyncio
     async def test_the_host_outside_the_workspace_is_not_there(

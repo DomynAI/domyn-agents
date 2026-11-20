@@ -1,6 +1,7 @@
 """Starting the container a conversation's commands run in."""
 
 import os
+import shlex
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -106,10 +107,10 @@ class ContainerLauncher:
             # /etc/passwd, and only this host-made call runs as root. Best effort:
             # nothing but the name depends on it.
             uid, gid = os.getuid(), os.getgid()
+            user = shlex.quote(f"domyn:x:{uid}:{gid}::{container_home()}:/bin/bash")
             await self._cli(
                 "exec", "--user", "0", name, "sh", "-c",
-                f"getent passwd {uid} >/dev/null"
-                f" || echo 'domyn:x:{uid}:{gid}::{CONTAINER_HOME}:/bin/bash' >> /etc/passwd;"
+                f"getent passwd {uid} >/dev/null || echo {user} >> /etc/passwd;"
                 f" getent group {gid} >/dev/null || echo 'domyn:x:{gid}:' >> /etc/group",
                 timeout=ACTION_SECONDS,
             )  # fmt: skip
