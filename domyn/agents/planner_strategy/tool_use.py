@@ -64,6 +64,7 @@ from domyn.agents.planner_strategy.base import BasePlannerStrategy
 from domyn.agents.planner_strategy.context_injection import (
     insert_turn_context,
     turn_context_messages,
+    with_skills,
 )
 from domyn.agents.planner_strategy.context_management.compaction import (
     Compactor,
@@ -706,8 +707,11 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
             iteration += 1
 
             # Build messages from history
-            messages = await self.context_manager.get_context(
-                context=interaction_context, agent=agent, instruction=instruction
+            messages = with_skills(
+                await self.context_manager.get_context(
+                    context=interaction_context, agent=agent, instruction=instruction
+                ),
+                skills_payload,
             )
             if fv_soft_miss_carry:
                 messages.extend(fv_soft_miss_carry)
@@ -723,7 +727,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
             # the threshold is checked on the whole request, but only the
             # conversation is compacted.
             tool_defs = self.context_manager.get_tool_definitions(agent, interaction_context)
-            turn_context = await turn_context_messages(agent, interaction_context, skills_payload)
+            turn_context = await turn_context_messages(agent, interaction_context)
             # A copy of the agent called alongside another keeps its own.
             record = compaction_key(agent.name, interaction_context)
             messages = self.compactor.replay(messages, interaction_context.state, record)
@@ -1062,8 +1066,19 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 batches = self.batches(
                     agent, getattr(response, "tool_calls", None) or [], interaction_context
                 )
+                # The response's whole reasoning, when the model returned one, on
+                # its first call only: the context manager rebuilds one assistant
+                # message from the calls of a response, and sends it back while the
+                # user's turn lasts, to a provider that takes it (decided there, so
+                # a turn resumed on another provider gets what it would have). The
+                # short `thought` each action carries is what the user is shown.
+                reasoning = (getattr(response, "reasoning_content", None) or "").strip() or None
                 for position, tool_call in enumerate(response.tool_calls):
                     args = parsed_tool_args.get(tool_call.id, {})
+                    metadata: dict[str, Any] = {}
+                    if tool_call.id in batches:
+                        metadata[METADATA_TOOL_BATCH] = batches[tool_call.id]
+                    reasoning_content = reasoning if position == 0 else None
                     # The reasoning behind this call, carried by the action it
                     # produced (``carries_thought``). Extraction tolerates malformed
                     # arguments: keeping the call's id intact through TOOL_START keeps
@@ -1084,11 +1099,8 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             event_type=ExecutionEventType.TOOL_START,
                             author=agent.name,
                             action=action,
-                            metadata=(
-                                {METADATA_TOOL_BATCH: batches[tool_call.id]}
-                                if tool_call.id in batches
-                                else {}
-                            ),
+                            metadata=metadata,
+                            reasoning_content=reasoning_content,
                         )
                     elif tool_name in [
                         a.name for a in interaction_context.handoff_targets_description
@@ -1104,11 +1116,8 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             event_type=ExecutionEventType.AGENT_CALL,
                             author=agent.name,
                             action=agent_action,
-                            metadata=(
-                                {METADATA_TOOL_BATCH: batches[tool_call.id]}
-                                if tool_call.id in batches
-                                else {}
-                            ),
+                            metadata=metadata,
+                            reasoning_content=reasoning_content,
                         )
                         if tool_call.id not in batches:
                             return
@@ -1254,13 +1263,16 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                                 event_type=ExecutionEventType.TOOL_START,
                                 author=agent.name,
                                 action=action,
-                                metadata={METADATA_TOOL_BATCH: batches[tool_call.id]},
+                                metadata=metadata,
+                                reasoning_content=reasoning_content,
                             )
                             continue
                         yield BaseEvent(
                             event_type=ExecutionEventType.TOOL_START,
                             author=agent.name,
                             action=action,
+                            metadata=metadata,
+                            reasoning_content=reasoning_content,
                         )
                         yield BaseEvent(
                             event_type=ExecutionEventType.TOOL_ERROR,

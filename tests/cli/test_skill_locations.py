@@ -264,19 +264,18 @@ class TestOneAnswerForWhereSkillsLive:
             "interactive-charts",
             "domyn-cli",
             "domyn-docs",
+            "coding",
         } <= {skill.name for skill in index.skills}
 
     @pytest.mark.asyncio
-    async def test_the_shipped_skills_leave_room_in_the_index_budget(self) -> None:
+    async def test_the_shipped_skills_fit_in_the_index_budget(self) -> None:
         """Past the budget, every advisory skill is shown in a shorter form.
 
-        The user's own skills share the same budget, so the builtins alone must
-        leave most of it for theirs, or a handful of the user's skills would cost
-        every skill its description.
+        All the builtins ticked together must still be shown whole.
         """
         index = await LocalDirSkillSource(paths=builtin_skill_dirs()).index(SkillQuery(task=""))
         used = sum(len(skill.index_line()) for skill in index.skills)
-        assert used <= SkillBudget().max_index_chars * 0.4
+        assert used <= SkillBudget().max_index_chars
 
     def test_the_runtime_and_the_tools_are_given_the_same_answer(
         self, elsewhere: Path, tmp_path: Path

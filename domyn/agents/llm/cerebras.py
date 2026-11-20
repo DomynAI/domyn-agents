@@ -35,6 +35,9 @@ class CerebrasProvider(BaseLLMProvider):
         default=os.getenv("CEREBRAS_API_KEY"), description="API key for authentication"
     )
     context_window_catalog: ClassVar[str | None] = "cerebras"
+    # Its API takes a reasoning model's reasoning back on an assistant message in
+    # `reasoning`, the field it returns it in (what it does with it varies by model).
+    reasoning_content_key: ClassVar[str | None] = "reasoning"
 
     default_generation_params: ClassVar[dict[str, Any]] = {
         "temperature": 0.7,
@@ -112,7 +115,9 @@ class CerebrasProvider(BaseLLMProvider):
         if self.append_text_last_message:
             messages[-1].content += "\n" + self.append_text_last_message
 
-        serialized_messages = [message.to_dict() for message in messages]
+        serialized_messages = [
+            message.to_dict(reasoning_key=self.reasoning_key_in_use) for message in messages
+        ]
         # Sanitize tool names at the boundary; name_map restores originals in the response.
         tools, tool_choice, name_map = sanitize_tool_names(
             serialized_messages, tools, tool_choice, logger=logger
@@ -226,7 +231,9 @@ class CerebrasProvider(BaseLLMProvider):
         }
         headers["Authorization"] = f"Bearer {self.api_key}"
 
-        serialized_messages = [message.to_dict() for message in messages]
+        serialized_messages = [
+            message.to_dict(reasoning_key=self.reasoning_key_in_use) for message in messages
+        ]
         # Sanitize tool names at the boundary; name_map restores originals in the response.
         tools, tool_choice, name_map = sanitize_tool_names(
             serialized_messages, tools, tool_choice, logger=logger

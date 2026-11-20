@@ -89,6 +89,32 @@ class TestCerebrasProvider:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_an_assistant_messages_reasoning_is_sent_back_as_reasoning(self):
+        route = respx.post("https://api.cerebras.ai/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "ok"}}],
+                    "usage": {"completion_tokens": 1},
+                },
+            )
+        )
+
+        await self.provider.generate(
+            [
+                LLMMessage(role="user", content="weather?"),
+                LLMMessage(role="assistant", content="sunny", reasoning_content="I checked"),
+                LLMMessage(role="user", content="sure?"),
+            ]
+        )
+
+        sent = json.loads(route.calls.last.request.content)["messages"]
+        assert sent[1]["reasoning"] == "I checked"
+        assert "reasoning_content" not in sent[1]
+        assert "reasoning" not in sent[0]
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_generate_with_append_text(self):
         """Test generation with appended text to prompt."""
         messages = [LLMMessage(role="user", content="Hello")]

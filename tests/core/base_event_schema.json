@@ -930,6 +930,17 @@
       "default": false,
       "type": "boolean"
     },
+    "reasoning_content": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "timestamp": {
       "format": "date-time",
       "type": "string"

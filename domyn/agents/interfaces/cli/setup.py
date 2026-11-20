@@ -918,10 +918,13 @@ def _choose_project_skills(
         taken.add(label)
         category = install_dir / builtin.category
         # The group the exported built-ins of that category sit in, so the two mix.
+        # A built-in in no category sits directly in the install directory.
         group = (
             category.relative_to(project.expanduser().absolute()).as_posix()
             if _inside(category, project)
             else f"built-in/{builtin.category}"
+            if builtin.category
+            else "built-in"
         )
         missing[label] = builtin
         missing_rows.append(
@@ -2056,7 +2059,12 @@ def run_setup(
             configuration_id=draft.configuration_id or None,
             api_key_env=PROVIDER_HINTS.get(draft.provider_type, {}).get("env", "LLM_API_KEY"),
         ).model_copy(
-            update={"max_tokens": draft.max_tokens, "context_window": draft.context_window}
+            update={
+                "max_tokens": draft.max_tokens,
+                "context_window": draft.context_window,
+                # Not asked: a hand edit, kept across a change of model.
+                "send_reasoning": provider.send_reasoning,
+            }
         )
     # `None` unless the wizard actually asked, so a `provider_only` run leaves
     # whatever the file says about decisions and memory exactly where it found it.

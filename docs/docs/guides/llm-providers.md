@@ -105,6 +105,7 @@ Default `generation_params`:
 |---|---|---|---|---|
 | `vllm` | `timeout` | `float` | `300.0` | Seconds to wait for the server, for slow or large models. |
 | `cerebras`, `open_router` | `max_retries` | `int` | `3` | Attempts when the API answers with an empty body. |
+| `vllm`, `custom`, `domyn`, `cerebras`, `open_router` | `send_reasoning` | `bool` | `True` | Sends the model's reasoning back to it with its assistant messages (see [Planner strategies](planner-strategies.md)). Set it to `false` for a model that ignores it, such as one whose vLLM chat template does not read `reasoning_content`: it then gets the short thoughts instead. |
 | `open_router` | `reasoning_supported` | `bool` | `False` | Sends `reasoning: {effort: medium}`. Set it only for models that accept the parameter: others reject the request. |
 
 ### `domyn`
@@ -197,6 +198,7 @@ What the methods receive and return:
 - `tools`, when the agent has any, is a list of tool definitions in the OpenAI Chat Completions format: `{"type": "function", "function": {"name", "description", "parameters"}}`.
 - The reply is an `LLMResponse`: `content`, `generated_tokens` and `execution_time` (seconds) are required. A tool call is returned in `tool_calls`, as `LLMToolCall(id=..., function=ToolCallFunction(name=..., arguments=<JSON string>))`.
 - `usage` carries the provider's token counts. [Context compaction](context-compaction.md) measures the next request from the prompt count (`prompt_tokens`, or `input_tokens` with any cache counts), so return it when the API gives one. `reasoning_content` becomes the thought of a `tool_use_thought` agent when a call carries none (see [Planner strategies](planner-strategies.md)).
+- `reasoning_content_key` (a class attribute, `None` by default) is the key under which the API takes the model's reasoning back on an assistant message. With a key, the tool-use planners put the model's reasoning on the assistant messages of every turn, and `message.to_dict(reasoning_key=self.reasoning_key_in_use)` writes it under that key (`reasoning_key_in_use` is the key, or `None` when the provider's `send_reasoning` is off). `vllm`, `custom` and `domyn` set it to `reasoning_content`, `cerebras` and `open_router` to `reasoning`.
 - `fetch_context_window()` returns the model's window, or `None`. By default it reads the `/models` listing beside an OpenAI-style `url`; override it for an API that says the window elsewhere.
 - `generate_streaming` yields the reply in pieces, each an `LLMResponse` whose `content` is the next piece. It is used when the agent has `stream` enabled.
 

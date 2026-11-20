@@ -3,7 +3,7 @@
 import json
 import time
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 from pydantic import Field
@@ -38,6 +38,10 @@ class CustomLLMProvider(BaseLLMProvider):
     )
     supported_structured_outputs: list[StructuredOutputType] | None = None
 
+    # The OpenAI-compatible servers of thinking models (vLLM, SGLang, DeepSeek's
+    # API) read the reasoning back from the assistant messages.
+    reasoning_content_key: ClassVar[str | None] = "reasoning_content"
+
     def model_post_init(self, context: Any, /) -> None:
         if not self.name:
             self.name = self.model_name
@@ -60,7 +64,7 @@ class CustomLLMProvider(BaseLLMProvider):
         start = time.time()
         request_headers = {"Content-Type": "application/json", **self.headers}
 
-        serialized_messages = [m.to_dict() for m in messages]
+        serialized_messages = [m.to_dict(reasoning_key=self.reasoning_key_in_use) for m in messages]
         # Sanitize tool names at the boundary; name_map restores originals in the response.
         tools, tool_choice, name_map = sanitize_tool_names(
             serialized_messages, tools, tool_choice, logger=logger
@@ -145,7 +149,7 @@ class CustomLLMProvider(BaseLLMProvider):
         start = time.time()
         request_headers = {"Content-Type": "application/json", **self.headers}
 
-        serialized_messages = [m.to_dict() for m in messages]
+        serialized_messages = [m.to_dict(reasoning_key=self.reasoning_key_in_use) for m in messages]
         # Sanitize tool names at the boundary; name_map restores originals in the response.
         tools, tool_choice, name_map = sanitize_tool_names(
             serialized_messages, tools, tool_choice, logger=logger
