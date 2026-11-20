@@ -221,7 +221,7 @@ class ProviderConfig(BaseModel):
     """
 
     send_reasoning: bool = True
-    """Send the model's reasoning back to it during the current turn, on a provider
+    """Send the model's reasoning back to it with its assistant messages, on a provider
     that takes it (`BaseLLMProvider.send_reasoning`). Not asked by the wizard: off
     is a hand edit, for a model whose chat template does not read it, and is the
     only value written, so that edit survives a re-run of setup or a `/model`."""

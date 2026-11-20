@@ -1,10 +1,10 @@
-"""The model's whole reasoning goes back to it while the user's turn lasts.
+"""The model's whole reasoning goes back to it with its assistant messages.
 
 The planner stores ``reasoning_content`` on the first call of a response
 (``BaseEvent.reasoning_content``); the context manager puts it on the assistant
-message of that response in the current user turn, for a provider that sends it
-(``reasoning_content_key``). Earlier turns, and providers that do not send it,
-get the short thoughts of every call as the message's content.
+message of that response, in every turn, for a provider that sends it
+(``reasoning_key_in_use``). A response without stored reasoning, and providers
+that do not send it, get the short thoughts of every call as the message's content.
 """
 
 # No `from __future__ import annotations`: builds real agents.
@@ -157,7 +157,7 @@ class TestAResponseWithoutReasoning:
         assert message.content == "look at a\nlook at b"
 
 
-class TestTheCurrentTurn:
+class TestAResponseWithReasoning:
     @pytest.mark.asyncio
     async def test_carries_the_whole_reasoning_once_with_both_calls(self) -> None:
         provider = _Script(replies=[_calls(), _answer("done")])
@@ -192,12 +192,25 @@ class TestTheCurrentTurn:
 
 class TestAnEarlierTurn:
     @pytest.mark.asyncio
-    async def test_carries_the_short_thought_of_every_call(self) -> None:
+    async def test_carries_its_reasoning_too(self) -> None:
         provider = _Script(replies=[_calls(), _answer("done"), _answer("again")])
         runner, agent = Runner(), _agent(provider)
 
         await _turn(runner, agent, "list a and b", "earlier")
         await _turn(runner, agent, "thanks", "earlier")
+
+        (message,) = _assistants_with_calls(provider.requests[2])
+        assert message.reasoning_content == REASONING
+        assert message.content is None
+
+    @pytest.mark.asyncio
+    async def test_without_reasoning_carries_the_short_thought_of_every_call(self) -> None:
+        bare = _calls().model_copy(update={"reasoning_content": None})
+        provider = _Script(replies=[bare, _answer("done"), _answer("again")])
+        runner, agent = Runner(), _agent(provider)
+
+        await _turn(runner, agent, "list a and b", "earlier, bare")
+        await _turn(runner, agent, "thanks", "earlier, bare")
 
         (message,) = _assistants_with_calls(provider.requests[2])
         assert message.reasoning_content is None
@@ -206,7 +219,7 @@ class TestAnEarlierTurn:
 
 class TestAProviderThatDoesNotSendIt:
     @pytest.mark.asyncio
-    async def test_gets_the_short_thoughts_in_the_current_turn(self) -> None:
+    async def test_gets_the_short_thoughts(self) -> None:
         provider = _Silent(replies=[_calls(), _answer("done")])
 
         await _turn(Runner(), _agent(provider), "list a and b", "silent")
@@ -248,7 +261,7 @@ class TestAProviderThatDoesNotSendIt:
         assert REASONING not in json.dumps(anthropic._convert_messages([message]))
 
 
-class TestACurrentCallWithoutStoredReasoning:
+class TestACallWithoutStoredReasoning:
     @pytest.mark.asyncio
     async def test_renders_its_short_thought(self) -> None:
         agent = _agent(_Script())

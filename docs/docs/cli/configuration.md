@@ -85,7 +85,7 @@ The settings you are most likely to change:
 | Setting | What it does |
 |---|---|
 | `context_window` | The model's context window, in tokens. Left out (`auto` in the wizard), the session asks the provider at start and assumes 150,000 when it cannot answer; `/context` shows the window it got. Set it when the provider reports none, or a wrong one: the session compacts the conversation based on it. |
-| `send_reasoning` | On the provider, `true` unless written. `false` stops the model's reasoning being sent back to it during a turn, for a model that ignores it (a vLLM chat template that does not read `reasoning_content`): it then gets the short thoughts instead. Kept when `domyn setup` or `/model` rewrites the file. |
+| `send_reasoning` | On the provider, `true` unless written. `false` stops the model's reasoning being sent back to it, for a model that ignores it (a vLLM chat template that does not read `reasoning_content`): it then gets the short thoughts instead. Kept when `domyn setup` or `/model` rewrites the file. |
 | `stream` | `true` prints the answer as it is generated, `false` when it is complete. |
 | `bundles` | The [built-in tools](tools-and-approvals.md): `files`, `shell` and `browser`. Remove one to take those tools away, or leave the list empty for an agent that only talks. |
 | `skills` | The [skills](../guides/skills.md) the agent loads. Only what is listed here is loaded. |

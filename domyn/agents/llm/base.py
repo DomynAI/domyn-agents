@@ -477,14 +477,14 @@ class BaseLLMProvider(BaseModel, ABC):
     """The key under which this provider's API takes the model's reasoning back on
     an assistant message, or ``None`` when it does not take it. With a key, and
     ``send_reasoning`` on, the context manager puts the model's whole reasoning on
-    the assistant messages of the current user turn, and the provider sends it
+    the assistant messages of every turn, and the provider sends it
     under that key (`LLMMessage.to_dict(reasoning_key=...)`); otherwise those
-    messages carry the short thoughts as their content, like earlier turns."""
+    messages carry the short thoughts as their content."""
 
     send_reasoning: bool = Field(
         default=True,
         description=(
-            "Send the model's reasoning back to it during the current user turn, on a "
+            "Send the model's reasoning back to it with its assistant messages, on a "
             "provider whose API takes it (`reasoning_content_key`). Off for a model "
             "that ignores it (a vLLM chat template that does not read "
             "`reasoning_content`), which then gets the short thoughts instead."
