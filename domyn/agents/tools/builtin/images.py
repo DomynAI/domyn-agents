@@ -23,7 +23,7 @@ import base64
 import io
 from typing import TYPE_CHECKING, Any
 
-from PIL import Image, UnidentifiedImageError
+from PIL import ExifTags, Image, ImageOps, UnidentifiedImageError
 
 from domyn.agents.logger import get_logger
 from domyn.agents.tools.builtin.workspace import Workspace, WorkspaceError
@@ -36,6 +36,7 @@ from domyn.agents.tools.builtin.files import (
     IMAGE_OPERATION,
     TOOL_BODY_SECONDS,
     answer_of,
+    host_path,
     request_text,
 )
 
@@ -81,16 +82,19 @@ def load_image(workspace: Workspace, path: str) -> tuple[bytes, str]:
     try:
         with Image.open(resolved) as image:
             media_type = _SENT_AS_IS.get(image.format or "")
+            upright = image.getexif().get(ExifTags.Base.Orientation, 1) == 1
             if (
                 media_type
+                and upright
                 and max(image.size) <= MAX_IMAGE_EDGE
                 and resolved.stat().st_size <= MAX_SENT_BYTES
             ):
                 return resolved.read_bytes(), media_type
-            image.thumbnail((MAX_IMAGE_EDGE, MAX_IMAGE_EDGE))
+            trasposed_image = ImageOps.exif_transpose(image)
+            trasposed_image.thumbnail((MAX_IMAGE_EDGE, MAX_IMAGE_EDGE))
             # JPEG has no transparency, and a transparent area converted as it is turns
             # black: a diagram with black lines would be sent as a black rectangle.
-            layer = image.convert("RGBA")
+            layer = trasposed_image.convert("RGBA")
             flat = Image.new("RGB", layer.size, "white")
             flat.paste(layer, mask=layer.getchannel("A"))
             buffer = io.BytesIO()
@@ -161,13 +165,14 @@ def image_tools(
                     reach = Workspace.at(workspace.root, also=(*workspace.extra_roots, attached))
             image, media_type = await asyncio.to_thread(load_image, workspace=reach, path=path)
         else:
+            remote_path = str(host_path(path, workspace))
             result = await backend.run(
                 where.command,
                 timeout=TOOL_BODY_SECONDS,
                 conversation_id=conversation_id,
                 stdin=request_text(
                     IMAGE_OPERATION,
-                    {"path": path},
+                    {"path": remote_path},
                     root=workspace.root,
                     extra_roots=(*workspace.extra_roots, *where.roots),
                 ),

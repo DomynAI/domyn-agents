@@ -429,7 +429,7 @@ class Repl:
         # which repaints on a timer slower than tokens arrive.
         self._renderer.on_preview = self._input.refresh
         self._renderer.output = self._input.output
-        # Images attached to the conversation in the editor: Ctrl+V and a pasted or
+        # Images attached to the conversation in the editor: Ctrl-V and a pasted or
         # dragged path. See `attachments.py`.
         self._attachments = Attachments(self._attachment_place)
         self._input.attachments = self._attachments
@@ -1713,7 +1713,7 @@ class Repl:
             )
         self._console.print(
             "\n  Enter sends · Alt+Enter or Ctrl+J for a newline · Shift+Tab auto-approve"
-            "\n  Ctrl+V pastes an image · pasting or dragging in an image's path attaches it"
+            "\n  Ctrl-V pastes an image · pasting or dragging in an image's path attaches it"
             "\n  Ctrl-C clears the line, or stops a running turn · twice in a row quits\n",
             style=self._theme.style("meta"),
             highlight=False,

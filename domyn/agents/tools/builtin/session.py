@@ -135,7 +135,7 @@ class SessionPaths:
 
     @property
     def attachments(self) -> Path:
-        """Images the user attached to the conversation (Ctrl+V, a pasted or
+        """Images the user attached to the conversation (Ctrl-V, a pasted or
         dragged path), which ``read_image`` may read for that conversation alone."""
         return self.home / "attachments"
 
