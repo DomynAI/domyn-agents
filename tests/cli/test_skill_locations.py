@@ -264,7 +264,6 @@ class TestOneAnswerForWhereSkillsLive:
             "interactive-charts",
             "domyn-cli",
             "domyn-docs",
-            "coding",
         } <= {skill.name for skill in index.skills}
 
     @pytest.mark.asyncio

@@ -22,6 +22,24 @@ from domyn.agents.skills.catalog import (
 DATA_SKILLS = ("data-analysis", "time-series-forecasting", "tabular-classification-regression")
 
 
+def _fixture_root(base: Path, skills: dict[str, str], *, files: tuple[str, ...] = ()) -> Path:
+    """A skills tree of our own, for what the package no longer ships an example of."""
+    root = base / "builtin"
+    for name, description in skills.items():
+        folder = root / name
+        folder.mkdir(parents=True)
+        declared = "".join(f"  - {extra}\n" for extra in files)
+        (folder / "SKILL.md").write_text(
+            f"---\nname: {name}\nversion: 1.0.0\ndescription: {description}\n"
+            + (f"external_files:\n{declared}" if files else "")
+            + "---\n\nBody.\n",
+            encoding="utf-8",
+        )
+        for extra in files:
+            (folder / extra).write_text("reference\n", encoding="utf-8")
+    return root
+
+
 class TestTheManifest:
     def test_every_builtin_skill_is_listed_with_a_description(self) -> None:
         skills = {skill.name: skill for skill in list_builtin_skills()}
@@ -38,7 +56,6 @@ class TestTheManifest:
             "interactive-charts",
             "documents",
             "domyn-docs",
-            "coding",
         } <= skills.keys()
         assert all(skill.description for skill in skills.values())
 
@@ -302,12 +319,18 @@ class TestTheGroups:
             "presentations",
         ]
 
-    def test_a_skill_directly_under_builtin_is_in_no_group(self) -> None:
-        coding = next(skill for skill in list_builtin_skills() if skill.name == "coding")
+    def test_a_skill_directly_under_builtin_is_in_no_group(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A folder with a SKILL.md at the top of the tree is a skill, not a category."""
+        top_level = _fixture_root(tmp_path, {"solo": "A skill that belongs to no category."})
+        monkeypatch.setattr(catalog, "BUILTIN_SKILLS_ROOT", top_level)
 
-        assert coding.category == ""
-        assert coding.skill_file == BUILTIN_SKILLS_ROOT / "coding" / "SKILL.md"
-        assert all("coding" not in members for members in skill_groups().values())
+        (solo,) = list_builtin_skills()
+
+        assert solo.category == ""
+        assert solo.skill_file == top_level / "solo" / "SKILL.md"
+        assert all("solo" not in members for members in skill_groups().values())
 
     def test_a_group_never_has_the_name_of_a_skill(self) -> None:
         """The picker keys rows by label, so the two cannot share one."""
@@ -378,17 +401,21 @@ class TestInstalling:
         assert list((dest / "resources" / "assets" / "fonts").glob("*.ttf"))
         assert (dest / "data" / "data_utils.py").is_file()
 
-    def test_a_skill_in_no_category_is_installed_at_the_top(self, tmp_path: Path) -> None:
+    def test_a_skill_in_no_category_is_installed_at_the_top(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        top_level = _fixture_root(
+            tmp_path, {"solo": "A skill that belongs to no category."}, files=("reference.md",)
+        )
+        monkeypatch.setattr(catalog, "BUILTIN_SKILLS_ROOT", top_level)
         dest = tmp_path / "skills"
 
-        paths = install_skills(["coding"], dest)
+        paths = install_skills(["solo"], dest)
 
-        assert paths == [dest / "coding"]
+        assert paths == [dest / "solo"]
         assert sorted(p.relative_to(dest).as_posix() for p in dest.rglob("*") if p.is_file()) == [
-            "coding/SKILL.md",
-            "coding/templates/ARCHITECTURE.md",
-            "coding/templates/PLAN.md",
-            "coding/templates/REQUIREMENTS.md",
+            "solo/SKILL.md",
+            "solo/reference.md",
         ]
         assert unrecognized_entries(dest) == []
 
