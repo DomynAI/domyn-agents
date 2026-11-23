@@ -1,6 +1,7 @@
 """``backend: auto``: Docker when it can be used, this machine when it cannot, and
 the fallback is said rather than silent. An explicit ``docker`` still refuses."""
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,8 @@ from domyn.agents.tools.builtin import (
 )
 from domyn.agents.tools.builtin.backends import BackendUnavailableError, CommandResult
 from domyn.agents.tools.builtin.backends.auto import AutoBackend
+from domyn.agents.tools.builtin.backends.docker import backend as docker_backend
+from domyn.agents.tools.builtin.backends.local import GitBashBackend
 
 
 @pytest.fixture
@@ -64,7 +67,11 @@ def _auto(tmp_path: Path, **docker: Any) -> AutoBackend:
 
 class TestFallback:
     @pytest.mark.asyncio
-    async def test_without_docker_commands_run_here_and_it_is_said(self, tmp_path: Path) -> None:
+    async def test_without_docker_commands_run_here_and_it_is_said(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Docker as missing, not as refused: on Windows it is refused first (below).
+        monkeypatch.setattr(docker_backend, "_ON_WINDOWS", False)
         backend = _auto(tmp_path)
         notices: list[str] = []
         backend.on_notice = notices.append
@@ -252,3 +259,40 @@ class TestInsideTheContainer:
         monkeypatch.setenv("DOMYN_BACKEND", "docker")
         for name in ("auto", "docker"):
             assert isinstance(build_backend(name, Workspace.at(tmp_path)), LocalBackend)
+
+
+class TestOnWindows:
+    """Docker is refused on Windows until its mounts translate Windows paths: ``auto``
+    runs commands in Git Bash, and says why; ``docker`` asked for by name refuses."""
+
+    @pytest.fixture(autouse=True)
+    def windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(docker_backend, "_ON_WINDOWS", True)
+
+    @pytest.mark.asyncio
+    async def test_auto_falls_back_to_this_machine_and_says_why(self, tmp_path: Path) -> None:
+        backend = _auto(tmp_path)
+        notices: list[str] = []
+        backend.on_notice = notices.append
+
+        await backend.check()
+
+        assert backend._on_this_machine and backend.name == "local"
+        assert backend.fallback is not None and "Windows" in backend.fallback.problem
+        # Refused before Docker is looked for: not "Docker was not found".
+        assert "not found" not in backend.fallback.problem
+        assert len(notices) == 1 and "not in a container" in notices[0]
+
+    def test_the_fallback_is_git_bash_on_windows(self, tmp_path: Path) -> None:
+        local = _auto(tmp_path)._local
+        assert isinstance(local, GitBashBackend) == (os.name == "nt")
+
+    @pytest.mark.asyncio
+    async def test_docker_by_name_refuses(self, tmp_path: Path) -> None:
+        backend = build_backend("docker", Workspace.at(tmp_path))
+
+        with pytest.raises(BackendUnavailableError) as raised:
+            await backend.check()
+
+        assert "Windows" in raised.value.problem and raised.value.fix is not None
+        assert "local" in raised.value.fix
