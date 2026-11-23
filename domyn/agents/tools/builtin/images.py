@@ -143,7 +143,7 @@ def image_tools(
             # Where an "auto" backend decides between Docker and this machine
             await backend.start()
         where = backend.tool_host if backend is not None else None
-        if (backend is None) or (where is None):
+        if (backend is None) or (where is None):  # Local execution
             # The images the user attached to this conversation are in its state
             # folder, which is no root of the workspace: they are added for this call
             # alone, and only this conversation's. Never through a link, which would
@@ -164,7 +164,7 @@ def image_tools(
                 if attached.is_dir() and linked_below(start, attached) is None:
                     reach = Workspace.at(workspace.root, also=(*workspace.extra_roots, attached))
             image, media_type = await asyncio.to_thread(load_image, workspace=reach, path=path)
-        else:
+        else:  # Remote execution
             remote_path = str(host_path(path, workspace))
             result = await backend.run(
                 where.command,
