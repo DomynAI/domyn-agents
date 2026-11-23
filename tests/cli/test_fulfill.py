@@ -1,4 +1,4 @@
-"""`domyn headless`: one task, nobody at the keyboard, no setup read or needed."""
+"""`domyn fulfill`: one task, nobody to answer, no follow-up, no setup read or needed."""
 
 import os
 from pathlib import Path
@@ -9,8 +9,8 @@ import yaml
 from typer.testing import CliRunner
 
 from domyn.agents.cli.cli import app
-from domyn.agents.cli.commands.headless import command as headless
-from domyn.agents.cli.commands.headless.command import DEFAULT_INSTRUCTIONS, headless_config
+from domyn.agents.cli.commands.fulfill import command as fulfill
+from domyn.agents.cli.commands.fulfill.command import DEFAULT_INSTRUCTIONS, fulfill_config
 from domyn.agents.instructions import load_declared
 from domyn.agents.interfaces.cli import config as cli_config
 from domyn.agents.interfaces.cli.state import CliState
@@ -34,7 +34,7 @@ def _config(**given: Any) -> dict[str, Any]:
         "skill_paths": [],
         "workspace": "/",
     }
-    return headless_config(**{**values, **given})
+    return fulfill_config(**{**values, **given})
 
 
 class TestTheConfiguration:
@@ -76,9 +76,9 @@ class TestTheConfiguration:
     async def test_it_loads_with_the_instructions_and_no_file_behind_them(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("HEADLESS_TEST_KEY", "sk-test")
+        monkeypatch.setenv("FULFILL_TEST_KEY", "sk-test")
         path = tmp_path / "config.yaml"
-        config = _config(max_tokens=4000, api_key_env="HEADLESS_TEST_KEY")
+        config = _config(max_tokens=4000, api_key_env="FULFILL_TEST_KEY")
         path.write_text(yaml.safe_dump(config))
 
         agent = await load_application_from_file(str(path))
@@ -102,14 +102,14 @@ def started(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         seen.update(kwargs, agent=agent, home=cli_config.home_dir())
         return 0
 
-    monkeypatch.setattr(headless, "start_session", fake_start_session)
-    monkeypatch.setenv("HEADLESS_TEST_KEY", "sk-test")
+    monkeypatch.setattr(fulfill, "start_session", fake_start_session)
+    monkeypatch.setenv("FULFILL_TEST_KEY", "sk-test")
     return seen
 
 
 def _invoke(*args: str, endpoint: bool = True) -> Any:
-    given = ["--base-url", ENDPOINT, "--api-key-env", "HEADLESS_TEST_KEY"] if endpoint else []
-    return CliRunner().invoke(app, ["headless", *given, *args], catch_exceptions=False)
+    given = ["--base-url", ENDPOINT, "--api-key-env", "FULFILL_TEST_KEY"] if endpoint else []
+    return CliRunner().invoke(app, ["fulfill", *given, *args], catch_exceptions=False)
 
 
 class TestTheCommand:
@@ -127,7 +127,7 @@ class TestTheCommand:
         # The state folder plays ~/.domyn: nothing of a setup is read.
         assert started["home"] == state.resolve()
         written = yaml.safe_load((state / "config.yaml").read_text())
-        assert written["llm_providers"][0]["api_key"] == "${HEADLESS_TEST_KEY}"
+        assert written["llm_providers"][0]["api_key"] == "${FULFILL_TEST_KEY}"
         assert written["llm_providers"][0]["url"] == f"{ENDPOINT}/chat/completions"
 
     def test_no_reasoning_effort_is_sent_unless_given(
@@ -215,7 +215,7 @@ class TestTheCommand:
     def test_a_key_variable_that_is_not_set_is_refused(
         self, tmp_path: Path, started: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.delenv("HEADLESS_TEST_KEY")
+        monkeypatch.delenv("FULFILL_TEST_KEY")
         result = _invoke("--model", "m", "--state-dir", str(tmp_path / "s"), "x")
         assert result.exit_code == 2
         assert not started
@@ -232,7 +232,7 @@ class TestTheCommand:
         assert result.exit_code == 0, result.output
         assert "SETUP_ONLY_KEY" not in os.environ
         # A key the environment itself holds stays.
-        assert os.environ["HEADLESS_TEST_KEY"] == "sk-test"
+        assert os.environ["FULFILL_TEST_KEY"] == "sk-test"
 
 
 class TestTheRepl:

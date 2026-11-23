@@ -1,4 +1,5 @@
-"""``domyn headless``: one task, carried out with nobody at the keyboard, then exit.
+"""``domyn fulfill``: one task, carried out to the end with nobody to answer and no
+follow-up, then exit.
 
 For running domyn as a harness: in a container, in CI, on a benchmark. It needs no
 ``domyn setup`` and reads nothing a setup left: not ``~/.domyn/config.yaml``, its
@@ -79,9 +80,9 @@ question, and the session ends when you stop.
   where the request says they go.
 - **Finish with a short summary** of what you did and how you checked it.
 """
-"""The standing instructions of a headless session, unless ``--instructions`` gives others.
+"""The standing instructions of a `domyn fulfill` session, unless ``--instructions`` gives others.
 
-What the built-in prompts of other headless coding agents say, and what a session with
+What the built-in prompts of other coding agents run without a user say, and what a session with
 nobody to answer needs: without them a model tends to describe the steps and offer to
 carry them out, and the session ends on the offer."""
 
@@ -93,7 +94,7 @@ AGENT_NAME = "Assistant"
 SKILLS_DIRNAME = "builtin-skills"
 
 
-def headless_config(
+def fulfill_config(
     *,
     model: str,
     url: str,
@@ -107,7 +108,7 @@ def headless_config(
     skill_paths: list[Path],
     workspace: str,
 ) -> dict[str, Any]:
-    """The ``config.yaml`` of a headless session.
+    """The ``config.yaml`` of a `domyn fulfill` session.
 
     ``None`` for ``context_window`` leaves it to the server (asked at session start,
     `apply_context_window`). ``max_tokens`` and ``temperature`` are always passed, so
@@ -215,7 +216,7 @@ def _read_instructions(instructions: Path | None, no_instructions: bool) -> str 
         raise _fail(f"Cannot read the instructions in {instructions}: {exc}") from exc
 
 
-def headless_command(
+def fulfill_command(
     prompt: str | None = typer.Argument(
         None, help="The task. Or --prompt-file, to keep it off the command line."
     ),
@@ -292,7 +293,7 @@ def headless_command(
         False, "--verbose", "-v", help="Show internal events (LLM, hooks, agent lifecycle)"
     ),
 ) -> None:
-    """Carry out one task with nobody at the keyboard, then exit.
+    """Carry out one task on your own: no questions, no follow-up, then exit.
 
     Needs no `domyn setup` and ignores any: the endpoint is --base-url, the model --model
     and the key the variable --api-key-env names. Every tool call is approved
@@ -304,13 +305,13 @@ def headless_command(
         raise _fail(f"--api-key-env names {api_key_env}, which is not set.")
 
     # Startup put ~/.domyn/credentials in the environment, before any option was read:
-    # a headless session uses none of a setup's keys, only the environment's.
+    # a `domyn fulfill` session uses none of a setup's keys, only the environment's.
     drop_credentials_from_environment()
 
     folder = (
         state_dir.expanduser().resolve()
         if state_dir is not None
-        else Path(tempfile.mkdtemp(prefix="domyn-headless-"))
+        else Path(tempfile.mkdtemp(prefix="domyn-fulfill-"))
     )
     folder.mkdir(parents=True, exist_ok=True)
     skill_paths = (
@@ -318,7 +319,7 @@ def headless_command(
         if skills
         else []
     )
-    config = headless_config(
+    config = fulfill_config(
         model=model,
         url=base_url,
         api_key_env=api_key_env,
