@@ -261,11 +261,12 @@ class BaseTool(BaseModel):
         "runner's ceiling, 0 removes it. On a streaming tool it bounds the wait for each "
         "chunk, not the whole call.",
     )
-    parallel_safe: bool = Field(
-        default=True,
-        description="Whether calls of one model response may run at the same time as other "
-        "calls of it. False runs each call alone and in order, as a call needing approval "
-        "runs: for a tool that acts on state the next call reads (a browser's page).",
+    concurrency_key: str | None = Field(
+        default=None,
+        description="Calls of one model response to tools with the same key run one after "
+        "the other, in the order they were made, while the other calls of the response "
+        "still run at the same time. For tools acting on state the next call reads: the "
+        "browser's tools share `browser`, since they act on one page. None: no ordering.",
     )
 
     # auto-register sub types

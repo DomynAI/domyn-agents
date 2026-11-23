@@ -3592,13 +3592,8 @@ class Runner:
                 yield "event", call
                 yield "result", await self._tool_not_found(call, state, context)
                 continue
-            # A call needing approval runs alone and in order, and so does one to a
-            # tool that is not `parallel_safe` (the browser: one page, which the
-            # next call reads); only the first is asked about, below.
             gated = tool is not None and (
-                bool(tool.approval_type)
-                or (isinstance(tool, MCPTool) and tool.use_oauth)
-                or not getattr(tool, "parallel_safe", True)
+                bool(tool.approval_type) or (isinstance(tool, MCPTool) and tool.use_oauth)
             )
             if tool is not None and not gated:
                 group.append((call, tool))
@@ -3775,20 +3770,36 @@ class Runner:
         outcomes = [_ToolCallsOutcome() for _ in group]
 
         async def pump(
-            tool: FunctionTool | DelegateTool | None, call: BaseEvent, own: _ToolCallsOutcome
+            tool: FunctionTool | DelegateTool | None,
+            call: BaseEvent,
+            own: _ToolCallsOutcome,
+            after: asyncio.Future[None] | None,
         ) -> None:
             # No limit here: each tool call takes one of the turn's places as it
             # runs (`_run_one_tool`), and a sub-agent takes none.
             try:
+                if after is not None:
+                    # Its turn among the calls with its `concurrency_key`: waited
+                    # for before taking a place, so a call in line holds none.
+                    await asyncio.wait([after])
                 async for item in self._run_call(tool, call, state, context, own, batch):
                     await queue.put(item)
             finally:
                 await queue.put(None)
 
-        tasks = [
-            asyncio.ensure_future(pump(tool, call, own))
-            for (call, tool), own in zip(group, outcomes, strict=True)
-        ]
+        # Calls to tools sharing a `concurrency_key` (the browser's, one page) run
+        # one after the other, in the order they were made; everything else in the
+        # group, them included, runs at the same time.
+        last_of_key: dict[str, asyncio.Future[None]] = {}
+        tasks: list[asyncio.Future[None]] = []
+        for (call, tool), own in zip(group, outcomes, strict=True):
+            key = getattr(tool, "concurrency_key", None) if tool is not None else None
+            started = asyncio.ensure_future(
+                pump(tool, call, own, last_of_key.get(key) if key else None)
+            )
+            if key:
+                last_of_key[key] = started
+            tasks.append(started)
         stop = self._group_stopper(tasks, batch, group, state, context)
         state.on_stop.append(stop)
         finished = False

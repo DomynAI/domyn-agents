@@ -7,8 +7,9 @@
   by it.
 - The built-in tools are told when a call ends (``BuiltinTools.end_agent_call``),
   on every AGENT_END, and not while the call only waits for an answer.
-- A tool that is not ``parallel_safe`` runs alone and in order among the calls
-  of one response, as a call needing approval does, but without being asked.
+- Calls of one response to tools sharing a ``concurrency_key`` run one after the
+  other, in the order made, without being asked about; the rest of the response
+  runs alongside them, sub-agents included.
 """
 
 # No `from __future__ import annotations`: builds real agents and tools.
@@ -26,7 +27,6 @@ from domyn.agents.tools.builtin import BuiltinTools
 from tests.runner.test_parallel_handoffs import (
     PLANNERS,
     _approve,
-    _ask,
     _planner,
     _run,
     _Script,
@@ -287,7 +287,7 @@ class TestTheEndOfACall:
         assert answers and answers[-1].author == "MainAgent"
 
 
-def _slow(log: list[str], name: str, parallel_safe: bool) -> FunctionTool:
+def _slow(log: list[str], name: str, key: str | None, delay: float = 0.05) -> FunctionTool:
     async def step(what: str) -> str:
         """Do a slow step.
 
@@ -295,74 +295,124 @@ def _slow(log: list[str], name: str, parallel_safe: bool) -> FunctionTool:
             what: the step.
         """
         log.append(f"start {what}")
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(delay)
         log.append(f"end {what}")
         return f"did {what}"
 
     step.__name__ = name
-    return FunctionTool(func=step, parallel_safe=parallel_safe)
+    return FunctionTool(func=step, concurrency_key=key)
 
 
-class TestToolsThatAreNotParallelSafe:
+def _calls(*steps: tuple[str, str]) -> list[tuple[str, str]]:
+    return [(name, f'{{"what": "{what}"}}') for name, what in steps]
+
+
+def _working(planner: str, calls: list[tuple[str, str]], tools: list[FunctionTool]) -> Agent:
+    return Agent(
+        name="MainAgent",
+        description="the agent",
+        instruction="work",
+        llm_provider=_Script(label="main", replies=[calls, "Done."]),
+        planner=_planner(planner),
+        tools=tools,
+    )
+
+
+def _before(log: list[str], first: str, second: str) -> bool:
+    return log.index(first) < log.index(second)
+
+
+class TestAConcurrencyKey:
     @pytest.mark.parametrize("planner", PLANNERS)
     @pytest.mark.asyncio
-    async def test_their_calls_run_one_at_a_time_in_order(self, planner: str) -> None:
+    async def test_its_calls_run_in_order_and_the_rest_alongside(self, planner: str) -> None:
         log: list[str] = []
-        calls = [
-            ("read", '{"what": "r1"}'),
-            ("browse", '{"what": "b1"}'),
-            ("browse", '{"what": "b2"}'),
-            ("read", '{"what": "r2"}'),
-            ("read", '{"what": "r3"}'),
-        ]
+        calls = _calls(("read", "r1"), ("browse", "b1"), ("browse", "b2"), ("read", "r2"))
+        root = _working(planner, calls, [_slow(log, "read", None), _slow(log, "browse", "page")])
+
+        await _run(Runner(), root, f"c_key_{planner}")
+
+        # b2 waits for b1, and only for b1: the reads start with b1.
+        assert _before(log, "end b1", "start b2")
+        assert log[:3] == ["start r1", "start b1", "start r2"]
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_two_keys_do_not_wait_for_each_other(self, planner: str) -> None:
+        log: list[str] = []
+        calls = _calls(("browse", "b1"), ("query", "q1"), ("browse", "b2"), ("query", "q2"))
+        root = _working(planner, calls, [_slow(log, "browse", "page"), _slow(log, "query", "db")])
+
+        await _run(Runner(), root, f"c_keys_{planner}")
+
+        assert log[:2] == ["start b1", "start q1"]
+        assert _before(log, "end b1", "start b2") and _before(log, "end q1", "start q2")
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_a_sub_agent_in_the_same_response_is_not_waited_for(self, planner: str) -> None:
+        """The caller's page is not a sub-agent's: its browser call runs while the
+        sub-agent works, as before sub-agents had browsers of their own."""
+        log: list[str] = []
+        alpha = Agent(
+            name="Alpha",
+            description="works slowly",
+            instruction="do the task",
+            llm_provider=_Script(label="Alpha", log=log, delay=0.3, replies=["alpha done"]),
+            planner=_planner(planner),
+        )
         root = Agent(
             name="MainAgent",
             description="the agent",
-            instruction="work",
-            llm_provider=_Script(label="main", replies=[calls, "Done."]),
-            planner=_planner(planner),
-            tools=[_slow(log, "read", True), _slow(log, "browse", False)],
+            instruction="delegate and browse",
+            llm_provider=_Script(
+                label="main",
+                replies=[[("Alpha", '{"task": "a"}'), ("browse", '{"what": "snap"}')], "Done."],
+            ),
+            planner=_planner(planner, parallel_handoffs=True),
+            sub_agents=[alpha],
+            tools=[_slow(log, "browse", "page")],
         )
 
-        await _run(Runner(), root, f"c_order_{planner}")
+        await _run(Runner(), root, f"c_alongside_{planner}")
 
-        assert log[:6] == [
-            "start r1",
-            "end r1",
-            "start b1",
-            "end b1",
-            "start b2",
-            "end b2",
-        ]
-        # What comes after them still runs together.
-        assert log[6:8] == ["start r2", "start r3"]
+        assert _before(log, "end snap", "end Alpha"), log
 
     @pytest.mark.parametrize("planner", PLANNERS)
     @pytest.mark.asyncio
-    async def test_they_are_not_asked_about(self, planner: str) -> None:
+    async def test_a_call_waiting_its_turn_holds_no_place(self, planner: str) -> None:
+        """Two places: b1 and r1 take them while b2 waits for b1. A call in line
+        holding a place would leave r1 waiting for b1 instead."""
         log: list[str] = []
-        root = Agent(
-            name="MainAgent",
-            description="the agent",
-            instruction="work",
-            llm_provider=_Script(label="main", replies=[[("browse", '{"what": "b"}')], "Done."]),
-            planner=_planner(planner),
-            tools=[_slow(log, "browse", False)],
-        )
+        calls = _calls(("browse", "b1"), ("browse", "b2"), ("read", "r1"))
+        root = _working(planner, calls, [_slow(log, "read", None), _slow(log, "browse", "page")])
+
+        await _run(Runner(max_parallel_tool_calls=2), root, f"c_place_{planner}")
+
+        assert _before(log, "start r1", "end b1"), log
+        assert _before(log, "end b1", "start b2"), log
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_its_calls_are_not_asked_about(self, planner: str) -> None:
+        log: list[str] = []
+        root = _working(planner, _calls(("browse", "b")), [_slow(log, "browse", "page")])
 
         events = await _run(Runner(), root, f"c_unasked_{planner}")
 
         assert log == ["start b", "end b"]
-        assert not [e for e in events if e.event_type == ExecutionEventType.TOOL_FEEDBACK]
-        assert not any(e.needs_feedback for e in events if hasattr(e, "needs_feedback"))
+        assert not [e for e in events if e.event_type == ExecutionEventType.TOOL_NEEDS_FEEDBACK]
 
-    def test_the_browser_tools_are_not(self, tmp_path: Any) -> None:
+    def test_the_browser_tools_share_one(self, tmp_path: Any) -> None:
         from domyn.agents.tools.builtin import bundle
 
         built = bundle("browser", "files", root=tmp_path, backend="local")
-        unsafe = sorted(t.name for t in built if not t.parallel_safe)
-        assert unsafe == sorted(t.name for t in built if t.name.startswith("browser_"))
-        assert len(unsafe) == 8
+        keys = {t.name: t.concurrency_key for t in built}
+        assert {name for name, key in keys.items() if key == "browser"} == {
+            name for name in keys if name.startswith("browser_")
+        }
+        assert len([k for k in keys.values() if k == "browser"]) == 8
+        assert {k for name, k in keys.items() if not name.startswith("browser_")} == {None}
 
     def test_the_reserved_argument_is_in_no_schema(self, tmp_path: Any) -> None:
         from domyn.agents.tools.builtin import bundle
@@ -370,8 +420,3 @@ class TestToolsThatAreNotParallelSafe:
         for tool in bundle("browser", root=tmp_path, backend="local"):
             assert "agent_call_id" not in str(tool.declaration)
             assert "conversation_id" not in str(tool.declaration)
-
-
-def test_ask_is_a_user_input() -> None:
-    """`_ask` comes from the hand-off tests; this module relies on its shape."""
-    assert _ask().event_type == ExecutionEventType.USER_INPUT

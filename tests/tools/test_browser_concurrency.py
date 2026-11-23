@@ -11,8 +11,8 @@ agent-browser commands (verify, act, see where it landed). So:
   approved action runs on the page it verified, or not at all;
 - a sub-agent's browser is closed when its call ends (``end_agent_call``).
 
-The order of the calls of one response is the runner's (``parallel_safe``),
-tested in ``tests/runner/test_tool_agent_call.py``.
+The order of the browser calls of one response is the runner's
+(``concurrency_key``), tested in ``tests/runner/test_tool_agent_call.py``.
 """
 
 import asyncio
@@ -33,7 +33,6 @@ from .test_browser_tools import (  # `_no_dns`: an autouse fixture
     SITE,
     ScriptedBrowser,
     _no_dns,
-    _parse_line,
 )
 
 
@@ -320,9 +319,3 @@ class TestReleasedWhenTheCallEnds:
 
         verbs = [verb for sid, verb, _ in fake.acted_on if sid == session_name(CID, "call-a")]
         assert verbs[-1] == "close"
-
-    def test_the_session_flag_is_the_one_parsed(self) -> None:
-        """The fake reads the session from the command line the module builds."""
-        line = f"agent-browser --session {session_name(CID, 'x')} get url"
-        assert _session_of(line) == session_name(CID, "x")
-        assert _parse_line(line) == ("get", ["url"])

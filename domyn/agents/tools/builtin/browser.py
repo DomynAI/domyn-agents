@@ -375,9 +375,9 @@ def browser_tools(
                 approval_type=ApprovalType.USER_CONFIRM if subject else None,
                 approval_subject=subject,
                 approval_pattern=site_pattern if subject else None,
-                # One page per agent call: calls of one response run in the
-                # order they were made, not side by side on it.
-                parallel_safe=False,
+                # One page per agent call: the browser calls of one response
+                # run in the order they were made, not side by side on it.
+                concurrency_key="browser",
             )
         )
     return tools, sessions
