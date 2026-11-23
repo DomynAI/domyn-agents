@@ -73,9 +73,10 @@ When the session ends, it prints the conversation id and the command that resume
 
 ```bash
 domyn fulfill [TASK] --base-url URL --model NAME [OPTIONS]
+domyn fulfill [TASK] --config FILE [OPTIONS]
 ```
 
-Carries out one task with nobody to answer and no follow-up, then exits: every tool call is approved, the agent is told it works alone, and the session ends when its turn does. It reads no configuration from `~/.domyn` and needs no `domyn setup`. See [Unattended tasks](../cli/fulfill.md).
+Carries out one task with nobody to answer and no follow-up, then exits: every tool call is approved, the agent is told it works alone, and the session ends when its turn does. It reads no configuration from `~/.domyn` and needs no `domyn setup`: the configuration is built from the options below, or is the file `--config` names. See [Unattended tasks](../cli/fulfill.md).
 
 | Argument | Description |
 |---|---|
@@ -84,8 +85,9 @@ Carries out one task with nobody to answer and no follow-up, then exits: every t
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `--prompt-file` | path | | Reads the task from this file, or from standard input for `-`. Cannot be combined with `TASK`. |
-| `--base-url` | `str` | required | The OpenAI-compatible endpoint: `http://host:8000`, `…/v1` or `…/v1/chat/completions`. |
-| `--model`, `-m` | `str` | required | The model's name on the endpoint. |
+| `--config`, `-c` | path | | A configuration file to run as written instead of building one, copied into the state folder. The options from `--base-url` to `--workspace` below cannot be given with it. Its `${VAR}` references are also read from `~/.domyn/credentials`. |
+| `--base-url` | `str` | required without `--config` | The OpenAI-compatible endpoint: `http://host:8000`, `…/v1` or `…/v1/chat/completions`. |
+| `--model`, `-m` | `str` | required without `--config` | The model's name on the endpoint. |
 | `--api-key-env` | `str` | | The environment variable holding the endpoint's key. Without it no key is sent; a variable that is not set is an error. |
 | `--context-window` | `int` | asked of the endpoint | The model's context window in tokens. |
 | `--max-tokens` | `int` | the endpoint's | The longest reply to ask for. Compaction keeps that much room for it under the window. |

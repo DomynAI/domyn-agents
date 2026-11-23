@@ -235,6 +235,90 @@ class TestTheCommand:
         assert os.environ["FULFILL_TEST_KEY"] == "sk-test"
 
 
+def _config_file(tmp_path: Path, model: str = "from-file") -> Path:
+    path = tmp_path / "my-config.yaml"
+    path.write_text(
+        yaml.safe_dump(_config(model=model, api_key_env="FULFILL_TEST_KEY", instructions=None))
+    )
+    return path
+
+
+class TestAConfigFile:
+    def test_it_is_run_as_written(self, tmp_path: Path, started: dict[str, Any]) -> None:
+        path = _config_file(tmp_path)
+        state = tmp_path / "state"
+        result = _invoke("--config", str(path), "--state-dir", str(state), "do it", endpoint=False)
+
+        assert result.exit_code == 0, result.output
+        assert started["agent"].llm_provider.model_name == "from-file"
+        # Copied unchanged into the state folder, which the session uses as its project.
+        assert (state / "config.yaml").read_text() == path.read_text()
+        assert started["config_file"] == state.resolve() / "config.yaml"
+        assert started["home"] == state.resolve()
+        # Nothing is built or installed beside it.
+        assert not (state / "builtin-skills").exists()
+        # The session is still one unattended turn.
+        assert started["auto_approve"] is True
+        assert started["single_turn"] is True
+        assert started["steering"] is False
+
+    @pytest.mark.parametrize(
+        "option",
+        [
+            ["--model", "m"],
+            ["--base-url", ENDPOINT],
+            ["--no-skills"],
+            ["--workspace", "/tmp"],
+            # An option's default given explicitly is still an option given.
+            ["--reasoning-effort", "default"],
+        ],
+    )
+    def test_the_options_that_build_a_configuration_are_refused_with_it(
+        self, tmp_path: Path, started: dict[str, Any], option: list[str]
+    ) -> None:
+        path = _config_file(tmp_path)
+        result = _invoke(
+            "--config", str(path), *option, "--state-dir", str(tmp_path / "s"), "x", endpoint=False
+        )
+        assert result.exit_code == 2
+        assert option[0] in result.output
+        assert not started
+
+    def test_a_missing_file_is_refused(self, tmp_path: Path, started: dict[str, Any]) -> None:
+        result = _invoke(
+            "--config",
+            str(tmp_path / "nope.yaml"),
+            "--state-dir",
+            str(tmp_path / "s"),
+            "x",
+            endpoint=False,
+        )
+        assert result.exit_code == 2
+        assert not started
+
+    def test_the_setup_credentials_stay_for_the_variables_it_names(
+        self, tmp_path: Path, started: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SETUP_ONLY_KEY", "from-credentials")
+        monkeypatch.setattr(
+            cli_config, "_credentials_in_environment", {"SETUP_ONLY_KEY": "from-credentials"}
+        )
+        path = _config_file(tmp_path)
+        result = _invoke(
+            "--config", str(path), "--state-dir", str(tmp_path / "s"), "x", endpoint=False
+        )
+        assert result.exit_code == 0, result.output
+        assert os.environ["SETUP_ONLY_KEY"] == "from-credentials"
+
+    def test_without_it_the_endpoint_and_model_are_needed(
+        self, tmp_path: Path, started: dict[str, Any]
+    ) -> None:
+        result = _invoke("--model", "m", "--state-dir", str(tmp_path / "s"), "x", endpoint=False)
+        assert result.exit_code == 2
+        assert "--config" in result.output
+        assert not started
+
+
 class TestTheRepl:
     @pytest.mark.asyncio
     async def test_a_single_turn_session_reads_no_input(self) -> None:

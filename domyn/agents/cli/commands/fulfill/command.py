@@ -25,12 +25,22 @@ What differs from an interactive session, because nobody answers:
   do not ask. Given inline, so no file is needed; ``--instructions`` replaces them.
 * **No step cap** to speak of (``--max-iterations``, 1000 by default against the
   planner's 25), and no temperature unless one is given: the server's default.
+
+``--config <file>`` runs a configuration file instead (the format of
+``~/.domyn/config.yaml``), as written: it is copied unchanged into the state folder as
+its ``config.yaml``, the options that build the configuration (`BUILD_OPTIONS`) are
+refused with it, and the session still behaves as above, the standing instructions
+aside, which are the file's. ``${DOMYN_PROJECT_DIR}`` in it is the state folder. Its
+``${VAR}`` references are read from the environment, a ``.env`` and
+``~/.domyn/credentials``: the file names the variables it uses, so a key loaded for some
+other tool cannot reach it unasked.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import sys
 import tempfile
 from pathlib import Path
@@ -87,6 +97,22 @@ nobody to answer needs: without them a model tends to describe the steps and off
 carry them out, and the session ends on the offer."""
 
 DEFAULT_MAX_ITERATIONS = 1000
+BUILD_OPTIONS = {
+    "base_url": "--base-url",
+    "model": "--model",
+    "api_key_env": "--api-key-env",
+    "context_window": "--context-window",
+    "max_tokens": "--max-tokens",
+    "temperature": "--temperature",
+    "reasoning_effort": "--reasoning-effort",
+    "max_iterations": "--max-iterations",
+    "instructions": "--instructions",
+    "no_instructions": "--no-instructions",
+    "skills": "--skills/--no-skills",
+    "workspace": "--workspace",
+}
+"""The options that build the configuration, by parameter name: refused with ``--config``,
+whose file is run as written."""
 NO_REASONING_EFFORT = "default"
 """The ``--reasoning-effort`` that sends no ``reasoning_effort`` at all, and its default:
 the endpoint's own applies."""
@@ -216,7 +242,21 @@ def _read_instructions(instructions: Path | None, no_instructions: bool) -> str 
         raise _fail(f"Cannot read the instructions in {instructions}: {exc}") from exc
 
 
+def _given(ctx: typer.Context, names: dict[str, str]) -> list[str]:
+    """The options of ``names`` given on the command line, a default left alone excluded.
+
+    By the source's name: Typer ships its own copy of Click, whose ``ParameterSource`` is
+    not the ``click`` package's."""
+    given = []
+    for name, flag in names.items():
+        source = ctx.get_parameter_source(name)
+        if source is not None and source.name == "COMMANDLINE":
+            given.append(flag)
+    return given
+
+
 def fulfill_command(
+    ctx: typer.Context,
     prompt: str | None = typer.Argument(
         None, help="The task. Or --prompt-file, to keep it off the command line."
     ),
@@ -228,11 +268,23 @@ def fulfill_command(
             "command line, where `pkill -f <word>` run by the agent would match domyn itself."
         ),
     ),
-    model: str = typer.Option(..., "--model", "-m", help="The model's name on the endpoint"),
-    base_url: str = typer.Option(
-        ...,
+    config: Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help=(
+            "A configuration file to run as written (the format of ~/.domyn/config.yaml) "
+            "instead of the built-in one. The options that build that one cannot be given "
+            "with it."
+        ),
+    ),
+    model: str | None = typer.Option(
+        None, "--model", "-m", help="The model's name on the endpoint (needed without --config)"
+    ),
+    base_url: str | None = typer.Option(
+        None,
         "--base-url",
-        help="The OpenAI-compatible endpoint, e.g. http://host:8000/v1",
+        help="The OpenAI-compatible endpoint, e.g. http://host:8000/v1 (needed without --config)",
     ),
     api_key_env: str | None = typer.Option(
         None,
@@ -296,17 +348,32 @@ def fulfill_command(
     """Carry out one task on your own: no questions, no follow-up, then exit.
 
     Needs no `domyn setup` and ignores any: the endpoint is --base-url, the model --model
-    and the key the variable --api-key-env names. Every tool call is approved
-    automatically.
+    and the key the variable --api-key-env names, or --config names a configuration file
+    to run. Every tool call is approved automatically.
     """
     task = _read_task(prompt, prompt_file)
-    standing = _read_instructions(instructions, no_instructions)
-    if api_key_env is not None and not os.environ.get(api_key_env):
-        raise _fail(f"--api-key-env names {api_key_env}, which is not set.")
-
-    # Startup put ~/.domyn/credentials in the environment, before any option was read:
-    # a `domyn fulfill` session uses none of a setup's keys, only the environment's.
-    drop_credentials_from_environment()
+    given_config: str | None = None
+    standing: str | None = None
+    if config is not None:
+        if given := _given(ctx, BUILD_OPTIONS):
+            raise _fail(
+                f"{', '.join(given)} build the configuration, which --config gives: "
+                f"set it in {config} instead."
+            )
+        try:
+            given_config = config.expanduser().read_text("utf-8")
+        except OSError as exc:
+            raise _fail(f"Cannot read the configuration in {config}: {exc}") from exc
+    else:
+        if model is None or base_url is None:
+            raise _fail("Give --base-url and --model, or --config to run a configuration file.")
+        standing = _read_instructions(instructions, no_instructions)
+        if api_key_env is not None and not os.environ.get(api_key_env):
+            raise _fail(f"--api-key-env names {api_key_env}, which is not set.")
+        # Startup put ~/.domyn/credentials in the environment, before any option was
+        # read: the configuration built here names no variable but --api-key-env, so
+        # the environment's own is the only key it may use.
+        drop_credentials_from_environment()
 
     folder = (
         state_dir.expanduser().resolve()
@@ -314,25 +381,31 @@ def fulfill_command(
         else Path(tempfile.mkdtemp(prefix="domyn-fulfill-"))
     )
     folder.mkdir(parents=True, exist_ok=True)
-    skill_paths = (
-        install_skills([s.name for s in list_builtin_skills()], folder / SKILLS_DIRNAME)
-        if skills
-        else []
-    )
-    config = fulfill_config(
-        model=model,
-        url=base_url,
-        api_key_env=api_key_env,
-        context_window=context_window,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        reasoning_effort=None if reasoning_effort == NO_REASONING_EFFORT else reasoning_effort,
-        max_iterations=max_iterations,
-        instructions=standing,
-        skill_paths=skill_paths,
-        workspace=workspace,
-    )
-    (folder / CONFIG_FILENAME).write_text(yaml.safe_dump(config, sort_keys=False), "utf-8")
+    if given_config is not None:
+        # Copied as it is, so the folder is a project like any other (the resume command
+        # printed at the end opens it) and keeps the configuration the run used.
+        (folder / CONFIG_FILENAME).write_text(given_config, "utf-8")
+    else:
+        assert model is not None and base_url is not None
+        skill_paths = (
+            install_skills([s.name for s in list_builtin_skills()], folder / SKILLS_DIRNAME)
+            if skills
+            else []
+        )
+        built = fulfill_config(
+            model=model,
+            url=base_url,
+            api_key_env=api_key_env,
+            context_window=context_window,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=None if reasoning_effort == NO_REASONING_EFFORT else reasoning_effort,
+            max_iterations=max_iterations,
+            instructions=standing,
+            skill_paths=skill_paths,
+            workspace=workspace,
+        )
+        (folder / CONFIG_FILENAME).write_text(yaml.safe_dump(built, sort_keys=False), "utf-8")
     # The folder plays ~/.domyn from here on: approvals, state.yaml, conversations.db and
     # the tools' working files are all its own.
     use_project(str(folder))
@@ -353,7 +426,7 @@ def fulfill_command(
             show_status=False,
             config=raw,
             config_file=config_path(),
-            run_command=f"domyn run --project {folder}",
+            run_command=f"domyn run --project {shlex.quote(str(folder))}",
             auto_approve=True,
             single_turn=True,
             steering=False,
