@@ -910,36 +910,24 @@ class TestWhatIsShownWhileWaiting:
 
 
 class TestTheYieldIsHonoured:
-    @pytest.mark.asyncio
-    async def test_a_short_yield_is_not_rounded_up(self, backend: LocalBackend) -> None:
+    @pytest.mark.parametrize(
+        ("seconds", "fine_steps", "coarse_steps"),
+        [(0.5, 5, 0), (1, 10, 0), (2, 20, 0), (5, 20, 3), (0, 0, 0)],
+    )
+    def test_a_short_yield_is_not_rounded_up(
+        self, seconds: float, fine_steps: int, coarse_steps: int
+    ) -> None:
         """The wait is fine-grained at first and coarse afterwards, and the fine
         phase used to run to its own length regardless of what was asked — so a
         yield of one second waited two. Found by a `sleep 2` asked to yield after
-        1s: it ran to completion inside the wait and never produced a handle."""
-        loop = asyncio.get_running_loop()
-        # Compared with a wait as long as the whole fine phase, measured on this
-        # machine, not with a fixed bound: each step of the wait starts a `sleep`,
-        # and in Git Bash under emulation that alone took a 0.5s yield past 1s.
-        # The bug made the two waits equal; done right the long one is 1.5s longer.
-        # Each the quicker of two, since starting a command on a busy machine now
-        # and then takes seconds of its own.
-        fine = float(processes._FINE_S)
+        1s: it ran to completion inside the wait and never produced a handle.
 
-        async def wait_for(seconds: float) -> float:
-            took = []
-            for _ in range(2):
-                started = loop.time()
-                _, state = await _launch(backend, "sleep 30", yield_s=seconds)
-                assert state.running
-                took.append(loop.time() - started)
-            return min(took)
-
-        short = await wait_for(0.5)
-        whole = await wait_for(fine)
-        assert whole - short > (fine - 0.5) / 2, (
-            f"a 0.5s yield took {short:.2f}s, a {fine:.0f}s one {whole:.2f}s: "
-            "the short wait ran the whole fine phase"
-        )
+        Counted in the loop's steps, not timed: a step's `sleep 0.1` lasts what the
+        shell makes of it, 0.04s in Git Bash on a CI runner and well over 0.1s
+        under emulation, and every bound on the clock failed somewhere."""
+        loop = processes._wait_loop(seconds, "/tmp/marker")
+        assert [int(n) for n in re.findall(r"-lt (\d+) \]", loop)] == [fine_steps, coarse_steps]
+        assert f"sleep {processes._FINE_STEP}" in loop
 
 
 class TestWhenTheWaitingIsGone:

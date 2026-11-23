@@ -216,6 +216,20 @@ class TestTheLineArrivesAsWritten:
 
         assert (result.exit_code, result.stdout, result.stderr) == (3, "in\n", "err\n")
 
+    @pytest.mark.asyncio
+    async def test_a_timeout_ends_the_command_and_keeps_no_job(
+        self, backend: GitBashBackend
+    ) -> None:
+        """The whole way a timeout goes: the job (Windows), taskkill (Windows; a
+        missing one is passed over), the kill, the pipes read to their end."""
+        started = asyncio.get_running_loop().time()
+        result = await backend.run("exec sleep 30", timeout=0.5)
+        elapsed = asyncio.get_running_loop().time() - started
+
+        assert result.timed_out and result.exit_code is None
+        assert elapsed < 10, f"took {elapsed:.1f}s to end"
+        assert backend._jobs == {}
+
 
 def _windows_sleeps(seconds: int) -> list[str]:
     r"""The pids of Git Bash's ``sleep <seconds>``, whose command line reads

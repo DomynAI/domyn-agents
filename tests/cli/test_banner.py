@@ -183,6 +183,66 @@ class TestDetectingTheTerminal:
         theme_mod.enable_escape_sequences()
         assert asked == []
 
+    @staticmethod
+    def _console(monkeypatch: pytest.MonkeyPatch, *, mode: int | None, settable: bool = True):
+        """A Windows console stood in for, on any system: ``mode`` None is a stream
+        with no console behind it. Returns the modes the code asked to set."""
+        import ctypes
+
+        set_to: list[int] = []
+
+        class Kernel32:
+            def GetConsoleMode(self, handle, ref):  # noqa: N802 - the API's name
+                if mode is None:
+                    return 0
+                ref._obj.value = mode
+                return 1
+
+            def SetConsoleMode(self, handle, value):  # noqa: N802 - the API's name
+                set_to.append(value)
+                return 1 if settable else 0
+
+        kernel32 = Kernel32()
+        # Attributes the code sets (argtypes) need somewhere to go.
+        for name in ("GetConsoleMode", "SetConsoleMode"):
+            method = getattr(kernel32, name)
+            setattr(kernel32, name, lambda *a, _m=method: _m(*a))
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **k: kernel32, raising=False)
+        monkeypatch.setitem(
+            sys.modules, "msvcrt", types.SimpleNamespace(get_osfhandle=lambda fd: 7)
+        )
+        return set_to
+
+    def test_a_console_with_escapes_on_is_left_as_it_is(self, monkeypatch, tmp_path) -> None:
+        set_to = self._console(monkeypatch, mode=0x3 | 0x4)
+        with open(tmp_path / "out", "w", encoding="utf-8") as stream:
+            assert theme_mod._windows_vt(stream) is True
+        assert set_to == []
+
+    def test_a_console_without_them_is_asked_to_take_them(self, monkeypatch, tmp_path) -> None:
+        set_to = self._console(monkeypatch, mode=0x3)
+        with open(tmp_path / "out", "w", encoding="utf-8") as stream:
+            assert theme_mod._windows_vt(stream) is True
+        assert set_to == [0x3 | 0x4]
+
+    def test_a_console_that_refuses_has_none(self, monkeypatch, tmp_path) -> None:
+        """Before Windows 10, or the console window's legacy mode."""
+        self._console(monkeypatch, mode=0x3, settable=False)
+        with open(tmp_path / "out", "w", encoding="utf-8") as stream:
+            assert theme_mod._windows_vt(stream) is False
+
+    def test_no_console_goes_by_term(self, monkeypatch, tmp_path) -> None:
+        self._console(monkeypatch, mode=None)
+        with open(tmp_path / "out", "w", encoding="utf-8") as stream:
+            assert theme_mod._windows_vt(stream) is False
+            monkeypatch.setenv("TERM", "xterm-256color")
+            assert theme_mod._windows_vt(stream) is True
+
+    def test_a_stream_with_no_file_goes_by_term(self, monkeypatch) -> None:
+        self._console(monkeypatch, mode=0x7)
+        assert theme_mod._windows_vt(io.StringIO()) is False
+
     @pytest.mark.skipif(sys.platform != "win32", reason="asks the Windows console")
     def test_a_stream_that_is_no_console_goes_by_its_term(
         self, tmp_path, monkeypatch: pytest.MonkeyPatch
