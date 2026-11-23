@@ -33,6 +33,7 @@ from typing import IO, TYPE_CHECKING, Any, cast
 import yaml
 
 from domyn.agents.agents.agent import MAX_AGENT_NAME_LENGTH
+from domyn.agents.core.links import is_link
 from domyn.agents.instructions.discovery import AUTODISCOVERY_DIRS, find_instruction_files
 from domyn.agents.integrations.domyn_platform_sdk import (
     SDK_REQUIREMENT,
@@ -1228,7 +1229,7 @@ def _custom_dir_problem(path: Path, declared: list[str]) -> str | None:
     ``path`` is already absolute. A listed entry is compared by where it resolves to,
     so the same folder spelled another way is still caught.
     """
-    if path.is_symlink():
+    if is_link(path):
         return f"{path} is a link, and links are not followed"
     if not path.exists():
         return f"{path} does not exist"
@@ -1375,7 +1376,7 @@ def _choose_instructions(
         # is under the path the user named.
         path = Path(os.path.abspath(Path(raw).expanduser()))
         problem = None
-        if path.is_symlink():
+        if is_link(path):
             problem = f"{path} is a link, and links are not followed"
         elif path.is_file():
             found = [path]
@@ -1500,7 +1501,7 @@ def _choose_imported_instructions(
 def _discard_imported(path: Path, project: Path) -> None:
     """Delete an instruction file or folder the import copied, i.e. one inside the
     project; anything else is only unlisted."""
-    if not _inside(path, project) or path.is_symlink():
+    if not _inside(path, project) or is_link(path):
         return
     if path.is_dir():
         shutil.rmtree(path, ignore_errors=True)

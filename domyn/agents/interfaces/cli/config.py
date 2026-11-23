@@ -39,6 +39,7 @@ from domyn.agents.approvals import (
     ConversationApprovalStore,
     FileApprovalStore,
 )
+from domyn.agents.core.links import is_link_stat
 from domyn.agents.instructions.discovery import AUTODISCOVERY_DIRS
 from domyn.agents.interfaces.cli.theme import Theme
 from domyn.agents.llm import BaseLLMProvider
@@ -668,11 +669,11 @@ def read_credentials(path: Path | None = None) -> dict[str, str]:
     would put another file's secrets in the environment."""
     path = path or credentials_path()
     try:
-        mode = path.lstat().st_mode
+        status = path.lstat()
     except OSError:
         return {}
-    if not stat.S_ISREG(mode):
-        kind = "a link" if stat.S_ISLNK(mode) else "not a regular file"
+    if not stat.S_ISREG(status.st_mode):
+        kind = "a link" if is_link_stat(status) else "not a regular file"
         _warn_once(f"{path} was not read: it is {kind}. Keep the keys in the file itself.")
         return {}
     values: dict[str, str] = {}

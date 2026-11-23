@@ -56,6 +56,12 @@ TABLE_FORMAT_VERSION = 1
 COLUMN_TYPES = ("number", "integer", "boolean", "date", "string")
 
 
+def _is_link(path: Path) -> bool:
+    """A symbolic link, or a Windows junction, which Python reports as a plain folder
+    but which leads elsewhere just the same (and needs no privilege to make)."""
+    return path.is_symlink() or getattr(path, "is_junction", lambda: False)()
+
+
 def output_dir(out: Path) -> Path:
     """Where a script writes, for `--out <run folder>`: `<run folder>/files`, created.
 
@@ -72,7 +78,7 @@ def output_dir(out: Path) -> Path:
     followed like any other.
     """
     named = out if out.name == FILES_DIR else out / FILES_DIR
-    if named.is_symlink():
+    if _is_link(named):
         sys.exit(
             f"{named} is a link, and the scripts write only into a folder of their own: "
             "use a new --out folder."
@@ -82,9 +88,9 @@ def output_dir(out: Path) -> Path:
     files.mkdir(parents=True, exist_ok=True)
     fonts = files / FONTS_DIR
     entries = list(files.iterdir())
-    if fonts.is_dir() and not fonts.is_symlink():
+    if fonts.is_dir() and not _is_link(fonts):
         entries += list(fonts.iterdir())
-    linked = [p for p in entries if p.is_symlink() or (p.is_file() and p.stat().st_nlink > 1)]
+    linked = [p for p in entries if _is_link(p) or (p.is_file() and p.stat().st_nlink > 1)]
     if linked:
         sys.exit(
             f"{files} holds links, which the scripts would write through to files elsewhere: "

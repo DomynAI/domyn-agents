@@ -49,6 +49,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from domyn.agents.core.links import is_link
 from domyn.agents.logger import get_logger
 
 # Name of the agent's state folder inside the workspace when no other is named,
@@ -92,7 +93,7 @@ def linked_below(start: Path, target: Path) -> Path | None:
     here = start
     for part in target.relative_to(start).parts:
         here = here / part
-        if here.is_symlink():
+        if is_link(here):
             return here
     return None
 

@@ -54,7 +54,7 @@ class TestFromTheEnvironment:
 
         backend = this_machine(Workspace.at(workspace))
 
-        assert backend.state_dir == str(tmp_path / "home")
+        assert backend.state_dir == (tmp_path / "home").as_posix()
         assert backend.sessions is not None
         assert backend.sessions.paths("c1").home == tmp_path / "home" / "conversations" / "c1"
 
@@ -65,7 +65,7 @@ class TestFromTheEnvironment:
 
         backend = this_machine(Workspace.at(workspace), state_dir=tmp_path / "mine")
 
-        assert backend.state_dir == str(tmp_path / "mine")
+        assert backend.state_dir == (tmp_path / "mine").as_posix()
 
     def test_it_is_read_when_the_backend_is_built(
         self, workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -75,7 +75,7 @@ class TestFromTheEnvironment:
         backend = this_machine(Workspace.at(workspace))
         monkeypatch.setenv("DOMYN_PROJECT_DIR", str(tmp_path / "second"))
 
-        assert backend.state_dir == str(tmp_path / "first")
+        assert backend.state_dir == (tmp_path / "first").as_posix()
 
     def test_an_empty_variable_is_none(
         self, workspace: Path, monkeypatch: pytest.MonkeyPatch
@@ -104,7 +104,8 @@ class TestWithAStateFolder:
         (handle,) = processes.registry(state)
 
         assert (state_dir / "processes" / "c1" / handle / "run.pid").is_file()
-        assert str(state_dir / "processes" / "c1" / handle / "out.log") in text
+        # As bash reads it: forward slashes on Windows too (the same as str elsewhere).
+        assert (state_dir / "processes" / "c1" / handle / "out.log").as_posix() in text
         assert not (workspace / ".domyn").exists()
         # The folder is the backend's, not the record's: nothing of it is stored.
         assert "home" not in state["background_processes"][handle]
@@ -175,7 +176,7 @@ class TestWithAStateFolder:
 
         _, sessions = browser_tools(backend=backend, options=BrowserOptions())
 
-        assert sessions.browser_dir == f"{tmp_path / 'home'}/browser"
+        assert sessions.browser_dir == f"{(tmp_path / 'home').as_posix()}/browser"
 
 
 class TestLinksAreNotFollowed:

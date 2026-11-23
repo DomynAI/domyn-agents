@@ -390,9 +390,10 @@ echo $$ > "$D/run.pid"
 # writer holds an offset and a shrunk file leaves a hole.
 #
 # The head is copied once and left alone. Only the tail is rewritten, and that
-# seam is the one race: whatever arrives between reading the tail and replacing
-# the file is lost, so a line can be cut in half. Bounded — it happens only
-# above the cap — and reported rather than hidden.
+# seam is the one race: whatever arrives between the last look at the size and
+# replacing the file is lost, so a line can be cut in half. Bounded — it happens
+# only above the cap, while the command is writing — and reported rather than
+# hidden.
 #
 # One pass at a time. The timer's pass can still be running when the command
 # ends and the wrapper starts its last one; two at once share `$f.part` and both
@@ -417,7 +418,22 @@ compact_once() {{
     s=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
     [ "${{s:-0}}" -gt {compact_at} ] || continue
     [ -s "$f.head" ] || head -c {head_bytes} "$f" > "$f.head"
-    if tail -c {tail_bytes} "$f" > "$f.part"; then
+    # The tail of the first $s bytes exactly, then whatever arrived while it was
+    # read, until the size holds still. Replaced with the tail alone, the file lost
+    # what the command wrote meanwhile; when it finished meanwhile that was its
+    # end, the part the tail is kept for, and the wrapper's last pass, waiting on
+    # the lock, found nothing left to save. Seen on Windows, where every process
+    # of the pass starts slowly: 5,000 last lines of 300,000 gone. Twenty rounds at
+    # most: a command that finished is still by the second, and one writing faster
+    # than this can read would otherwise be chased, the copy growing, until it ends.
+    if head -c "$s" "$f" | tail -c {tail_bytes} > "$f.part"; then
+      e=$s
+      for _ in $(seq 20); do
+        n=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
+        [ "${{n:-0}}" -gt "$e" ] || break
+        tail -c +$(( e + 1 )) "$f" | head -c $(( n - e )) >> "$f.part"
+        e=$n
+      done
       prev=$(cat "$f.cut" 2>/dev/null || echo 0)
       cat "$f.part" > "$f"
       rm -f "$f.part"

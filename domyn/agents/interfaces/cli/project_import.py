@@ -57,6 +57,7 @@ from typing import Any
 
 import yaml
 
+from domyn.agents.core.links import is_link
 from domyn.agents.interfaces.cli.config import (
     CONFIG_FILENAME,
     read_raw_config,
@@ -256,7 +257,7 @@ def skill_files_in(
 
 
 def _left_behind(path: Path, places: PrivatePlaces) -> bool:
-    return path.name.startswith(".") or path.is_symlink() or is_private(path, places)
+    return path.name.startswith(".") or is_link(path) or is_private(path, places)
 
 
 def _ignore(directory: str, names: list[str], *, places: PrivatePlaces) -> set[str]:

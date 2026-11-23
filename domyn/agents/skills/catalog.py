@@ -33,6 +33,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from domyn.agents.core.links import is_link
 from domyn.agents.skills.external_files import expand_files, resolve_external_files
 from domyn.agents.skills.parser import parse_skill_file
 
@@ -156,7 +157,7 @@ def install_skills(names: Iterable[str], dest: Path) -> list[Path]:
     plan = dict.fromkeys(pair for skill in chosen for pair in install_plan(skill))
 
     dest = dest.expanduser().absolute()
-    if dest.is_symlink():
+    if is_link(dest):
         raise SkillInstallError(
             f"{dest} is a symbolic link; it is not replaced, remove the link to let setup manage it"
         )
@@ -214,7 +215,7 @@ def add_skills(names: Iterable[str], dest: Path) -> list[Path]:
     plan = dict.fromkeys(pair for skill in chosen for pair in install_plan(skill))
 
     dest = dest.expanduser().absolute()
-    if dest.is_symlink():
+    if is_link(dest):
         raise SkillInstallError(
             f"{dest} is a symbolic link; skills are not added to it, remove the link to let "
             "setup manage it"
@@ -224,7 +225,7 @@ def add_skills(names: Iterable[str], dest: Path) -> list[Path]:
     try:
         for source, relative in plan:
             target = dest / relative
-            if target.exists() or target.is_symlink():
+            if target.exists() or is_link(target):
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
@@ -248,7 +249,7 @@ def unrecognized_entries(dest: Path) -> list[Path]:
     ``__pycache__`` is ignored, since running a skill's scripts creates it.
     """
     dest = dest.expanduser()
-    if not dest.is_dir() or dest.is_symlink():
+    if not dest.is_dir() or is_link(dest):
         return []
 
     known: set[Path] = set()
@@ -272,7 +273,7 @@ def unrecognized_entries(dest: Path) -> list[Path]:
             relative = child.relative_to(dest)
             if relative not in known:
                 unrecognized.append(relative)
-            elif child.is_dir() and not child.is_symlink():
+            elif child.is_dir() and not is_link(child):
                 walk(child)
 
     walk(dest)

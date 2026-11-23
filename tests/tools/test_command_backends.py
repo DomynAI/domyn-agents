@@ -217,6 +217,74 @@ class TestTheLineArrivesAsWritten:
         assert (result.exit_code, result.stdout, result.stderr) == (3, "in\n", "err\n")
 
 
+def _windows_sleeps(seconds: int) -> list[str]:
+    r"""The pids of Git Bash's ``sleep <seconds>``, whose command line reads
+    ``"C:\…\sleep.exe" <seconds>``: a unique duration is the marker."""
+    import subprocess
+
+    query = (
+        "Get-CimInstance Win32_Process -Filter \"Name='sleep.exe'\" | Where-Object "
+        f"{{ $_.CommandLine -like '* {seconds}' }} | ForEach-Object {{ $_.ProcessId }}"
+    )
+    out = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", query], capture_output=True, text=True
+    ).stdout
+    return out.split()
+
+
+def _end_windows_processes(pids: list[str]) -> None:
+    import subprocess
+
+    for pid in pids:
+        subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True, check=False)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows job objects")
+class TestATimeoutOnWindows:
+    """Git Bash starts a command bash forks for from a process outside bash's
+    tree, so ``taskkill /T`` missed it: ``sleep 40; true`` outlived its timeout,
+    held the pipes, and Python printed "Event loop is closed" on exit. The
+    command's job reaches it. Durations are unique, as the markers looked for."""
+
+    @pytest.mark.asyncio
+    async def test_a_forking_command_is_ended(self, workspace: Workspace) -> None:
+        backend = build_backend("git_bash", workspace)
+        started = asyncio.get_running_loop().time()
+        result = await backend.run("sleep 4711; true", timeout=1.0)
+        elapsed = asyncio.get_running_loop().time() - started
+
+        survivors = _windows_sleeps(4711)
+        _end_windows_processes(survivors)
+        assert result.timed_out
+        assert not survivors, f"still running after the timeout: {survivors}"
+        # Without the job the pipes stayed open until the reaping gave up (5s).
+        assert elapsed < 4, f"took {elapsed:.1f}s to end"
+
+    @pytest.mark.asyncio
+    async def test_what_a_finished_command_started_keeps_running(
+        self, workspace: Workspace
+    ) -> None:
+        """The job is ended on a timeout only: a server started with ``&`` by a
+        command that returned is meant to run on."""
+        backend = build_backend("git_bash", workspace)
+        result = await backend.run("sleep 4712 >/dev/null 2>&1 &", timeout=10)
+        await asyncio.sleep(0.5)
+
+        running = _windows_sleeps(4712)
+        _end_windows_processes(running)
+        assert result.exit_code == 0
+        assert running, "the background command was ended with the one that started it"
+
+    @pytest.mark.asyncio
+    async def test_no_job_is_kept_after_a_command(self, workspace: Workspace) -> None:
+        backend = build_backend("git_bash", workspace)
+        assert isinstance(backend, GitBashBackend)
+        await backend.run("true", timeout=10)
+        await backend.run("sleep 4713", timeout=0.5)
+        _end_windows_processes(_windows_sleeps(4713))
+        assert backend._jobs == {}
+
+
 class TestWithoutGitBash:
     """On Windows with no Git for Windows: the agent still works, and a
     command says what to install instead of failing obscurely."""

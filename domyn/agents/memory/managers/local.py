@@ -38,6 +38,7 @@ import hashlib
 import os
 import re
 import secrets
+import sys
 import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -94,6 +95,54 @@ def _parse(line: str, modified: datetime) -> Memory | None:
         agent_name=unquote(meta["by"]) if "by" in meta else None,
         user_id=unquote(meta["user"]) if "user" in meta else None,
     )
+
+
+def _open_for_appending(path: Path) -> int:
+    """A descriptor that reads ``path`` and appends to it, every write at its end.
+
+    On POSIX that is ``O_APPEND``, which the kernel honours atomically. On Windows the
+    C runtime only emulates it, a seek to the end and then a write, so two descriptors
+    on one file (two sessions sharing the global memory) wrote at the same place and
+    lost an entry: 38 of 40 measured. A handle opened with ``FILE_APPEND_DATA`` and
+    without ``FILE_WRITE_DATA`` is the kernel's own append, wherever its pointer is.
+    """
+    if sys.platform == "win32":
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create = kernel32.CreateFileW
+        create.restype = wintypes.HANDLE
+        create.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        generic_read, file_append_data = 0x80000000, 0x0004
+        # Read, write and delete: another session may append, or replace the file
+        # when it forgets an entry, while this one has it open.
+        share_all = 0x1 | 0x2 | 0x4
+        open_always, attribute_normal = 4, 0x80
+        handle = create(
+            str(path),
+            generic_read | file_append_data,
+            share_all,
+            None,
+            open_always,
+            attribute_normal,
+            None,
+        )
+        if handle in (None, wintypes.HANDLE(-1).value):
+            raise ctypes.WinError(ctypes.get_last_error())
+        # Binary: in text mode every newline written would arrive as CRLF.
+        return msvcrt.open_osfhandle(handle, os.O_BINARY)
+    else:
+        return os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
 
 
 def _format(memory: Memory) -> str:
@@ -234,17 +283,14 @@ class FilesystemMemoryManager(BaseMemoryManager):
         """
         path = Path(self.file_path).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
-        # O_BINARY on Windows, where a descriptor is otherwise in text mode and every
-        # "\n" written would arrive as "\r\n"; it does not exist, and is 0, elsewhere.
-        flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
-        fd = os.open(path, flags, 0o600)
+        fd = _open_for_appending(path)
         try:
             size = os.fstat(fd).st_size
             if size == 0:
                 lead = f"{_HEADING}\n\n"
             else:
                 # Seek and read, not os.pread, which Windows does not have. The write
-                # below still goes to the end: O_APPEND moves there before each one.
+                # below still goes to the end, whatever the seek: see _open_for_appending.
                 os.lseek(fd, size - 1, os.SEEK_SET)
                 lead = "" if os.read(fd, 1) == b"\n" else "\n"
             os.write(fd, f"{lead}{_format(memory)}\n".encode())

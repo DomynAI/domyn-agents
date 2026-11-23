@@ -615,7 +615,10 @@ class TestAskingForTheBackground:
         started = await tools["run_command"].execute(command="sleep 30", background=flag, state={})
         elapsed = time.monotonic() - began
 
-        assert elapsed < 10, "background must not wait the default timeout"
+        # Half the default timeout, which is what waiting for it would take: a fixed
+        # 10s was passed by Git Bash under emulation on a loaded machine (11.7s).
+        limit = shell.DEFAULT_TIMEOUT_S / 2
+        assert elapsed < limit, f"background must not wait the default timeout ({elapsed:.1f}s)"
         assert "still running" in str(started.data)
         handle = next(iter(processes.registry(started.state)))
         await tools["stop_command"].execute(handle=handle, state=started.state)
@@ -914,18 +917,29 @@ class TestTheYieldIsHonoured:
         yield of one second waited two. Found by a `sleep 2` asked to yield after
         1s: it ran to completion inside the wait and never produced a handle."""
         loop = asyncio.get_running_loop()
-        # What starting a command costs, measured, so only the wait is compared:
-        # in Git Bash every process is slow to start, and a fixed bound on the
-        # whole call measured that instead (1.8s for a 0.5s yield on Windows).
-        started = loop.time()
-        await _launch(backend, "sleep 30", yield_s=0)
-        overhead = loop.time() - started
+        # Compared with a wait as long as the whole fine phase, measured on this
+        # machine, not with a fixed bound: each step of the wait starts a `sleep`,
+        # and in Git Bash under emulation that alone took a 0.5s yield past 1s.
+        # The bug made the two waits equal; done right the long one is 1.5s longer.
+        # Each the quicker of two, since starting a command on a busy machine now
+        # and then takes seconds of its own.
+        fine = float(processes._FINE_S)
 
-        started = loop.time()
-        _, state = await _launch(backend, "sleep 30", yield_s=0.5)
-        assert state.running
-        waited = loop.time() - started - overhead
-        assert waited < 1.0, f"it waited {waited:.2f}s longer than starting costs, asked 0.5s"
+        async def wait_for(seconds: float) -> float:
+            took = []
+            for _ in range(2):
+                started = loop.time()
+                _, state = await _launch(backend, "sleep 30", yield_s=seconds)
+                assert state.running
+                took.append(loop.time() - started)
+            return min(took)
+
+        short = await wait_for(0.5)
+        whole = await wait_for(fine)
+        assert whole - short > (fine - 0.5) / 2, (
+            f"a 0.5s yield took {short:.2f}s, a {fine:.0f}s one {whole:.2f}s: "
+            "the short wait ran the whole fine phase"
+        )
 
 
 class TestWhenTheWaitingIsGone:

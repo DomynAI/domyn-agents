@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import os
 import signal
+import sys
 from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -169,6 +171,8 @@ class LocalBackend(CommandBackend):
         except TimeoutError:
             await self._terminate(process)
             return CommandResult(exit_code=None, stdout="", stderr="", timed_out=True)
+        finally:
+            self._finished(process)
 
         return CommandResult(
             exit_code=process.returncode,
@@ -196,6 +200,9 @@ class LocalBackend(CommandBackend):
     async def _terminate(self, process: asyncio.subprocess.Process) -> None:
         """End a timed-out command and everything it started."""
         await _terminate_tree(process)
+
+    def _finished(self, process: asyncio.subprocess.Process) -> None:
+        """Release what ``_spawn`` kept for ``process``, however its run ended."""
 
 
 class GitBashBackend(LocalBackend):
@@ -230,6 +237,15 @@ class GitBashBackend(LocalBackend):
             state_dir=state_dir,
         )
         self._bash = bash
+        # The job each running command is in, by its pid: see _spawn.
+        self._jobs: dict[int, _Job] = {}
+
+    @property
+    def state_dir(self) -> str:
+        # With forward slashes (`C:/Users/me/.domyn`): every path built on it goes
+        # into a bash line or into a message the model copies into one, and in bash
+        # an unquoted backslash is an escape. Windows and Python read it as well.
+        return Path(super().state_dir).as_posix()
 
     @property
     def bash(self) -> Path:
@@ -247,19 +263,32 @@ class GitBashBackend(LocalBackend):
         # own, with single quotes as quotes and globbing, so every line with a '
         # in it (all of shlex.quote's) arrived rewritten. Unset before it runs.
         env = {**(streams.get("env") or os.environ), "DOMYN_COMMAND": command}
-        return await asyncio.create_subprocess_exec(
+        process = await asyncio.create_subprocess_exec(
             str(self.bash),
             "-c",
             'c=$DOMYN_COMMAND; unset DOMYN_COMMAND; eval "$c"',
-            # Its own group, so a timeout can end the whole tree with taskkill
-            # /T; and no console window flashing up for every command.
+            # Its own group, and no console window flashing up for every command.
             creationflags=_WINDOWS_CREATION_FLAGS,
             **{**streams, "env": env},
         )
+        # In a job at once, before bash has had time to start anything: whatever it
+        # starts is in the job too, which is what a timeout ends (see _terminate).
+        if (job := _Job.around(process.pid)) is not None:
+            self._jobs[process.pid] = job
+        return process
 
     async def _terminate(self, process: asyncio.subprocess.Process) -> None:
-        """``taskkill /T``: Windows has no process group to signal, but ending a
-        process with /T takes every process it started, which is the same tree."""
+        """End the command's job, then ``taskkill /T`` for anything outside it.
+
+        The job is what reaches everything: ``taskkill /T`` follows the parent of
+        each process, and Git Bash starts a command that bash forks for (any line
+        with ``;``, ``&&`` or a loop, and all of them through ``eval``) from a
+        process outside bash's tree. That command outlived the timeout, holding
+        the pipes, and Python printed "Event loop is closed" on exit. The tree
+        kill stays for a command whose job could not be made."""
+        if (job := self._jobs.pop(process.pid, None)) is not None:
+            job.terminate()
+            job.close()
         with contextlib.suppress(OSError, TimeoutError):
             killer = await asyncio.create_subprocess_exec(
                 "taskkill",
@@ -280,6 +309,78 @@ class GitBashBackend(LocalBackend):
         # the event loop and Python printed "Event loop is closed" on exit.
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(process.communicate(), timeout=_REAP_TIMEOUT_S)
+
+    def _finished(self, process: asyncio.subprocess.Process) -> None:
+        # Closing the handle ends nothing: the job is not killed on close, so what a
+        # finished command left running on purpose (a server started with &) runs on.
+        if (job := self._jobs.pop(process.pid, None)) is not None:
+            job.close()
+
+
+class _Job:
+    """A Windows Job Object holding one command and every process it starts.
+
+    Not killed when its handle is closed: only ``terminate`` ends what is in it.
+    Everything here is Windows only; elsewhere ``around`` gives ``None``.
+    """
+
+    def __init__(self, handle: int) -> None:
+        self._handle: int | None = handle
+
+    @classmethod
+    def around(cls, pid: int) -> _Job | None:
+        """A new job with the process ``pid`` in it, or ``None`` when that fails
+        (then the caller falls back to ending the tree by its parents)."""
+        if sys.platform == "win32":
+            kernel32 = _kernel32()
+            job = kernel32.CreateJobObjectW(None, None)
+            if not job:
+                return None
+            process = kernel32.OpenProcess(_PROCESS_SET_QUOTA | _PROCESS_TERMINATE, False, pid)
+            assigned = bool(process) and bool(kernel32.AssignProcessToJobObject(job, process))
+            if process:
+                kernel32.CloseHandle(process)
+            if not assigned:
+                kernel32.CloseHandle(job)
+                return None
+            return cls(job)
+        else:
+            return None
+
+    def terminate(self) -> None:
+        """End every process in the job."""
+        if sys.platform == "win32" and self._handle is not None:
+            _kernel32().TerminateJobObject(self._handle, 1)
+
+    def close(self) -> None:
+        if sys.platform == "win32" and self._handle is not None:
+            _kernel32().CloseHandle(self._handle)
+        self._handle = None
+
+
+# Access rights AssignProcessToJobObject needs on the process.
+_PROCESS_TERMINATE = 0x0001
+_PROCESS_SET_QUOTA = 0x0100
+
+
+@functools.cache
+def _kernel32() -> Any:
+    """kernel32 with the job functions typed, so handles are not cut to 32 bits."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined,unused-ignore]
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.TerminateJobObject.restype = wintypes.BOOL
+    kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    return kernel32
 
 
 def this_machine(

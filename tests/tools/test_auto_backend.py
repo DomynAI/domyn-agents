@@ -242,7 +242,7 @@ class TestTheStateFolder:
             "domyn.agents.tools.builtin.backends.docker.DockerBackend.check", refuse
         )
         await auto.decide()
-        assert auto._on_this_machine and auto._local.state_dir == str(state)
+        assert auto._on_this_machine and auto._local.state_dir == state.as_posix()
 
     def test_without_any_it_is_dot_domyn(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -14,6 +14,8 @@ that is right from the skill file in one is right in the other.
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
+from domyn.agents.core.links import is_link
+
 # Never carried along when a folder is expanded: running a skill's scripts makes them.
 _SKIPPED = ("__pycache__",)
 
@@ -61,8 +63,13 @@ def expand_files(path: Path) -> list[Path]:
         child
         for child in path.rglob("*")
         if child.is_file()
-        and not child.is_symlink()
         # Judged on the part below the entry only: the folders above it are the user's.
+        # Every step of it, the file and each folder on the way: rglob enters a
+        # Windows junction, so a file below one is not a link itself.
+        and not any(
+            is_link(path.joinpath(*child.relative_to(path).parts[: i + 1]))
+            for i in range(len(child.relative_to(path).parts))
+        )
         and not any(
             part in _SKIPPED or part.endswith(".pyc") for part in child.relative_to(path).parts
         )

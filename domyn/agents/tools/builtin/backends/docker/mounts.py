@@ -19,6 +19,7 @@ keep a history of its own without seeing the real one.
 from collections.abc import Iterator
 from pathlib import Path
 
+from domyn.agents.core.links import is_link
 from domyn.agents.tools.builtin.backends.base import BackendUnavailableError
 from domyn.agents.tools.builtin.backends.docker.containers import container_home
 from domyn.agents.tools.builtin.backends.docker.state import StateFolder
@@ -171,8 +172,8 @@ def _masked_in(root: Path) -> Iterator[Path]:
 
 def _is_plain_dir(path: Path) -> bool:
     """A real folder: a bind mount follows a link, wherever it leads."""
-    return path.is_dir() and not path.is_symlink()
+    return path.is_dir() and not is_link(path)
 
 
 def _is_plain_file(path: Path) -> bool:
-    return path.is_file() and not path.is_symlink()
+    return path.is_file() and not is_link(path)

@@ -1,5 +1,7 @@
 """Tests for memory manager registry and deserialization."""
 
+from pathlib import Path
+
 import pytest
 
 from domyn.agents.memory.managers import BaseMemoryManager, FilesystemMemoryManager
@@ -26,7 +28,8 @@ class TestMemoryManagerRegistry:
         manager = manager_class.from_config(config)
 
         assert isinstance(manager, FilesystemMemoryManager)
-        assert manager.file_path == "/tmp/test.jsonl"
+        # In this system's spelling (`\tmp\test.jsonl` on Windows): see `_one_spelling`.
+        assert manager.file_path == str(Path("/tmp/test.jsonl"))
 
     def test_unknown_type_returns_none(self):
         """Test that registry returns None for unknown memory manager types."""
