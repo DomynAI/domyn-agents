@@ -104,6 +104,7 @@ An unknown `strategy` name falls back to `two_phase`, with a warning in the log.
 | `strategy` | `str` | `two_phase` | See [Strategies](#strategies). In Python, the `strategy` of the `Compactor`. |
 | `reserve_tokens` | `int` | the provider's `max_tokens`, else `16384` | Room kept free below the window, for the reply. |
 | `keep_recent_tokens` | `int` | `20000` | Size of the recent part of the conversation that is never compacted. |
+| `read_full_reasoning` | `bool` | `false` | With `two_phase`, the summary is written from the model's whole reasoning on the messages it replaces, instead of the short thought of each call. Fuller, and many more characters: each message is still cut at 2,000. Only reasoning sent back to the model is there to read (`send_reasoning` on the provider, see [Planner strategies](planner-strategies.md)). In Python, `ConversationSummarizer(read_full_reasoning=True)` as the `summarizer` of `TwoPhaseCompaction`. |
 
 `CompactionPolicy` has a few more, in Python only:
 

@@ -82,6 +82,7 @@ Every event is a `BaseEvent`. The fields an interface uses:
 | `author` | The agent the event belongs to. In a team, this is how events of different agents are told apart. |
 | `content` | A list of `Part`s. A part's `text` is meant for the user; its `thought` is the agent's reasoning. |
 | `action` | For tool and agent events, the call: `name`, `parameters`, `thought` (why the model made it), `call_id`, and on `tool_end` the `observation`, the result the model reads. |
+| `reasoning_content` | On the first `tool_start` or `agent_call` of a model reply, or on its final `response` when it calls nothing, the model's whole reasoning for that reply, when the model returned one; `None` otherwise. The `thought` of the action is the short version shown to the user. |
 | `is_partial` | `True` for a piece of a longer output that more pieces will follow. |
 | `error_code`, `error_message` | Set on errors. |
 | `metadata` | Extra data, depending on the type: token counts on `llm_start`, what the call cost on `llm_end` (`token_usage`), the approval subject on `tool_needs_feedback`. |

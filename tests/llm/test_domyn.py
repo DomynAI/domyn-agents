@@ -152,6 +152,20 @@ class TestGenerate:
         }
 
     @pytest.mark.asyncio
+    async def test_an_assistant_messages_reasoning_is_sent_back(self, seam: Recorder) -> None:
+        seam.completion = {"choices": [{"message": {"content": "x"}}]}
+        messages = [
+            *USER,
+            LLMMessage(role="assistant", content="sunny", reasoning_content="I checked"),
+            LLMMessage(role="user", content="sure?"),
+        ]
+
+        await _provider().generate(messages)
+
+        assert seam.payload["messages"][1]["reasoning_content"] == "I checked"
+        assert "reasoning_content" not in seam.payload["messages"][0]
+
+    @pytest.mark.asyncio
     async def test_the_response_is_parsed(self, seam: Recorder) -> None:
         seam.completion = {
             "choices": [

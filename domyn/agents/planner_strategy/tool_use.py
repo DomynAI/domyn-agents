@@ -793,6 +793,9 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             response = None
                             last_chunk = None
                             streamed_thought = False
+                            # The whole reasoning, from the chunk that carries it: the
+                            # closing chunk of an answer without calls has none.
+                            streamed_reasoning: str | None = None
                             # Stream content as it arrives. If tool_calls follow in
                             # the same turn, this content is a user-visible preamble,
                             # not internal thought; do not copy it onto the tool event.
@@ -800,6 +803,8 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                                 messages=messages, tools=tool_defs if tool_defs else None
                             ):
                                 last_chunk = chunk
+                                if chunk.reasoning_content:
+                                    streamed_reasoning = chunk.reasoning_content
                                 # A model with native thinking emits its reasoning
                                 # before the answer, and the provider surfaces it in
                                 # a chunk of its own the moment it is complete.
@@ -846,7 +851,12 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                                     content="", generated_tokens=0, execution_time=0.0
                                 )
                                 response = base.model_copy(
-                                    update={"content": accumulated, "tool_calls": []}
+                                    update={
+                                        "content": accumulated,
+                                        "tool_calls": [],
+                                        "reasoning_content": base.reasoning_content
+                                        or streamed_reasoning,
+                                    }
                                 )
                             else:
                                 response = response.model_copy(
@@ -1013,6 +1023,12 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
 
             response_text = (getattr(response, "content", "") or "").strip()
             has_tool_calls = bool(getattr(response, "tool_calls", []))
+            # The model's whole reasoning for the response, when it returned one,
+            # stored on the event the response produces (its first call, or its
+            # answer) for the context manager to send back in every turn to a
+            # provider that takes it (decided there, so a turn resumed on another
+            # provider gets what it would have).
+            reasoning = (getattr(response, "reasoning_content", None) or "").strip() or None
 
             # ── Content only (no tool calls) → terminal ───────────────────────
             if response_text and not has_tool_calls:
@@ -1034,6 +1050,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                         content=extract_parts(response_text),
                         author=agent.name,
                         is_partial=False,
+                        reasoning_content=reasoning,
                     )
                 return
 
@@ -1062,8 +1079,15 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 batches = self.batches(
                     agent, getattr(response, "tool_calls", None) or [], interaction_context
                 )
+                # The reasoning on the first call only: the context manager rebuilds
+                # one assistant message from the calls of a response. The short
+                # `thought` each action carries is what the user is shown.
                 for position, tool_call in enumerate(response.tool_calls):
                     args = parsed_tool_args.get(tool_call.id, {})
+                    metadata: dict[str, Any] = {}
+                    if tool_call.id in batches:
+                        metadata[METADATA_TOOL_BATCH] = batches[tool_call.id]
+                    reasoning_content = reasoning if position == 0 else None
                     # The reasoning behind this call, carried by the action it
                     # produced (``carries_thought``). Extraction tolerates malformed
                     # arguments: keeping the call's id intact through TOOL_START keeps
@@ -1084,11 +1108,8 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             event_type=ExecutionEventType.TOOL_START,
                             author=agent.name,
                             action=action,
-                            metadata=(
-                                {METADATA_TOOL_BATCH: batches[tool_call.id]}
-                                if tool_call.id in batches
-                                else {}
-                            ),
+                            metadata=metadata,
+                            reasoning_content=reasoning_content,
                         )
                     elif tool_name in [
                         a.name for a in interaction_context.handoff_targets_description
@@ -1104,11 +1125,8 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             event_type=ExecutionEventType.AGENT_CALL,
                             author=agent.name,
                             action=agent_action,
-                            metadata=(
-                                {METADATA_TOOL_BATCH: batches[tool_call.id]}
-                                if tool_call.id in batches
-                                else {}
-                            ),
+                            metadata=metadata,
+                            reasoning_content=reasoning_content,
                         )
                         if tool_call.id not in batches:
                             return
@@ -1254,13 +1272,16 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                                 event_type=ExecutionEventType.TOOL_START,
                                 author=agent.name,
                                 action=action,
-                                metadata={METADATA_TOOL_BATCH: batches[tool_call.id]},
+                                metadata=metadata,
+                                reasoning_content=reasoning_content,
                             )
                             continue
                         yield BaseEvent(
                             event_type=ExecutionEventType.TOOL_START,
                             author=agent.name,
                             action=action,
+                            metadata=metadata,
+                            reasoning_content=reasoning_content,
                         )
                         yield BaseEvent(
                             event_type=ExecutionEventType.TOOL_ERROR,
@@ -1289,6 +1310,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                         content=extract_parts(response.content or ""),
                         author=agent.name,
                         is_partial=False,
+                        reasoning_content=reasoning,
                     )
                 return
 

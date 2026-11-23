@@ -53,6 +53,15 @@ class LLMMessage(BaseModel):
         default=None, description="ID of the tool call this message is a result for"
     )
     name: str | None = Field(default=None, description="Tool name for tool result messages")
+    reasoning_content: str | None = Field(
+        default=None,
+        description=(
+            "The model's own reasoning behind an assistant message, sent back to it "
+            "with the message. Serialized only when asked, under the key the provider's "
+            "API takes it in (`to_dict(reasoning_key=...)`, "
+            "`BaseLLMProvider.reasoning_content_key`)."
+        ),
+    )
 
     source_event_id: str | None = Field(
         default=None,
@@ -90,11 +99,17 @@ class LLMMessage(BaseModel):
         ),
     )
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert message to a dictionary format suitable for LLM input."""
+    def to_dict(self, *, reasoning_key: str | None = None) -> dict[str, Any]:
+        """Convert message to a dictionary format suitable for LLM input.
+
+        ``reasoning_key`` adds the message's reasoning, when it has one, under that
+        key: the one the API takes it in. ``None`` leaves it out, as an API that
+        does not accept it may reject it."""
         result: dict[str, Any] = {"role": self.role}
         if self.content is not None:
             result["content"] = self.content
+        if reasoning_key and self.reasoning_content:
+            result[reasoning_key] = self.reasoning_content
         if self.tool_calls:
             result["tool_calls"] = [call.model_dump() for call in self.tool_calls]
         if self.tool_call_id is not None:
@@ -457,6 +472,30 @@ class BaseLLMProvider(BaseModel, ABC):
     """The request keys that carry the reply's ceiling (``max_reply_tokens``): the
     chat-completions spellings, ``max_completion_tokens`` being OpenAI's newer one. A
     provider whose API names it otherwise declares its own."""
+
+    reasoning_content_key: ClassVar[str | None] = None
+    """The key under which this provider's API takes the model's reasoning back on
+    an assistant message, or ``None`` when it does not take it. With a key, and
+    ``send_reasoning`` on, the context manager puts the model's whole reasoning on
+    the assistant messages of every turn, and the provider sends it
+    under that key (`LLMMessage.to_dict(reasoning_key=...)`); otherwise those
+    messages carry the short thoughts as their content."""
+
+    send_reasoning: bool = Field(
+        default=True,
+        description=(
+            "Send the model's reasoning back to it with its assistant messages, on a "
+            "provider whose API takes it (`reasoning_content_key`). Off for a model "
+            "that ignores it (a vLLM chat template that does not read "
+            "`reasoning_content`), which then gets the short thoughts instead."
+        ),
+    )
+
+    @property
+    def reasoning_key_in_use(self) -> str | None:
+        """The key the reasoning is sent back under, or ``None`` when it is not
+        sent: the API does not take it, or ``send_reasoning`` is off."""
+        return self.reasoning_content_key if self.send_reasoning else None
 
     context_window_catalog: ClassVar[str | None] = None
     """The models.dev provider whose catalogue knows this provider's windows by model

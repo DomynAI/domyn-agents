@@ -113,6 +113,8 @@ class HeuristicEstimator(BaseModel):
         total = self.per_message_overhead
         total += self.estimate_text(message.name or "")
         total += self._estimate_content(message.content)
+        # Set only where the provider sends it (the context manager decides).
+        total += self.estimate_text(message.reasoning_content or "")
 
         for call in message.tool_calls or []:
             total += self.per_tool_call_overhead

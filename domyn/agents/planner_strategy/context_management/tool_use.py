@@ -138,6 +138,14 @@ class ToolUseContextManager(ContextManager):
         # an assistant message, which some models answer with nothing.
         texts = ShownTexts()
 
+        # The model's whole reasoning goes back with its assistant messages, every
+        # turn's, to a provider that sends it (DeepSeek's API rejects a request
+        # with tools that leaves it out). A message without stored reasoning, or
+        # for a provider that sends none, carries the short thoughts instead.
+        sends_reasoning = bool(
+            getattr(getattr(agent, "llm_provider", None), "reasoning_key_in_use", None)
+        )
+
         for event in event_to_parse:
             boundaries.append((event.event_id, len(messages)))
 
@@ -174,17 +182,23 @@ class ToolUseContextManager(ContextManager):
                             and messages[-1].tool_calls
                         ):
                             messages[-1].tool_calls.append(tool_call)
-                            # Merge thought if present
-                            if thought:
+                            # The whole reasoning, when the message has it, covers
+                            # every call of the response: their thoughts add nothing.
+                            if thought and not messages[-1].reasoning_content:
                                 existing = messages[-1].content or ""
                                 messages[-1].content = (
                                     f"{existing}\n{thought}".strip() if existing else thought
                                 )
                         else:
+                            reasoning = event.reasoning_content if sends_reasoning else None
                             messages.append(
                                 LLMMessage(
                                     role=self.assistant_role,
                                     tool_calls=[tool_call],
+                                    reasoning_content=reasoning,
+                                    # Without it, the short thought of every call,
+                                    # the first included.
+                                    content=None if reasoning else (thought or None),
                                 )
                             )
 
@@ -295,7 +309,15 @@ class ToolUseContextManager(ContextManager):
                             )
                         )
                     elif text:
-                        messages.append(LLMMessage(role=self.assistant_role, content=text))
+                        messages.append(
+                            LLMMessage(
+                                role=self.assistant_role,
+                                content=text,
+                                reasoning_content=(
+                                    event.reasoning_content if sends_reasoning else None
+                                ),
+                            )
+                        )
 
                 case ExecutionEventType.AGENT_END:
                     # AGENT_END is inbound feedback from a sub-agent to its
@@ -411,7 +433,13 @@ class ToolUseContextManager(ContextManager):
                         messages[-1].tool_calls.append(tool_call)
                     else:
                         messages.append(
-                            LLMMessage(role=self.assistant_role, tool_calls=[tool_call])
+                            LLMMessage(
+                                role=self.assistant_role,
+                                tool_calls=[tool_call],
+                                reasoning_content=(
+                                    event.reasoning_content if sends_reasoning else None
+                                ),
+                            )
                         )
 
                 case ExecutionEventType.AGENT_START:
