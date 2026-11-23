@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote, unquote
 
-from pydantic import Field, PrivateAttr
+from pydantic import Field, PrivateAttr, field_validator
 
 from domyn.agents.core import BaseAgent
 from domyn.agents.memory.managers.base import BaseMemoryManager, Memory
@@ -119,6 +119,20 @@ class FilesystemMemoryManager(BaseMemoryManager):
         ),
     )
     _lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
+
+    @field_validator("file_path")
+    @classmethod
+    def _one_spelling(cls, value: str) -> str:
+        r"""The path in this system's spelling. A configuration names a project's memory
+        as ``${DOMYN_PROJECT_DIR}/memory.md``, filled in as text, so on Windows it
+        arrived as ``C:\p/memory.md``: a file that opens, but whose name compares
+        equal to no path built from the folder."""
+        return str(Path(value))
+
+    @field_validator("read_only_sources")
+    @classmethod
+    def _one_spelling_each(cls, value: list[str]) -> list[str]:
+        return [str(Path(entry)) for entry in value]
 
     def _read_only_paths(self) -> list[Path]:
         """The files of ``read_only_sources``, each once, ``file_path`` itself left out."""
@@ -220,13 +234,19 @@ class FilesystemMemoryManager(BaseMemoryManager):
         """
         path = Path(self.file_path).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+        # O_BINARY on Windows, where a descriptor is otherwise in text mode and every
+        # "\n" written would arrive as "\r\n"; it does not exist, and is 0, elsewhere.
+        flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
+        fd = os.open(path, flags, 0o600)
         try:
             size = os.fstat(fd).st_size
             if size == 0:
                 lead = f"{_HEADING}\n\n"
             else:
-                lead = "" if os.pread(fd, 1, size - 1) == b"\n" else "\n"
+                # Seek and read, not os.pread, which Windows does not have. The write
+                # below still goes to the end: O_APPEND moves there before each one.
+                os.lseek(fd, size - 1, os.SEEK_SET)
+                lead = "" if os.read(fd, 1) == b"\n" else "\n"
             os.write(fd, f"{lead}{_format(memory)}\n".encode())
         finally:
             os.close(fd)
