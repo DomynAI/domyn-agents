@@ -40,7 +40,7 @@ In PowerShell:
 irm https://github.com/domynai/domyn-agents/releases/latest/download/install.ps1 | iex
 ```
 
-The build is for 64-bit Windows; on Windows on ARM the installer installs it too, and it runs under Windows' x64 emulation. It works the same way as `install.sh`: it checks the checksum, puts the runtime in `%LOCALAPPDATA%\Programs\domyn` and `domyn.exe` in `%USERPROFILE%\.local\bin`, and adds that folder to your user `PATH`. The window you ran it in can use `domyn` straight away; other terminals see it once they are opened again. It takes the same variables, set in PowerShell before running it: `$env:DOMYN_VERSION = "1.5.0"`.
+Builds exist for 64-bit Windows on x64 and on ARM64; the installer picks the one for your machine, and on Windows on ARM falls back to the x64 one, which runs under Windows' emulation, for a release that has no ARM64 build. It works the same way as `install.sh`: it checks the checksum, puts the runtime in `%LOCALAPPDATA%\Programs\domyn` and `domyn.exe` in `%USERPROFILE%\.local\bin`, and adds that folder to your user `PATH`. The window you ran it in can use `domyn` straight away; other terminals see it once they are opened again. It takes the same variables, set in PowerShell before running it: `$env:DOMYN_VERSION = "1.5.0"`.
 
 domyn runs commands in Git Bash, never in `cmd.exe`, so it needs [Git for Windows](https://git-scm.com/download/win) (`winget install Git.Git`). The installer says when it is missing; without it domyn starts, and each command the agent runs says what to install.
 

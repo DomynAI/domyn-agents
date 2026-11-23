@@ -1,4 +1,5 @@
-# domyn installer for Windows (x64, and ARM64 through its x64 emulation).
+# domyn installer for Windows, x64 and ARM64 (the x64 build, emulated, where a
+# release has no ARM64 one).
 #
 #   irm https://github.com/domynai/domyn-agents/releases/latest/download/install.ps1 | iex
 #   & .\install.ps1 <dir>      install from a local build directory instead
@@ -104,31 +105,33 @@ function Install-Domyn {
         Stop-Install "$homeDir exists and is not a domyn runtime; refusing to replace it (set DOMYN_HOME elsewhere)"
     }
 
-    # x64 everywhere: Windows on ARM runs it emulated, and some of domyn's
-    # dependencies publish no ARM64 build for Windows.
-    $arch = $env:PROCESSOR_ARCHITEW6432
-    if (-not $arch) { $arch = $env:PROCESSOR_ARCHITECTURE }
+    # The machine's processor, as the system records it: a shell running emulated
+    # (an x64 PowerShell on Windows on ARM) is told AMD64 in its own environment.
+    $arch = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -ErrorAction SilentlyContinue).PROCESSOR_ARCHITECTURE
+    if (-not $arch) { $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE } }
+    # Windows on ARM takes its own build, and the x64 one, which runs emulated, from a
+    # release or a folder that has no ARM64 build.
     switch ($arch) {
-        'AMD64' { }
-        'ARM64' { Write-Info 'Windows on ARM: installing the x64 build, which runs emulated' }
+        'AMD64' { $targets = @('x86_64-pc-windows-msvc') }
+        'ARM64' { $targets = @('aarch64-pc-windows-msvc', 'x86_64-pc-windows-msvc') }
         default { Stop-Install "unsupported processor: $arch (domyn needs 64-bit Windows)" }
     }
-    $target = 'x86_64-pc-windows-msvc'
-    $archive = "domyn-$target.tar.gz"
     if ($base) { $from = $base.TrimEnd('/') }
     elseif ($version) { $from = "$($releases.TrimEnd('/'))/download/v$version" }
     else { $from = "$($releases.TrimEnd('/'))/latest/download" }
-    $url = "$from/$archive"
 
     $work = Join-Path ([System.IO.Path]::GetTempPath()) ("domyn-install-" + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $work | Out-Null
     $swapped = $false
     try {
-        $archivePath = Join-Path $work $archive
-        $sumPath = "$archivePath.sha256"
         if ($LocalDir) {
+            $target = $targets | Where-Object { Test-Path -LiteralPath (Join-Path $LocalDir "domyn-$_.tar.gz") } | Select-Object -First 1
+            if (-not $target) { Stop-Install "not found: $(Join-Path $LocalDir "domyn-$($targets[0]).tar.gz") (built for a different platform?)" }
+            $archive = "domyn-$target.tar.gz"
+            $archivePath = Join-Path $work $archive
+            $sumPath = "$archivePath.sha256"
             $local = Join-Path $LocalDir $archive
-            if (-not (Test-Path -LiteralPath $local)) { Stop-Install "not found: $local (built for a different platform?)" }
+            if ($target -ne $targets[0]) { Write-Warn "no ARM64 build in ${LocalDir}: installing the x64 one, which runs emulated" }
             Write-Info "copying domyn for $target"
             Copy-Item -LiteralPath $local -Destination $archivePath
             if (Test-Path -LiteralPath "$local.sha256") { Copy-Item -LiteralPath "$local.sha256" -Destination $sumPath }
@@ -136,13 +139,26 @@ function Install-Domyn {
             # TLS 1.2 is not on by default in Windows PowerShell 5.1 on older systems.
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
             $label = if ($version) { " $version" } else { '' }
-            Write-Info "downloading domyn$label for $target from $from"
-            try {
-                Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $archivePath
-            } catch {
+            $target = $null
+            foreach ($candidate in $targets) {
+                $archive = "domyn-$candidate.tar.gz"
+                $archivePath = Join-Path $work $archive
+                $url = "$from/$archive"
+                Write-Info "downloading domyn$label for $candidate from $from"
+                try {
+                    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $archivePath
+                    $target = $candidate
+                    break
+                } catch {
+                    # Releases made before Windows on ARM had a build of its own.
+                    if ($candidate -ne $targets[-1]) { Write-Warn "no ARM64 build there: installing the x64 one, which runs emulated" }
+                }
+            }
+            if (-not $target) {
                 $hint = if ($version) { " (is there a release v$version?)" } else { '' }
                 Stop-Install "download failed: $url$hint"
             }
+            $sumPath = "$archivePath.sha256"
             try {
                 Invoke-WebRequest -UseBasicParsing -Uri "$url.sha256" -OutFile $sumPath
             } catch {

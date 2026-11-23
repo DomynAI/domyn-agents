@@ -63,7 +63,8 @@ jobs:
   # supported version, the one in .python-version included. A required check,
   # with the coverage of the change checked here too, on the Linux and the
   # Windows runs together: code that runs only on Windows is covered there, and
-  # it waits for those jobs to have that report. Run whatever they end in.
+  # it waits for the Intel Windows job, which writes that report (ARM's runs
+  # beside it, without one). Run whatever that job ends in.
   test:
     needs: [changes, test-windows]
     if: >-
@@ -183,54 +184,64 @@ jobs:
     needs: changes
     if: >-
       always() && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true')
-    name: test-windows (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: test-windows (windows-latest)
+    runs-on: windows-latest
     timeout-minutes: 20
     permissions:
       contents: read
+    env:
+      # Intel's run writes the coverage the test job checks, in pull requests.
+      COVERAGE_REPORT: ${{ github.event_name == 'pull_request' }}
 
-    # An x64 Python on both: on ARM it runs emulated, which is what a Windows
-    # on ARM user runs, since cryptography, pdf-inspector and firecrawl-anydoc
-    # publish no win_arm64 wheel (built from source, cryptography needs OpenSSL).
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, windows-11-arm]
-
-    steps:
+    # The same steps on ARM below (a YAML anchor): two jobs rather than a matrix,
+    # so the test job can wait for this one alone, which has the coverage, while
+    # ARM, slower under emulation, runs beside it. Its check is still required.
+    steps: &windows-steps
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Set up Python
-        id: python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version-file: .python-version
-          architecture: x64
 
       - name: Install uv
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           enable-cache: true
 
-      # Left to itself uv picks a native ARM64 Python on the ARM runner.
-      - name: Use that Python
+      # An x64 Python on both: on ARM it runs emulated, which is what a Windows
+      # on ARM user runs, since cryptography, pdf-inspector and firecrawl-anydoc
+      # publish no win_arm64 wheel (built from source, cryptography needs OpenSSL).
+      # uv's own build of the version in .python-version, which uv sync downloads in
+      # seconds: setup-python spent two minutes installing it on the ARM runner.
+      # Left to itself uv would pick a native ARM64 one there.
+      - name: Use an x64 Python
         shell: bash
-        run: echo "UV_PYTHON=${{ steps.python.outputs.python-path }}" >> "$GITHUB_ENV"
+        run: |
+          version="$(tr -d '\r\n ' < .python-version)"
+          echo "UV_PYTHON=cpython-${version}-windows-x86_64-none" >> "$GITHUB_ENV"
 
       - name: Install dependencies
         shell: bash
         run: uv sync --all-extras
 
+      # A test that hangs is ended after two minutes and named, with its stack,
+      # rather than holding the job until its timeout with nothing to show:
+      # waiting on a process that never exits is how a POSIX assumption fails
+      # here. -rfE lists every failure and error at the end, by name.
+      # UTF-8 on the standard streams only: on the runner's cp1252 console, the
+      # first failure whose text has a character outside it (the banner art)
+      # ended pytest silently in the middle of its summary. Not PYTHONUTF8,
+      # which would also make every file read without an encoding read UTF-8
+      # and hide the very bugs this job is here to find.
+      # Coverage measured through sys.monitoring (COVERAGE_CORE=sysmon, Python
+      # 3.12+), which costs a fifth of the default tracer: on the tests that time
+      # themselves, +12% against +57% (Windows on ARM, x64 emulated).
       - name: Run tests
         shell: bash
         env:
           PYTHONIOENCODING: utf-8
           COVERAGE_CORE: sysmon
           COVERAGE: >-
-            ${{ matrix.os == 'windows-latest' && github.event_name == 'pull_request'
+            ${{ env.COVERAGE_REPORT == 'true'
             && '--cov=domyn --cov-report=xml:coverage-windows.xml' || '--no-cov' }}
         run: >-
           uv run --with pytest-timeout pytest tests/ examples/ -q $COVERAGE
@@ -238,14 +249,26 @@ jobs:
 
       # Written even when a test failed, so the coverage check still has it.
       - name: Upload coverage
-        if: >-
-          !cancelled() && matrix.os == 'windows-latest' && github.event_name == 'pull_request'
+        if: ${{ !cancelled() && env.COVERAGE_REPORT == 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-windows
           path: coverage-windows.xml
           retention-days: 1
           if-no-files-found: ignore
+
+  test-windows-arm:
+    needs: changes
+    if: >-
+      always() && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true')
+    name: test-windows (windows-11-arm)
+    runs-on: windows-11-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      COVERAGE_REPORT: false
+    steps: *windows-steps
 
   # Every Python version the package supports (pyproject.toml's classifiers,
   # and the Python badge in the README). On main and on release tags (called

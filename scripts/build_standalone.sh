@@ -16,6 +16,12 @@
 #   INSTALL_BASE_URL folder the files will be uploaded to (e.g. a self-hosted mirror);
 #                    written into the copy of install.sh, which otherwise
 #                    downloads from the GitHub releases
+#   WINDOWS_ARCH     arm64 or x64, the build made on Windows (default: the machine's).
+#                    arm64 compiles cryptography, pdf-inspector and firecrawl-anydoc,
+#                    which publish no win_arm64 wheel: it needs Rust, the Build Tools'
+#                    ARM64 C++ tools with their Clang, and OpenSSL for arm64
+#                    (vcpkg install openssl:arm64-windows-static-md)
+#   OPENSSL_DIR      that OpenSSL (default: $VCPKG_ROOT's or ~/vcpkg's install of it)
 
 set -euo pipefail
 
@@ -48,16 +54,57 @@ case "$(uname -s)-$ARCH" in
   Darwin-x86_64) fail "Intel Macs are not supported: build on Apple Silicon" ;;
   Linux-aarch64) TARGET="aarch64-unknown-linux-gnu" ;;
   Linux-x86_64)  TARGET="x86_64-unknown-linux-gnu" ;;
-  # x64 on every Windows: pdf-inspector, firecrawl-anydoc and others publish no
-  # win_arm64 wheel, and Windows on ARM runs the x64 build emulated. Built on an
-  # ARM machine too, as the embedded Python is the x64 one and pip picks its wheels.
-  MINGW*-* | MSYS*-*) TARGET="x86_64-pc-windows-msvc" ;;
+  # The machine, not the shell: an x64 Git Bash on Windows on ARM (emulated) says
+  # x86_64 to uname -m and AMD64 in PROCESSOR_ARCHITECTURE, and -ARM64 at the end
+  # of uname -s. Either build can be made on either machine (WINDOWS_ARCH): the
+  # embedded Python is the target's, and pip picks wheels for it.
+  MINGW*-* | MSYS*-*)
+    case "${WINDOWS_ARCH:-}" in
+      arm64) TARGET="aarch64-pc-windows-msvc" ;;
+      x64) TARGET="x86_64-pc-windows-msvc" ;;
+      "")
+        case "$(uname -s)-$ARCH" in
+          *-ARM64-* | *-aarch64 | *-arm64) TARGET="aarch64-pc-windows-msvc" ;;
+          *) TARGET="x86_64-pc-windows-msvc" ;;
+        esac
+        ;;
+      *) fail "WINDOWS_ARCH is arm64 or x64, not $WINDOWS_ARCH" ;;
+    esac
+    ;;
   *) fail "unsupported platform: $(uname -s)-$(uname -m)" ;;
 esac
 WINDOWS=""
 # GNU tar in Git Bash reads the `C:` of a Windows path as a remote host.
 TAR_LOCAL=()
-if [ "$TARGET" = "x86_64-pc-windows-msvc" ]; then WINDOWS=1; TAR_LOCAL=(--force-local); fi
+case "$TARGET" in *-pc-windows-msvc) WINDOWS=1; TAR_LOCAL=(--force-local) ;; esac
+# Windows on ARM: cryptography, pdf-inspector and firecrawl-anydoc have no win_arm64
+# wheel, so pip builds them from the sdists uv.lock pins, as on musl. Rust for all
+# three; Clang for ring, which pdf-inspector uses (MSVC's own compiler does not
+# build its ARM64 assembly); OpenSSL for cryptography, linked in statically.
+if [ "$TARGET" = "aarch64-pc-windows-msvc" ]; then
+  export PATH="$HOME/.cargo/bin:$PATH"
+  command -v cargo >/dev/null 2>&1 \
+    || fail "the arm64 build compiles three packages with Rust: install it (winget install Rustlang.Rustup), or build the x64 one with WINDOWS_ARCH=x64"
+  VSWHERE="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+  VS="$([ -x "$VSWHERE" ] && "$VSWHERE" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath | tr -d '\r' || true)"
+  CLANG_DIR="$([ -n "$VS" ] && cygpath -u "$VS")/VC/Tools/Llvm/ARM64/bin"
+  [ -n "$VS" ] && [ -x "$CLANG_DIR/clang.exe" ] \
+    || fail "the arm64 build needs the Visual Studio Build Tools with the ARM64 C++ tools and their Clang (components VC.Tools.ARM64 and VC.Llvm.Clang)"
+  export PATH="$CLANG_DIR:$PATH"
+  OPENSSL_DIR="${OPENSSL_DIR:-}"
+  if [ -z "$OPENSSL_DIR" ]; then
+    for root in "${VCPKG_ROOT:-}" "${VCPKG_INSTALLATION_ROOT:-}" "$HOME/vcpkg"; do
+      if [ -n "$root" ] && [ -f "$root/installed/arm64-windows-static-md/lib/libcrypto.lib" ]; then
+        OPENSSL_DIR="$(cygpath -w "$root/installed/arm64-windows-static-md")"
+        break
+      fi
+    done
+  fi
+  [ -n "$OPENSSL_DIR" ] \
+    || fail "the arm64 build needs OpenSSL for arm64: vcpkg install openssl:arm64-windows-static-md, or set OPENSSL_DIR"
+  export OPENSSL_DIR OPENSSL_STATIC=1
+  info "compiling with $(cargo --version), $(clang --version | head -1), OpenSSL in $OPENSSL_DIR"
+fi
 # On musl (Alpine): pdf-inspector publishes no musllinux wheel, so pip builds it
 # from its sdist, which takes Rust 1.95 or newer (rustup's; Alpine's is older);
 # onnxruntime has neither, so the audio extra is left out.
@@ -153,7 +200,9 @@ case "$TARGET" in
   aarch64-unknown-linux-gnu) AB_ASSET="agent-browser-linux-arm64";  AB_SHA="$AGENT_BROWSER_SHA256_aarch64_unknown_linux_gnu" ;;
   x86_64-unknown-linux-musl)  AB_ASSET="agent-browser-linux-musl-x64";   AB_SHA="$AGENT_BROWSER_SHA256_x86_64_unknown_linux_musl" ;;
   aarch64-unknown-linux-musl) AB_ASSET="agent-browser-linux-musl-arm64"; AB_SHA="$AGENT_BROWSER_SHA256_aarch64_unknown_linux_musl" ;;
-  x86_64-pc-windows-msvc)     AB_ASSET="agent-browser-win32-x64.exe";    AB_SHA="$AGENT_BROWSER_SHA256_x86_64_pc_windows_msvc" ;;
+  # agent-browser publishes no ARM64 build for Windows: the x64 one runs emulated.
+  x86_64-pc-windows-msvc | aarch64-pc-windows-msvc)
+    AB_ASSET="agent-browser-win32-x64.exe"; AB_SHA="$AGENT_BROWSER_SHA256_x86_64_pc_windows_msvc" ;;
   *) fail "no agent-browser binary for $TARGET" ;;
 esac
 # <runtime>/bin on Windows too, where the runtime has no bin/ of its own: that is
