@@ -125,19 +125,31 @@ counting on another basis — a cache-excluded `input_tokens` reads 4 tokens on 
 prompt of 8,561 — and trusting it would mean never compacting at all."""
 
 
+DEFAULT_RESERVE_TOKENS = 16_384
+"""The reserve when neither the policy nor the provider sets one."""
+
+
+THRESHOLD_FLOOR_DIVISOR = 10
+"""The threshold is never below a tenth of the model's window (``_threshold_floor``)."""
+
+
 class CompactionPolicy(BaseModel):
     """When to act, and how much to keep."""
 
     enabled: bool = True
 
-    reserve_tokens: int = Field(
-        default=16_384,
+    reserve_tokens: int | None = Field(
+        default=None,
         gt=0,
         description=(
             "Space reserved for the reply. The threshold is `window - reserve`. "
-            "Absolute rather than a percentage: it reserves what *one* reply "
-            "needs, which does not scale with the window. A percentage would need "
-            "a second parameter for small windows."
+            "`None`, the default, reserves what the provider asks the reply to fit "
+            "in (`max_reply_tokens`, its `max_tokens`), else `DEFAULT_RESERVE_TOKENS`: "
+            "a fixed reserve under a larger `max_tokens` let a request just under the "
+            "threshold ask for more than the window holds. Absolute rather than a "
+            "percentage: it reserves what *one* reply needs, which does not scale "
+            "with the window. However large it is, the threshold stays at a tenth of "
+            "the window at least (`_threshold_floor`), with a warning."
         ),
     )
     keep_recent_tokens: int = Field(
@@ -315,11 +327,15 @@ class Budget(BaseModel):
     (``tokens_for``)."""
     correction_base_tokens: int = 0
     """Our estimate of the text the correction was measured on."""
+    threshold_floor_tokens: int = 0
+    """The least the threshold may be: a tenth of the model's window
+    (``_threshold_floor``), none on the stand-in window a rejection is measured against,
+    whose threshold is half the request whatever the reserve."""
     estimator: Any
 
     @property
     def threshold_tokens(self) -> int:
-        return _threshold(self.context_window, self.reserve_tokens)
+        return _threshold(self.context_window, self.reserve_tokens, self.threshold_floor_tokens)
 
     @property
     def over_threshold(self) -> bool:
@@ -465,6 +481,68 @@ def _context_window(agent: Any) -> int | None:
     return None
 
 
+def _reserve(policy: "CompactionPolicy", agent: Any) -> int:
+    """The room kept for the reply: the policy's when it sets one, else the provider's
+    reply ceiling, else ``DEFAULT_RESERVE_TOKENS``.
+
+    Validated as ``_context_window`` validates the window, for the same reason: a test
+    double's attribute is a mock, and must not become a reserve.
+    """
+    if policy.reserve_tokens is not None:
+        return policy.reserve_tokens
+    return _reply_ceiling(agent) or DEFAULT_RESERVE_TOKENS
+
+
+def _reply_ceiling(agent: Any) -> int | None:
+    """The provider's ``max_reply_tokens``, when it is a positive integer."""
+    limit = getattr(getattr(agent, "llm_provider", None), "max_reply_tokens", None)
+    if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
+        return limit
+    return None
+
+
+_warned_reserves: set[tuple[Any, ...]] = set()
+"""The deployments, windows and reserves already warned about by ``_threshold_floor``:
+each once per process, as the threshold is worked out before every request."""
+
+
+def _threshold_floor(policy: "CompactionPolicy", agent: Any, window: int, reserve: int) -> int:
+    """The least the threshold may be on the model's window: a tenth of it.
+
+    Without it a reserve as large as the window (a ``max_tokens`` set to the server's
+    ``--max-model-len``) put the threshold at zero: every request compacted, no tail
+    kept (``Budget.tail_tokens``), a summary bought on every turn, and all of it for
+    nothing, since no request leaves the reply that much room. The floor stops that
+    compaction, not the problem: a request over ``window - reserve`` still asks for more
+    than the window holds, rejected by a server that checks prompt plus output (vLLM
+    before 0.32) and answered cut short by one that clamps the output (vLLM from 0.32).
+    So when the floor is what the threshold comes to, it says so, once for each
+    deployment, window and reserve.
+    """
+    floor = window // THRESHOLD_FLOOR_DIVISOR
+    if window - reserve >= floor:
+        return floor
+    provider = getattr(agent, "llm_provider", None)
+    key = (deployment_key(provider), window, reserve)
+    if key in _warned_reserves:
+        return floor
+    _warned_reserves.add(key)
+    if policy.reserve_tokens is not None:
+        source, fix = "the compaction's `reserve_tokens`", "lower it"
+    elif _reply_ceiling(agent) is not None:
+        source, fix = "the provider's `max_tokens`", "lower it"
+    else:
+        source, fix = "the default reserve", "set `max_tokens` on the provider"
+    get_logger().warning(
+        f"the reply reserve of {reserve} tokens ({source}) leaves less than a tenth of "
+        f"the {window}-token window of {getattr(provider, 'model_name', 'the model')}: "
+        f"compacting at {floor} tokens instead. A request over {max(0, window - reserve)} "
+        f"tokens leaves the reply less room than it asks for, and is rejected or answered "
+        f"cut short; {fix}."
+    )
+    return floor
+
+
 def _adopt_window(agent: Any, window: int | None) -> None:
     """Make a window the provider stated in a rejection the agent's own.
 
@@ -493,10 +571,10 @@ def _adopt_window(agent: Any, window: int | None) -> None:
     )
 
 
-def _threshold(context_window: int, reserve_tokens: int) -> int:
-    """Request size beyond which we act. Never negative: on a window smaller than
-    the reserve the threshold is zero, i.e. "always", which is the right reading."""
-    return max(0, context_window - reserve_tokens)
+def _threshold(context_window: int, reserve_tokens: int, floor_tokens: int = 0) -> int:
+    """Request size beyond which we act: the window less the reserve, never below
+    ``floor_tokens`` (``_threshold_floor`` on the model's window) and never negative."""
+    return max(0, floor_tokens, context_window - reserve_tokens)
 
 
 def _history_text_size(event: Any) -> int:
@@ -824,7 +902,7 @@ class Compactor(BaseModel):
         fixed += int(self.estimator.estimate_tool_definitions(tool_defs or []))
         correction, base = self._anchor(state, agent, key)
         current = conversation + fixed + correction
-        reserve = self.policy.reserve_tokens
+        reserve = _reserve(self.policy, agent)
         return Budget(
             context_window=window if window is not None else reserve + current // 2,
             reserve_tokens=reserve,
@@ -833,6 +911,9 @@ class Compactor(BaseModel):
             message_tokens=conversation,
             correction_tokens=correction,
             correction_base_tokens=base,
+            threshold_floor_tokens=(
+                _threshold_floor(self.policy, agent, window, reserve) if window is not None else 0
+            ),
             estimator=self.estimator,
         )
 
@@ -1210,6 +1291,11 @@ class Compactor(BaseModel):
         """
         window = _context_window(agent)
         memory = [m for m in (turn_context or []) if getattr(m, "part", None) == "memory"]
+        threshold = None
+        if self.active and window is not None:
+            reserve = _reserve(self.policy, agent)
+            floor = _threshold_floor(self.policy, agent, window, reserve)
+            threshold = _threshold(window, reserve, floor)
         usage = measure(
             messages,
             tool_defs,
@@ -1222,11 +1308,7 @@ class Compactor(BaseModel):
             ),
             estimator=self.estimator,
             context_window=window,
-            threshold_tokens=(
-                _threshold(window, self.policy.reserve_tokens)
-                if self.active and window is not None
-                else None
-            ),
+            threshold_tokens=threshold,
             strategy=self.strategy_name,
             correction_tokens=self._anchor(state, agent, key)[0],
         )
@@ -1836,7 +1918,10 @@ class CompactionConfig(BaseModel):
     )
     reserve_tokens: int | None = Field(
         default=None,
-        description="Headroom kept below the window. `None` uses the framework default.",
+        description=(
+            "Headroom kept below the window. `None` reserves the provider's `max_tokens`, "
+            "or the framework default when the provider sets none."
+        ),
     )
     keep_recent_tokens: int | None = Field(
         default=None,

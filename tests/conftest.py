@@ -78,9 +78,15 @@ def _forget_context_windows() -> None:
     this, a window one test taught (a rejection stating 32768 for an endpoint and model)
     would still be there in the next test that builds a provider for them, and that test
     would pass or fail depending on which of the two ran first.
+
+    The compaction's record of the reserves it warned about is cleared for the same
+    reason: a test expecting the warning would miss it after another had raised it.
     """
+    from domyn.agents.planner_strategy.context_management import compaction
+
     context_window._answers.clear()
     context_window._stated.clear()
+    compaction._warned_reserves.clear()
 
 
 @pytest.fixture(autouse=True)
