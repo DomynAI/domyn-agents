@@ -407,28 +407,7 @@ def _image_rejection(provider: ProviderConfig) -> str | None:
             )
         )
     except Exception as exc:
-        http_response = getattr(exc, "response", None)
-        status = getattr(http_response, "status_code", None)
-        if isinstance(status, int):
-            text = str(getattr(http_response, "text", "")).strip()
-            # The message written for people, where the usual error bodies put it:
-            # {"error": {"message": …}} (OpenAI, Anthropic, LiteLLM, OpenRouter, recent
-            # vLLM), {"message": …} (older vLLM), {"detail": …} (FastAPI), {"error": "…"}.
-            # Any other body is shown as it came.
-            try:
-                body = json.loads(text)
-            except ValueError:
-                body = None
-            if isinstance(body, dict):
-                error = body.get("error")
-                message = error.get("message") if isinstance(error, dict) else error
-                message = message or body.get("message") or body.get("detail")
-                if isinstance(message, str) and message.strip():
-                    text = message
-            # One line: a carriage return left in it would move the cursor back.
-            detail = " ".join(text.split())[:120]
-            return f"HTTP {status}: {detail}" if detail else f"HTTP {status}"
-        return type(exc).__name__
+        return "not supported for this model (if not expected doublecheck the parameters)"
     finally:
         library_logger.setLevel(level)
 
@@ -2056,7 +2035,7 @@ def run_setup(
         console.print(
             "  Vision: enabled"
             if d.vision
-            else f"  Vision: not supported by this model ({rejection})",
+            else f"  Vision: {rejection}",
             style=theme.style("meta"),
             highlight=False,
             markup=False,
