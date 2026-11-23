@@ -197,7 +197,7 @@ class TestClearing:
     async def test_it_says_hand_written_entries_were_kept(self, tmp_path):
         repl, buffer, manager = _repl(tmp_path)
         await _fill(manager, 2)
-        with open(tmp_path / "memory.md", "a") as f:
+        with open(tmp_path / "memory.md", "a", encoding="utf-8") as f:
             f.write("- written by hand\n")
         with patch("builtins.input", side_effect=["yes"]):
             await repl._handle_memory("clear")
@@ -209,7 +209,7 @@ class TestClearing:
     async def test_all_empties_the_file_after_asking(self, tmp_path):
         repl, buffer, manager = _repl(tmp_path)
         await _fill(manager, 2)
-        with open(tmp_path / "memory.md", "a") as f:
+        with open(tmp_path / "memory.md", "a", encoding="utf-8") as f:
             f.write("- written by hand\n")
         await manager.write_single_memory("someone-else", repl._agent, "not mine")
         with patch("builtins.input", side_effect=["yes"]):

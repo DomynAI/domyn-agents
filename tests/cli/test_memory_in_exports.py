@@ -171,7 +171,7 @@ class TestExportLeavesTheMemoriesBehind:
         source = cfg.memory_file_path(scope)
         if scope == "global":
             Path(source).parent.mkdir(parents=True)
-            Path(source).write_text("- the user's secrets\n")
+            Path(source).write_text("- the user's secrets\n", encoding="utf-8")
 
         dest, report = _export(tmp_path, _config(source))
 
