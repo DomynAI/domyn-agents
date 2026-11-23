@@ -378,7 +378,15 @@ class Repl:
         resumed: ConversationInfo | None = None,
         run_command: str = "domyn run",
         reload: Callable[[], Awaitable[tuple[Any, dict[str, Any]]]] | None = None,
+        auto_approve: bool = False,
+        single_turn: bool = False,
     ) -> None:
+        """``auto_approve`` starts the session with auto-approve on whatever
+        ``state.yaml`` says, without remembering it there: for a session nobody is at
+        the keyboard of (`domyn headless`). The hardline rules still apply.
+
+        ``single_turn`` ends the session when the first turn ends, with no read of
+        the input: the initial prompt is the whole conversation."""
         self._agent = agent
         # Tasks started in the background (the backend's container); held so they are
         # not collected while they run.
@@ -408,6 +416,12 @@ class Repl:
         if verbose and not self._prefs.verbose:
             self._prefs.verbose = True
             self._prefs.save()
+        # Set on this session's settings only, never saved: the next interactive
+        # session of the same configuration starts as its user left it.
+        self._auto_approve_given = auto_approve
+        if auto_approve:
+            self._prefs.auto_approve = True
+        self._single_turn = single_turn
         if resumed is not None:
             self._state.resume_conversation(resumed)
         self._spinner = Spinner(console, theme)
@@ -559,7 +573,13 @@ class Repl:
         # What the startup line under the banner described: the baseline every
         # turn's end is compared with (`_say_what_changed`).
         self._inventory = await take_inventory(self._agent)
-        if self._prefs.auto_approve:
+        if self._auto_approve_given:
+            self._console.print(
+                "  Auto-approve is on: every tool call runs without asking.",
+                style=self._theme.style("auto_mode"),
+                highlight=False,
+            )
+        elif self._prefs.auto_approve:
             self._console.print(
                 "  Auto-approve is on, kept from an earlier session of this configuration: every "
                 "tool call runs without asking. /auto or shift+tab to stop.",
@@ -603,7 +623,9 @@ class Repl:
             if not text:
                 continue
 
-            if slash.is_slash(text):
+            # A single-turn prompt is a task, never a command: one starting with a
+            # path (`/app/data.csv has ...`) is sent to the model as written.
+            if not self._single_turn and slash.is_slash(text):
                 if await self._handle_slash(text) is False:
                     return 0
                 continue
@@ -621,6 +643,10 @@ class Repl:
                 self._renderer.finish()
                 self._console.print()
                 self._say("Turn interrupted.")
+                if self._single_turn:
+                    return 130
+            if self._single_turn:
+                return 0
 
     # --- turn execution ----------------------------------------------------
 

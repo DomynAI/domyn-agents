@@ -626,6 +626,17 @@ def _warn_once(message: str) -> None:
         print(f"Warning: {message}", file=sys.stderr)
 
 
+def drop_credentials_from_environment() -> None:
+    """Take back what `load_credentials_into_environment` put in ``os.environ``: only
+    the names it set, and only while they still hold the value it gave them, so a real
+    environment variable or a ``.env`` entry stays. For `domyn headless`, which reads no
+    credentials file: its key comes from the environment it is started in."""
+    for name, value in _credentials_in_environment.items():
+        if os.environ.get(name) == value:
+            del os.environ[name]
+    _credentials_in_environment.clear()
+
+
 def load_credentials_into_environment() -> None:
     """Expose the credentials files' entries (`read_all_credentials`) as environment
     variables.
@@ -637,10 +648,7 @@ def load_credentials_into_environment() -> None:
     global one. Only what this function itself set is removed, and only while it
     still holds the value it was given.
     """
-    for name, value in _credentials_in_environment.items():
-        if os.environ.get(name) == value:
-            del os.environ[name]
-    _credentials_in_environment.clear()
+    drop_credentials_from_environment()
     for name, value in read_all_credentials().items():
         if not is_credential_name(name):
             _warn_once(

@@ -8,6 +8,7 @@ from domyn.agents.cli.commands import (
 )
 from domyn.agents.cli.commands.clean import clean_command
 from domyn.agents.cli.commands.export import export_command
+from domyn.agents.cli.commands.headless.command import headless_command
 from domyn.agents.cli.commands.setup import setup_command
 from domyn.agents.cli.commands.skills import skill_command, skills_command
 from domyn.agents.cli.utils import get_version, package_name, setup_logging
@@ -39,7 +40,9 @@ def version_callback(value: bool) -> None:
 #
 # So these default to WARNING. ``--log-level`` still overrides, and inside a
 # session ``/verbose`` turns them back on without leaving it.
-_QUIET_COMMANDS = frozenset({"run", "setup", "init", "skills", "skill", "export", "clean"})
+_QUIET_COMMANDS = frozenset(
+    {"run", "headless", "setup", "init", "skills", "skill", "export", "clean"}
+)
 
 
 @app.callback()
@@ -96,6 +99,16 @@ app.command(
     help="Delete old conversations and the files the agent created for them",
 )(clean_command)
 app.command("run", help="Chat with an agent — interactively, or with a single prompt")(run_command)
+app.command(
+    "headless",
+    help="Carry out one task with nobody at the keyboard, then exit (no setup needed)",
+    epilog=(
+        "The endpoint is --base-url, the model --model, and the key the environment variable "
+        "--api-key-env names. Every tool call is approved automatically. "
+        "Nothing in ~/.domyn is read: the session keeps its configuration and history in "
+        "--state-dir."
+    ),
+)(headless_command)
 app.command(
     "serve",
     hidden=True,

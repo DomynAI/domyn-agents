@@ -240,8 +240,14 @@ async def start_session(
     run_command: str = "domyn run",
     reload: Callable[[], Awaitable[tuple[Agent, dict[str, Any]]]] | None = None,
     voice: bool = False,
+    auto_approve: bool = False,
+    single_turn: bool = False,
+    steering: bool = True,
 ) -> int:
     """Print the status line, then hand over to the REPL.
+
+    ``auto_approve``, ``single_turn`` and ``steering`` go to the `Repl` as they are:
+    `domyn headless` turns the first two on and the third off.
 
     Skills and standing instructions are already on the agent (attached by the
     caller); they are read here only to say which are in play. The banner is drawn
@@ -330,6 +336,9 @@ async def start_session(
         resumed=resumed,
         run_command=run_command,
         reload=reload,
+        enable_steering=steering,
+        auto_approve=auto_approve,
+        single_turn=single_turn,
     )
     if resumed is not None:
         conversations.render_history(console, theme, resumed, verbose=verbose)
