@@ -12,7 +12,8 @@ OpenAI-compatible ``--base-url``, the ``--model`` it serves, and ``--api-key-env
 variable holding its key (none is sent without it). No ``OPENAI_*`` variable is read, so
 one left in the environment for some other tool cannot point the session elsewhere. The
 model's limits are options of their own (``--context-window``, ``--max-tokens``), and so
-is its reasoning effort.
+is its reasoning effort (``--reasoning-effort``). Its default, ``default``, sends none:
+the endpoint's own applies, so an endpoint that refuses the field still works.
 
 What differs from an interactive session, because nobody answers:
 
@@ -85,6 +86,9 @@ nobody to answer needs: without them a model tends to describe the steps and off
 carry them out, and the session ends on the offer."""
 
 DEFAULT_MAX_ITERATIONS = 1000
+NO_REASONING_EFFORT = "default"
+"""The ``--reasoning-effort`` that sends no ``reasoning_effort`` at all, and its default:
+the endpoint's own applies."""
 AGENT_NAME = "Assistant"
 SKILLS_DIRNAME = "builtin-skills"
 
@@ -249,10 +253,13 @@ def headless_command(
     temperature: float | None = typer.Option(
         None, "--temperature", help="Sampling temperature (default: null, the endpoint's)"
     ),
-    reasoning_effort: str | None = typer.Option(
-        None,
+    reasoning_effort: str = typer.Option(
+        NO_REASONING_EFFORT,
         "--reasoning-effort",
-        help="Sent as `reasoning_effort` on every call, e.g. low, medium, high (default: none)",
+        help=(
+            "Sent as `reasoning_effort` on every call, e.g. low, medium, high "
+            f"(default: '{NO_REASONING_EFFORT}', none sent, the endpoint decides)"
+        ),
     ),
     max_iterations: int = typer.Option(
         DEFAULT_MAX_ITERATIONS, "--max-iterations", min=1, help="Most model calls in the turn"
@@ -318,7 +325,7 @@ def headless_command(
         context_window=context_window,
         max_tokens=max_tokens,
         temperature=temperature,
-        reasoning_effort=reasoning_effort,
+        reasoning_effort=None if reasoning_effort == NO_REASONING_EFFORT else reasoning_effort,
         max_iterations=max_iterations,
         instructions=standing,
         skill_paths=skill_paths,

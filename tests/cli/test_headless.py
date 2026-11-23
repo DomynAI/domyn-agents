@@ -130,6 +130,38 @@ class TestTheCommand:
         assert written["llm_providers"][0]["api_key"] == "${HEADLESS_TEST_KEY}"
         assert written["llm_providers"][0]["url"] == f"{ENDPOINT}/chat/completions"
 
+    def test_no_reasoning_effort_is_sent_unless_given(
+        self, tmp_path: Path, started: dict[str, Any]
+    ) -> None:
+        state = tmp_path / "state"
+        assert _invoke("--model", "m", "--no-skills", "--state-dir", str(state), "x").exit_code == 0
+        params = yaml.safe_load((state / "config.yaml").read_text())["llm_providers"][0][
+            "generation_params"
+        ]
+        assert "reasoning_effort" not in params
+
+    @pytest.mark.parametrize(("given", "sent"), [("high", "high"), ("default", None)])
+    def test_a_reasoning_effort_given_is_sent_and_default_sends_none(
+        self, tmp_path: Path, started: dict[str, Any], given: str, sent: str | None
+    ) -> None:
+        state = tmp_path / "state"
+        result = _invoke(
+            "--model",
+            "m",
+            "--no-skills",
+            "--state-dir",
+            str(state),
+            "--reasoning-effort",
+            given,
+            "x",
+        )
+        assert result.exit_code == 0, result.output
+        params = yaml.safe_load((state / "config.yaml").read_text())["llm_providers"][0][
+            "generation_params"
+        ]
+        assert params.get("reasoning_effort") == sent
+        assert ("reasoning_effort" in params) is (sent is not None)
+
     def test_the_task_can_come_from_a_file(self, tmp_path: Path, started: dict[str, Any]) -> None:
         task = tmp_path / "task.md"
         task.write_text("from the file")
