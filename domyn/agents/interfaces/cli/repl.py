@@ -57,7 +57,7 @@ from domyn.agents.interfaces.cli.approval import (
     prompt_for_approval,
     settle_approval,
 )
-from domyn.agents.interfaces.cli.attachments import Attachments, Place
+from domyn.agents.interfaces.cli.attachments import AttachmentContext, Attachments
 from domyn.agents.interfaces.cli.calls import as_written
 from domyn.agents.interfaces.cli.config import (
     LOCAL_SKILLS_DIRS,
@@ -431,7 +431,7 @@ class Repl:
         self._renderer.output = self._input.output
         # Images attached to the conversation in the editor: Ctrl-V and a pasted or
         # dragged path. See `attachments.py`.
-        self._attachments = Attachments(self._attachment_place)
+        self._attachments = Attachments(self._attachment_context)
         self._input.attachments = self._attachments
         # Typed mid-turn and not consumed there: a held slash command, a line
         # submitted as the turn ended, a steer the runner could not take.
@@ -1766,13 +1766,14 @@ class Repl:
                 return sessions.paths(self._state.conversation_id).home
         return None
 
-    def _attachment_place(self) -> Place | None:
+    def _attachment_context(self) -> AttachmentContext | None:
         """Where an image attached now goes, or ``None`` when the agent has no
         ``read_image`` to look at it with.
 
         The folder ``read_image`` itself reads for the conversation: the state folder
         of the bundle that mounts it, as its backend has it. Not `_conversation_home`,
-        which only a local backend can answer."""
+        which only a local backend can answer. With that bundle's workspace, so an
+        image ``read_image`` reaches where it is is named there rather than copied."""
         for built in getattr(self._agent, "builtin_tools", None) or []:
             if built.workspace is None:
                 continue
@@ -1782,9 +1783,10 @@ class Repl:
             state_dir = (
                 built.backend.state_dir if built.backend is not None else default_state_dir()
             )
-            return Place(
+            return AttachmentContext(
                 state=state_base(root, state_dir),
                 folder=attachments_dir(root, state_dir, self._state.conversation_id),
+                workspace=built.workspace,
             )
         return None
 

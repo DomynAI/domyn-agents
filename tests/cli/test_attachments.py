@@ -10,14 +10,16 @@ import pytest
 from PIL import Image
 
 from domyn.agents.interfaces.cli import attachments as attachments_mod
+from domyn.agents.interfaces.cli import config as cli_config
 from domyn.agents.interfaces.cli.attachments import (
     MAX_PASTED_PATHS,
     NOT_READABLE,
+    AttachmentContext,
     AttachmentError,
     Attachments,
-    Place,
     image_paths,
 )
+from domyn.agents.tools.builtin.workspace import Workspace
 
 
 def _picture(path: Path, size: tuple[int, int] = (8, 8)) -> Path:
@@ -26,15 +28,27 @@ def _picture(path: Path, size: tuple[int, int] = (8, 8)) -> Path:
 
 
 @pytest.fixture
-def place(tmp_path: Path) -> Place:
-    state = tmp_path / "state"
-    state.mkdir()
-    return Place(state=state, folder=state / "conversations" / "c1" / "attachments")
+def work(tmp_path: Path) -> Path:
+    """The workspace. The images of most tests are beside it, so they are copied."""
+    folder = tmp_path / "work"
+    folder.mkdir()
+    return folder
 
 
 @pytest.fixture
-def attachments(place: Place) -> Attachments:
-    return Attachments(lambda: place)
+def context(tmp_path: Path, work: Path) -> AttachmentContext:
+    state = tmp_path / "state"
+    state.mkdir()
+    return AttachmentContext(
+        state=state,
+        folder=state / "conversations" / "c1" / "attachments",
+        workspace=Workspace.at(work),
+    )
+
+
+@pytest.fixture
+def attachments(context: AttachmentContext) -> Attachments:
+    return Attachments(lambda: context)
 
 
 class TestWhichPastesAreImages:
@@ -88,22 +102,22 @@ class TestWhichPastesAreImages:
 
 class TestAttachingAFile:
     def test_it_is_copied_into_the_conversation(
-        self, attachments: Attachments, place: Place, tmp_path: Path
+        self, attachments: Attachments, context: AttachmentContext, tmp_path: Path
     ) -> None:
         shot = _picture(tmp_path / "shot.PNG")
         assert attachments.add_file(shot) == "[Image #1]"
-        [copy] = place.folder.iterdir()
+        [copy] = context.folder.iterdir()
         assert copy.name == "shot.png"
         assert copy.read_bytes() == shot.read_bytes()
 
     def test_numbers_go_up_and_names_do_not_clash(
-        self, attachments: Attachments, place: Place, tmp_path: Path
+        self, attachments: Attachments, context: AttachmentContext, tmp_path: Path
     ) -> None:
         shot = _picture(tmp_path / "shot.png")
         assert attachments.add_file(shot) == "[Image #1]"
         assert attachments.add_file(shot) == "[Image #2]"
         assert attachments.add_file(shot) == "[Image #3]"
-        assert sorted(p.name for p in place.folder.iterdir()) == [
+        assert sorted(p.name for p in context.folder.iterdir()) == [
             "shot-2.png",
             "shot-3.png",
             "shot.png",
@@ -122,30 +136,35 @@ class TestAttachingAFile:
         ],
     )
     def test_the_name_is_kept_as_far_as_it_is_safe(
-        self, attachments: Attachments, place: Place, tmp_path: Path, name: str, copied: str
+        self,
+        attachments: Attachments,
+        context: AttachmentContext,
+        tmp_path: Path,
+        name: str,
+        copied: str,
     ) -> None:
         """The path is written into the message, where a `]` or a new line would
         break it, so only letters, digits, `-`, `_` and `.` stay."""
         Image.new("RGB", (4, 4)).save(tmp_path / name, "PNG")
         attachments.add_file(tmp_path / name)
-        [copy] = place.folder.iterdir()
+        [copy] = context.folder.iterdir()
         assert copy.name == copied
 
     def test_a_long_name_is_cut(
-        self, attachments: Attachments, place: Place, tmp_path: Path
+        self, attachments: Attachments, context: AttachmentContext, tmp_path: Path
     ) -> None:
         shot = _picture(tmp_path / f"{'a' * 150}.png")
         attachments.add_file(shot)
-        [copy] = place.folder.iterdir()
+        [copy] = context.folder.iterdir()
         assert copy.name == f"{'a' * attachments_mod.MAX_NAME_CHARS}.png"
 
     def test_a_file_without_an_extension_is_named_by_its_format(
-        self, attachments: Attachments, place: Place, tmp_path: Path
+        self, attachments: Attachments, context: AttachmentContext, tmp_path: Path
     ) -> None:
         shot = tmp_path / "shot"
         Image.new("RGB", (4, 4)).save(shot, "JPEG")
         attachments.add_file(shot)
-        [copy] = place.folder.iterdir()
+        [copy] = context.folder.iterdir()
         assert copy.name == "shot.jpeg"
 
     def test_not_an_image(self, attachments: Attachments, tmp_path: Path) -> None:
@@ -173,13 +192,13 @@ class TestAttachingAFile:
 
     @pytest.mark.skipif(os.name == "nt", reason="symlinks")
     def test_never_through_a_link(
-        self, attachments: Attachments, place: Place, tmp_path: Path
+        self, attachments: Attachments, context: AttachmentContext, tmp_path: Path
     ) -> None:
         """A project folder used by its path can be someone else's: a link below its
         state folder would put the copy wherever it points."""
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
-        (place.state / "conversations").symlink_to(elsewhere)
+        (context.state / "conversations").symlink_to(elsewhere)
         with pytest.raises(AttachmentError, match="is a link"):
             attachments.add_file(_picture(tmp_path / "shot.png"))
         assert list(elsewhere.iterdir()) == []
@@ -187,12 +206,157 @@ class TestAttachingAFile:
     def test_the_place_is_asked_every_time(self, tmp_path: Path) -> None:
         """``/clear`` and ``/resume`` change the conversation, so the folder."""
         folders = iter([tmp_path / "a", tmp_path / "b"])
-        attachments = Attachments(lambda: Place(state=tmp_path, folder=next(folders)))
+        attachments = Attachments(lambda: AttachmentContext(state=tmp_path, folder=next(folders)))
         shot = _picture(tmp_path / "shot.png")
         attachments.add_file(shot)
         attachments.add_file(shot)
         assert len(list((tmp_path / "a").iterdir())) == 1
         assert len(list((tmp_path / "b").iterdir())) == 1
+
+
+class TestAnImageInTheWorkspace:
+    """An image read_image can open where it is is named there, not copied, by its
+    absolute path: it says what it belongs to, and the other file tools reach it too."""
+
+    def test_in_the_root(
+        self, attachments: Attachments, context: AttachmentContext, work: Path
+    ) -> None:
+        shot = _picture(work / "shot.png")
+        chip = attachments.add_file(shot)
+        assert not context.folder.exists()
+        assert attachments.expand(f"{chip} what is it?") == (
+            f"[Image #1, attached by the user, in the workspace: {shot.resolve()}. "
+            "Look at it with read_image.] what is it?"
+        )
+
+    def test_in_a_subfolder_it_is_named_by_its_whole_path(
+        self, attachments: Attachments, work: Path
+    ) -> None:
+        (work / "docs" / "img").mkdir(parents=True)
+        shot = _picture(work / "docs" / "img" / "shot.png")
+        chip = attachments.add_file(shot)
+        assert f"in the workspace: {shot.resolve()}." in attachments.expand(chip)
+
+    def test_a_name_with_spaces_stays_as_it_is(self, attachments: Attachments, work: Path) -> None:
+        shot = _picture(work / "My Shot.png")
+        chip = attachments.add_file(shot)
+        assert f"in the workspace: {shot.resolve()}." in attachments.expand(chip)
+
+    def test_resumed_from_another_folder_it_is_refused_not_mistaken(
+        self, attachments: Attachments, tmp_path: Path, work: Path
+    ) -> None:
+        """The message is kept in the history: a relative path would name the file of
+        the same name in the folder a conversation is resumed from."""
+        from domyn.agents.tools.builtin.images import load_image
+        from domyn.agents.tools.builtin.workspace import WorkspaceError
+
+        _picture(work / "shot.png")
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        _picture(elsewhere / "shot.png")
+        shown = attachments.expand(attachments.add_file(work / "shot.png"))
+        path = shown.split("in the workspace: ")[1].split(". Look")[0]
+        with pytest.raises(WorkspaceError, match="outside the workspace"):
+            load_image(Workspace.at(elsewhere), path)
+
+    def test_in_an_extra_root_it_is_named_by_its_whole_path(
+        self, tmp_path: Path, context: AttachmentContext, work: Path
+    ) -> None:
+        skills = tmp_path / "skills"
+        skills.mkdir()
+        shot = _picture(skills / "shot.png")
+        attachments = Attachments(
+            lambda: AttachmentContext(
+                state=context.state,
+                folder=context.folder,
+                workspace=Workspace.at(work, also=[skills]),
+            )
+        )
+        chip = attachments.add_file(shot)
+        assert not context.folder.exists()
+        assert f"in the workspace: {shot.resolve()}." in attachments.expand(chip)
+
+    def test_no_size_limit_as_nothing_is_written(
+        self, attachments: Attachments, work: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(attachments_mod, "MAX_ATTACHED_BYTES", 10)
+        assert attachments.add_file(_picture(work / "shot.png")) == "[Image #1]"
+
+    def test_without_a_workspace_every_image_is_copied(
+        self, context: AttachmentContext, work: Path
+    ) -> None:
+        attachments = Attachments(
+            lambda: AttachmentContext(state=context.state, folder=context.folder)
+        )
+        chip = attachments.add_file(_picture(work / "shot.png"))
+        [copy] = context.folder.iterdir()
+        assert f"attached by the user: {copy}." in attachments.expand(chip)
+
+    @pytest.mark.skipif(os.name == "nt", reason="symlinks")
+    def test_a_link_in_the_workspace_pointing_out_is_copied(
+        self, attachments: Attachments, context: AttachmentContext, tmp_path: Path, work: Path
+    ) -> None:
+        """read_image judges the resolved path, which is outside."""
+        (work / "shot.png").symlink_to(_picture(tmp_path / "outside.png"))
+        chip = attachments.add_file(work / "shot.png")
+        [copy] = context.folder.iterdir()
+        assert f"attached by the user: {copy}." in attachments.expand(chip)
+
+    @pytest.mark.skipif(os.name == "nt", reason="symlinks")
+    def test_a_link_outside_pointing_in_is_named_where_it_leads(
+        self, attachments: Attachments, context: AttachmentContext, tmp_path: Path, work: Path
+    ) -> None:
+        _picture(work / "real.png")
+        (tmp_path / "link.png").symlink_to(work / "real.png")
+        chip = attachments.add_file(tmp_path / "link.png")
+        assert not context.folder.exists()
+        assert f"in the workspace: {(work / 'real.png').resolve()}." in attachments.expand(chip)
+
+    def test_below_the_state_folder_it_is_copied(self, work: Path) -> None:
+        """A state folder inside the workspace (a library host's `.domyn`) is hidden
+        from a container."""
+        state = work / ".domyn"
+        folder = state / "conversations" / "c1" / "attachments"
+        (state / "browser").mkdir(parents=True)
+        shot = _picture(state / "browser" / "shot.png")
+        attachments = Attachments(
+            lambda: AttachmentContext(state=state, folder=folder, workspace=Workspace.at(work))
+        )
+        chip = attachments.add_file(shot)
+        [copy] = folder.iterdir()
+        assert f"attached by the user: {copy}." in attachments.expand(chip)
+
+    def test_below_the_global_folder_it_is_copied(
+        self,
+        attachments: Attachments,
+        context: AttachmentContext,
+        work: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The global ~/.domyn, hidden from a container whose workspace is the home."""
+        global_dir = work / ".domyn"
+        global_dir.mkdir()
+        monkeypatch.setattr(cli_config, "GLOBAL_DIR", global_dir)
+        chip = attachments.add_file(_picture(global_dir / "shot.png"))
+        [copy] = context.folder.iterdir()
+        assert f"attached by the user: {copy}." in attachments.expand(chip)
+
+    @pytest.mark.skipif(os.name == "nt", reason="file names")
+    @pytest.mark.parametrize(
+        ("name", "copied"), [("shot].png", "shot.png"), ("a\nb.png", "a_b.png")]
+    )
+    def test_a_name_that_would_break_the_chip_is_copied(
+        self,
+        attachments: Attachments,
+        context: AttachmentContext,
+        work: Path,
+        name: str,
+        copied: str,
+    ) -> None:
+        chip = attachments.add_file(_picture(work / name))
+        [copy] = context.folder.iterdir()
+        assert copy.name == copied
+        assert f"attached by the user: {copy}." in attachments.expand(chip)
 
 
 class TestTheClipboard:
@@ -202,19 +366,19 @@ class TestTheClipboard:
         monkeypatch.setattr(attachments_mod, "_clipboard_file", lambda: None)
 
     def test_an_image_is_saved_as_png(
-        self, attachments: Attachments, place: Place, monkeypatch: pytest.MonkeyPatch
+        self, attachments: Attachments, context: AttachmentContext, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
             attachments_mod.ImageGrab, "grabclipboard", lambda: Image.new("CMYK", (4, 4))
         )
         assert attachments.from_clipboard() == ["[Image #1]"]
         assert attachments.from_clipboard() == ["[Image #2]"]
-        assert sorted(p.name for p in place.folder.iterdir()) == ["pasted-1.png", "pasted-2.png"]
-        with Image.open(place.folder / "pasted-1.png") as image:
+        assert sorted(p.name for p in context.folder.iterdir()) == ["pasted-1.png", "pasted-2.png"]
+        with Image.open(context.folder / "pasted-1.png") as image:
             assert image.format == "PNG"
 
     def test_two_pastes_at_once_get_a_file_and_a_number_each(
-        self, attachments: Attachments, place: Place, monkeypatch: pytest.MonkeyPatch
+        self, attachments: Attachments, context: AttachmentContext, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # Each Ctrl-V reads the clipboard in a thread of its own. A slow save keeps
         # the first paste between picking its name and writing it while the second
@@ -233,7 +397,7 @@ class TestTheClipboard:
             chips = list(pool.map(lambda _: attachments.from_clipboard(), range(2)))
 
         assert sorted(chip for pasted in chips for chip in pasted) == ["[Image #1]", "[Image #2]"]
-        assert sorted(p.name for p in place.folder.iterdir()) == ["pasted-1.png", "pasted-2.png"]
+        assert sorted(p.name for p in context.folder.iterdir()) == ["pasted-1.png", "pasted-2.png"]
 
     def test_files_copied_in_a_file_manager(
         self,
@@ -252,7 +416,7 @@ class TestTheClipboard:
     def test_a_file_copied_in_finder_wins_over_its_icon(
         self,
         attachments: Attachments,
-        place: Place,
+        context: AttachmentContext,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -263,8 +427,22 @@ class TestTheClipboard:
             attachments_mod.ImageGrab, "grabclipboard", lambda: Image.new("RGB", (1, 1))
         )
         attachments.from_clipboard()
-        [copy] = place.folder.iterdir()
+        [copy] = context.folder.iterdir()
         assert copy.read_bytes() == shot.read_bytes()
+
+    def test_a_file_copied_in_finder_from_the_workspace_is_named_in_place(
+        self,
+        attachments: Attachments,
+        context: AttachmentContext,
+        work: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        shot = _picture(work / "shot.png")
+        monkeypatch.setattr(attachments_mod.sys, "platform", "darwin")
+        monkeypatch.setattr(attachments_mod, "_clipboard_file", lambda: shot)
+        assert attachments.from_clipboard() == ["[Image #1]"]
+        assert not context.folder.exists()
+        assert f"in the workspace: {shot.resolve()}." in attachments.expand("[Image #1]")
 
     def test_nothing_in_it(self, attachments: Attachments, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(attachments_mod.ImageGrab, "grabclipboard", lambda: None)

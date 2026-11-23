@@ -2,15 +2,23 @@
 
 A terminal hands an application text only: Cmd+V and a bracketed paste carry no
 pixels. So the image is fetched here — from the clipboard, or from the file a
-pasted path names — and copied into the conversation's ``attachments`` folder
-(`SessionPaths.attachments`). The editor shows an ``[Image #N]`` chip where it was
-attached, and the message the model gets names the file instead (`Attachments.expand`),
-for ``read_image`` to look at when it needs to. No image enters the conversation.
+pasted path names. The editor shows an ``[Image #N]`` chip where it was attached, and
+the message the model gets names the file instead (`Attachments.expand`), for
+``read_image`` to look at when it needs to. No image enters the conversation.
 
-The folder is the conversation's, beside its venv and output: ``domyn clean`` removes
-it with them, ``domyn export`` never copies it, and ``--resume`` finds the files again.
-``read_image`` may read it for that conversation alone, as its state folder is no root
-of the workspace (``images.image_tools``).
+A file ``read_image`` can already open where it is — in the workspace or one of its
+extra roots, below no private folder — is named where it is, by its absolute path: its
+path says what it belongs to (``/home/me/app/docs/img/login.png``), and the other file
+tools reach it too. It is the live file, not a snapshot: changed later, a later look
+sees the change. Absolute because the message is kept in the history: relative, a
+conversation resumed from another folder would read that folder's file of the same
+name; absolute, ``read_image`` refuses it there as outside the workspace.
+
+Every other image (one outside the workspace, the clipboard's pixels) is copied into
+the conversation's ``attachments`` folder (`SessionPaths.attachments`), beside its venv
+and output: ``domyn clean`` removes it with them, ``domyn export`` never copies it, and
+``--resume`` finds the files again. ``read_image`` may read it for that conversation
+alone, as its state folder is no root of the workspace (``images.image_tools``).
 
 Nothing here knows about the editor, so it can be tested without a terminal.
 """
@@ -30,8 +38,10 @@ from urllib.parse import unquote, urlsplit
 
 from PIL import Image, ImageGrab
 
+from domyn.agents.interfaces.cli import config as cli_config
 from domyn.agents.logger import get_logger
 from domyn.agents.tools.builtin.session import linked_below
+from domyn.agents.tools.builtin.workspace import Workspace
 
 CHIP = re.compile(r"\[Image #(\d+)\]")
 """What the editor shows for an attached image."""
@@ -50,6 +60,9 @@ MAX_NAME_CHARS = 100
 
 # What an attached copy's name may hold; anything else becomes `_`.
 _UNSAFE = re.compile(r"[^\w.-]+")
+# What a path named in place may not hold: it is written inside the chip's brackets,
+# where a bracket or a control character (a new line) would break the message.
+_BREAKS_CHIP = re.compile(r"[\[\]\x00-\x1f\x7f]")
 _SUFFIX = re.compile(r"\.[a-z0-9]+")
 
 NOT_READABLE = (
@@ -63,13 +76,28 @@ class AttachmentError(Exception):
 
 
 @dataclass(frozen=True)
-class Place:
-    """Where the current conversation's attachments go."""
+class AttachmentContext:
+    """What attaching an image needs to know now: where the current conversation's
+    copies go, and the workspace that decides whether an image is copied at all."""
 
     state: Path
-    """The state folder, below which no link is followed (`linked_below`)."""
+    """The state folder, below which no link is followed (`linked_below`) and no
+    image is named in place."""
     folder: Path
     """``<state>/conversations/<id>/attachments``."""
+    workspace: Workspace | None = None
+    """The workspace ``read_image`` reads in: an image inside it is named where it is.
+    ``None`` copies every image."""
+
+
+@dataclass(frozen=True)
+class AttachedImage:
+    """An image attached in this conversation, as the message names it."""
+
+    shown: str
+    """The path written into the message."""
+    in_place: bool
+    """Named where it is, rather than copied into the conversation."""
 
 
 def _image_format(path: Path) -> str | None:
@@ -138,7 +166,7 @@ def _clipboard_file() -> Path | None:
 class Attachments:
     """The images attached in this conversation, by the number of their chip.
 
-    ``place`` says where the current conversation's images go, or ``None`` when the
+    ``context`` says where the current conversation's images go, or ``None`` when the
     agent has no ``read_image`` to look at them with. Asked at every attach, as
     ``/clear``, ``/resume``, a config reload and ``/model`` change the answer.
 
@@ -147,9 +175,9 @@ class Attachments:
     forgotten with the conversation (`reset`).
     """
 
-    def __init__(self, place: Callable[[], Place | None]) -> None:
-        self._place = place
-        self._paths: dict[int, Path] = {}
+    def __init__(self, context: Callable[[], AttachmentContext | None]) -> None:
+        self._context = context
+        self._images: dict[int, AttachedImage] = {}
         # Each Ctrl-V reads the clipboard in a thread of its own, so two quick
         # presses attach at once: held from picking a free name to numbering the
         # chip, or both would write one file and could take one number.
@@ -157,16 +185,18 @@ class Attachments:
 
     def reset(self) -> None:
         """Forget every attachment: a new conversation starts at ``[Image #1]``."""
-        self._paths.clear()
+        self._images.clear()
 
-    def check(self) -> Place:
+    def context(self) -> AttachmentContext:
         """Where an image goes now; raises when none can be attached."""
-        place = self._place()
-        if place is None:
+        context = self._context()
+        if context is None:
             raise AttachmentError(NOT_READABLE)
-        return place
+        return context
 
-    def _target(self, place: Place, stem: str, suffix: str, *, numbered: bool = False) -> Path:
+    def _target(
+        self, context: AttachmentContext, stem: str, suffix: str, *, numbered: bool = False
+    ) -> Path:
         """A file name in the conversation's attachments folder that no other file has.
 
         ``stem`` is kept, as the name of an image often says what it is
@@ -174,14 +204,14 @@ class Attachments:
         ``.`` replaced: the path is written into the message, where a ``]`` or a new
         line would break it. A name already taken gets ``-2``, ``-3``…; ``numbered``
         numbers it from ``-1``, for images that have no name of their own."""
-        linked = linked_below(place.state, place.folder)
+        linked = linked_below(context.state, context.folder)
         if linked is not None:
             raise AttachmentError(f"'{linked}' is a link, so nothing is attached through it.")
         try:
-            place.folder.mkdir(parents=True, exist_ok=True)
+            context.folder.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             get_logger().debug(f"attachments: could not create the folder, detail: {e}")
-            raise AttachmentError(f"'{place.folder}' could not be created.") from None
+            raise AttachmentError(f"'{context.folder}' could not be created.") from None
 
         # Composed first: macOS may hand a name over with `è` as `e` plus an accent,
         # and the accent alone is no letter.
@@ -190,61 +220,82 @@ class Attachments:
         number = 1 if numbered else None
         while True:
             name = f"{stem}{suffix}" if number is None else f"{stem}-{number}{suffix}"
-            target = place.folder / name
+            target = context.folder / name
             if not target.exists() and not target.is_symlink():
                 return target
             number = 2 if number is None else number + 1
 
-    def _register(self, path: Path) -> str:
-        number = len(self._paths) + 1
-        self._paths[number] = path
+    def _register(self, image: AttachedImage) -> str:
+        number = len(self._images) + 1
+        self._images[number] = image
         return f"[Image #{number}]"
 
     def add_file(self, path: Path) -> str:
-        """Copy the image at ``path`` into the conversation and return its chip.
+        """Attach the image at ``path`` and return its chip.
 
-        Copied rather than named where it is: a screenshot on the desktop is outside
-        the workspace, and the original may have moved by the time a conversation is
-        resumed."""
-        place = self.check()
+        Named where it is when ``read_image`` can open it there: inside the workspace
+        or one of its extra roots, judged on the resolved path as the workspace judges
+        it (a link pointing out is outside), below neither the state folder nor the
+        global ``~/.domyn`` (a container hides it when the workspace holds it), and
+        with no character that would break the chip; by its absolute path. Copied into the conversation
+        otherwise: a screenshot on the desktop is outside the workspace, and the
+        original may have moved by the time a conversation is resumed."""
+        context = self.context()
         path = path.expanduser()
         if not path.is_file():
             raise AttachmentError(f"'{path}' is not a file.")
-        if path.stat().st_size > MAX_ATTACHED_BYTES:
-            raise AttachmentError(f"'{path}' is over {MAX_ATTACHED_BYTES // 1_000_000} MB.")
         image_format = _image_format(path)
         if image_format is None:
             raise AttachmentError(f"'{path}' is not an image.")
+
+        if context.workspace is not None:
+            resolved = path.resolve()
+            # Read at call time, not imported by name: tests redirect it.
+            private = [folder.resolve() for folder in (context.state, cli_config.GLOBAL_DIR)]
+            if (
+                context.workspace.contains(resolved)
+                and not any(folder == resolved or folder in resolved.parents for folder in private)
+                and _BREAKS_CHIP.search(str(resolved)) is None
+            ):
+                # No size limit: nothing is written, and read_image scales what it sends.
+                # Absolute, never relative to the root: the message is kept in the
+                # history, and a conversation resumed from another folder would read
+                # that folder's file of the same name instead of being refused.
+                with self._lock:
+                    return self._register(AttachedImage(shown=str(resolved), in_place=True))
+
+        if path.stat().st_size > MAX_ATTACHED_BYTES:
+            raise AttachmentError(f"'{path}' is over {MAX_ATTACHED_BYTES // 1_000_000} MB.")
         suffix = path.suffix.lower()
         if not _SUFFIX.fullmatch(suffix):
             suffix = f".{image_format.lower()}"
         with self._lock:
-            target = self._target(place, path.stem, suffix)
+            target = self._target(context, path.stem, suffix)
             try:
                 shutil.copyfile(path, target)
             except OSError as e:
                 get_logger().debug(f"attachments: could not copy an image, detail: {e}")
                 raise AttachmentError(f"'{path}' could not be copied.") from None
-            return self._register(target)
+            return self._register(AttachedImage(shown=str(target), in_place=False))
 
     def add_image(self, image: Image.Image) -> str:
         """Save an image from the clipboard as PNG and return its chip."""
-        place = self.check()
+        context = self.context()
         if image.mode not in ("1", "L", "LA", "I", "P", "RGB", "RGBA"):
             image = image.convert("RGBA")
         with self._lock:
-            target = self._target(place, "pasted", ".png", numbered=True)
+            target = self._target(context, "pasted", ".png", numbered=True)
             try:
                 image.save(target, "PNG")
             except (OSError, ValueError) as e:
                 get_logger().debug(f"attachments: could not save a pasted image, detail: {e}")
                 raise AttachmentError("The image in the clipboard could not be saved.") from None
-            return self._register(target)
+            return self._register(AttachedImage(shown=str(target), in_place=False))
 
     def from_clipboard(self) -> list[str]:
         """Attach what the clipboard holds: an image, or image files copied in a file
         manager. Blocking (a command on macOS and Linux), so it runs in a thread."""
-        self.check()
+        self.context()
         if sys.platform == "darwin":
             copied = _clipboard_file()
             if copied is not None:
@@ -273,12 +324,13 @@ class Attachments:
         no attachment (typed by hand) is left as written."""
 
         def named(match: re.Match[str]) -> str:
-            path = self._paths.get(int(match.group(1)))
-            if path is None:
+            image = self._images.get(int(match.group(1)))
+            if image is None:
                 return match.group(0)
-            return (
-                f"[Image #{match.group(1)}, attached by the user: {path}. "
-                "Look at it with read_image.]"
-            )
+            if image.in_place:
+                where = "attached by the user, in the workspace"
+            else:
+                where = "attached by the user"
+            return f"[Image #{match.group(1)}, {where}: {image.shown}. Look at it with read_image.]"
 
         return CHIP.sub(named, text)

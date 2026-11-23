@@ -968,12 +968,18 @@ class TestAttachingImagesInTheEditor:
 
     @staticmethod
     def _attachments(tmp_path: Path, *, readable: bool = True) -> Any:
-        from domyn.agents.interfaces.cli.attachments import Attachments, Place
+        from domyn.agents.interfaces.cli.attachments import AttachmentContext, Attachments
+        from domyn.agents.tools.builtin.workspace import Workspace
 
         state = tmp_path / "state"
         state.mkdir(exist_ok=True)
-        place = Place(state=state, folder=state / "conversations" / "c1" / "attachments")
-        return Attachments(lambda: place if readable else None)
+        (tmp_path / "work").mkdir(exist_ok=True)
+        context = AttachmentContext(
+            state=state,
+            folder=state / "conversations" / "c1" / "attachments",
+            workspace=Workspace.at(tmp_path / "work"),
+        )
+        return Attachments(lambda: context if readable else None)
 
     @staticmethod
     def _picture(tmp_path: Path) -> Path:
@@ -996,6 +1002,22 @@ class TestAttachingImagesInTheEditor:
         assert sent.startswith("[Image #1, attached by the user: ")
         assert str(tmp_path / "state" / "conversations" / "c1" / "attachments") in sent
         assert sent.endswith("Look at it with read_image.] what is it?")
+
+    @pytest.mark.asyncio
+    async def test_a_pasted_path_in_the_workspace_is_named_in_place(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
+            session.attachments = self._attachments(tmp_path)
+            shot = self._picture(tmp_path / "work")
+            dragged = str(shot).replace(" ", "\\ ")
+            keys.send_text(f"\x1b[200~{dragged}\x1b[201~what is it?\r")
+            sent = await session.ask()
+        assert sent == (
+            f"[Image #1, attached by the user, in the workspace: {shot.resolve()}. "
+            "Look at it with read_image.] what is it?"
+        )
+        assert not (tmp_path / "state" / "conversations").exists()
 
     @pytest.mark.asyncio
     async def test_a_pasted_text_is_pasted_as_before(

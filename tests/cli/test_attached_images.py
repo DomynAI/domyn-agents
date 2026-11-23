@@ -13,6 +13,7 @@ from rich.console import Console
 
 from domyn.agents import Agent
 from domyn.agents.interfaces.cli import Theme
+from domyn.agents.interfaces.cli import config as cli_config
 from domyn.agents.interfaces.cli.attachments import AttachmentError
 from domyn.agents.interfaces.cli.prompt import InputSession
 from domyn.agents.interfaces.cli.repl import Repl
@@ -137,6 +138,45 @@ class TestAnAttachedImage:
         )
         assert result.success, result.error
         assert result.data == "A red square."
+
+    @pytest.mark.asyncio
+    async def test_one_in_the_workspace_is_named_in_place(
+        self, tmp_path: Path, state_dir: Path
+    ) -> None:
+        (tmp_path / "work" / "docs").mkdir(parents=True)
+        shot = _picture(tmp_path / "work" / "docs" / "shot.png")
+        repl, model = _repl(tmp_path, shot, "what is this?")
+        assert await repl.run() == 0
+
+        assert not (state_dir / "conversations" / repl._state.conversation_id).exists()
+        sent = _user_text(model)
+        assert f"[Image #1, attached by the user, in the workspace: {shot.resolve()}." in sent
+
+        tool = repl._agent.get_tool_by_name("read_image")
+        assert tool is not None
+        result = await tool.execute(
+            path=str(shot.resolve()),
+            query="What is it?",
+            conversation_id=repl._state.conversation_id,
+        )
+        assert result.success, result.error
+        assert result.data == "A red square."
+
+    @pytest.mark.asyncio
+    async def test_one_below_the_global_folder_is_copied(
+        self, tmp_path: Path, state_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A container whose workspace holds ~/.domyn hides it."""
+        global_dir = tmp_path / "work" / ".domyn"
+        global_dir.mkdir(parents=True)
+        monkeypatch.setattr(cli_config, "GLOBAL_DIR", global_dir)
+        shot = _picture(global_dir / "shot.png")
+        repl, model = _repl(tmp_path, shot, "what is this?")
+        await repl.run()
+
+        folder = state_dir / "conversations" / repl._state.conversation_id / "attachments"
+        [copy] = folder.iterdir()
+        assert f"[Image #1, attached by the user: {copy}." in _user_text(model)
 
     @pytest.mark.asyncio
     async def test_refused_for_a_model_that_does_not_read_images(self, tmp_path: Path) -> None:

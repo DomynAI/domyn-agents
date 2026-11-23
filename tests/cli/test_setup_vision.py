@@ -27,6 +27,8 @@ URL = "http://vllm.test:8000/v1/chat/completions"
 ANSWER = {"choices": [{"message": {"content": "Red."}}], "usage": {"completion_tokens": 1}}
 VLLM = ["vllm", "m", URL, "", "", ""]
 """Provider, model, URL, key, max tokens, context window; the built-in skills follow."""
+NOT_SUPPORTED = "not supported for this model (if not expected doublecheck the parameters)"
+"""What setup says for any failed probe: a refusal, an error, no answer at all."""
 
 # Captured before the CLI conftest replaces it for every other wizard test.
 _REAL_KEEP = setup._keep
@@ -85,66 +87,47 @@ class TestTheProbe:
         # Not a single pixel: some image processors refuse an image smaller than a patch.
         assert Image.open(io.BytesIO(base64.b64decode(encoded))).size == (64, 64)
 
-    @respx.mock
-    def test_a_refusal_is_reported_with_what_the_server_said(self) -> None:
-        respx.post(URL).mock(
-            return_value=httpx.Response(400, text='{"error": "m is not a multimodal model"}')
-        )
-
-        rejection = setup._image_rejection(cfg.ProviderConfig(type="vllm", model_name="m", url=URL))
-
-        assert rejection is not None
-        assert rejection.startswith("HTTP 400")
-        assert "not a multimodal model" in rejection
-
     @pytest.mark.parametrize(
-        ("body", "shown"),
+        "response",
         [
             pytest.param(
-                {"error": {"message": "m is not a multimodal model", "type": "BadRequestError"}},
-                "m is not a multimodal model",
+                httpx.Response(
+                    400,
+                    json={"error": {"message": "m is not a multimodal model", "type": "Bad"}},
+                ),
                 id="openai, litellm, openrouter, recent vllm",
             ),
             pytest.param(
-                {
-                    "type": "error",
-                    "error": {"type": "invalid_request_error", "message": "images not allowed"},
-                },
-                "images not allowed",
+                httpx.Response(
+                    400,
+                    json={
+                        "type": "error",
+                        "error": {"type": "invalid_request_error", "message": "images not allowed"},
+                    },
+                ),
                 id="anthropic",
             ),
             pytest.param(
-                {"object": "error", "message": "m is not a multimodal model", "code": 400},
-                "m is not a multimodal model",
+                httpx.Response(
+                    400, json={"object": "error", "message": "not multimodal", "code": 400}
+                ),
                 id="older vllm",
             ),
-            pytest.param({"detail": "Unsupported content"}, "Unsupported content", id="fastapi"),
-            pytest.param({"error": "images not supported"}, "images not supported", id="plain"),
+            pytest.param(httpx.Response(400, json={"detail": "Unsupported"}), id="fastapi"),
+            pytest.param(httpx.Response(400, text="Bad Request:\r\n  no images"), id="not json"),
+            pytest.param(httpx.Response(401, text="invalid key"), id="another status"),
         ],
     )
     @respx.mock
-    def test_a_refusal_shows_the_message_not_the_body(self, body: Any, shown: str) -> None:
-        respx.post(URL).mock(return_value=httpx.Response(400, json=body))
+    def test_a_refusal_is_one_fixed_line_whatever_the_server_said(
+        self, response: httpx.Response
+    ) -> None:
+        """The server's body is never shown: it can carry details of the deployment."""
+        respx.post(URL).mock(return_value=response)
 
         rejection = setup._image_rejection(cfg.ProviderConfig(type="vllm", model_name="m", url=URL))
 
-        assert rejection == f"HTTP 400: {shown}"
-
-    @pytest.mark.parametrize(
-        ("text", "shown"),
-        [
-            pytest.param("Bad Request:\r\n  no images", "Bad Request: no images", id="not json"),
-            pytest.param('{"code": 400}', '{"code": 400}', id="json without a message"),
-            pytest.param('["no", "images"]', '["no", "images"]', id="json not an object"),
-        ],
-    )
-    @respx.mock
-    def test_a_body_with_no_message_is_shown_on_one_line(self, text: str, shown: str) -> None:
-        respx.post(URL).mock(return_value=httpx.Response(400, text=text))
-
-        rejection = setup._image_rejection(cfg.ProviderConfig(type="vllm", model_name="m", url=URL))
-
-        assert rejection == f"HTTP 400: {shown}"
+        assert rejection == NOT_SUPPORTED
 
     @respx.mock
     def test_a_refusal_logs_nothing(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -163,12 +146,12 @@ class TestTheProbe:
         assert library_logger.level == level
 
     @respx.mock
-    def test_an_endpoint_that_does_not_answer_is_named_by_what_happened(self) -> None:
+    def test_an_endpoint_that_does_not_answer_is_the_same_line(self) -> None:
         respx.post(URL).mock(side_effect=httpx.ConnectError("refused"))
 
         rejection = setup._image_rejection(cfg.ProviderConfig(type="vllm", model_name="m", url=URL))
 
-        assert rejection == "ConnectError"
+        assert rejection == NOT_SUPPORTED
 
     def test_a_provider_that_cannot_be_built_is_a_rejection_not_a_crash(self) -> None:
         """OpenAI without a key: the provider refuses to be built."""
@@ -208,7 +191,8 @@ class TestWhatSetupSaves:
         result = _run(console, theme, [*VLLM, ""], path=tmp_path / "config.yaml")
 
         assert "vision" not in result["llm_providers"][0]
-        assert "Vision: not supported by this model (HTTP 400: no images here)" in _printed(console)
+        assert f"Vision: {NOT_SUPPORTED}" in _printed(console)
+        assert "no images here" not in _printed(console)
 
     @respx.mock
     def test_changing_the_model_asks_again(

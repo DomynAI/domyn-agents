@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import json
 import logging
 import os
 import shutil
@@ -406,7 +405,7 @@ def _image_rejection(provider: ProviderConfig) -> str | None:
                 timeout=20.0,
             )
         )
-    except Exception as exc:
+    except Exception:
         return "not supported for this model (if not expected doublecheck the parameters)"
     finally:
         library_logger.setLevel(level)
@@ -2033,9 +2032,7 @@ def run_setup(
         rejection = image_rejections[(asked_with, api_key)]
         d.vision = rejection is None
         console.print(
-            "  Vision: enabled"
-            if d.vision
-            else f"  Vision: {rejection}",
+            "  Vision: enabled" if d.vision else f"  Vision: {rejection}",
             style=theme.style("meta"),
             highlight=False,
             markup=False,
