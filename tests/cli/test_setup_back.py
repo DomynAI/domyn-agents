@@ -59,7 +59,7 @@ class TestGoingBack:
     def test_a_wrong_model_name_is_fixed_from_the_next_question(
         self, console: MagicMock, theme: Theme, tmp_path: Path
     ) -> None:
-        answers = ["openai", "wrong", GoBack(), "right", "", "", "", ""]
+        answers = ["openai", "", "", "wrong", GoBack(), "right", "", ""]
 
         result = _run(console, theme, answers, tmp_path)
 
@@ -69,7 +69,7 @@ class TestGoingBack:
         self, console: MagicMock, theme: Theme, tmp_path: Path
     ) -> None:
         # Enter after going back keeps what was typed, not the config's old value.
-        answers = ["openai", "typed", GoBack(), "", "", "", "", ""]
+        answers = ["openai", "", "", "typed", GoBack(), "", "", ""]
 
         result = _run(console, theme, answers, tmp_path)
 
@@ -78,7 +78,7 @@ class TestGoingBack:
     def test_back_on_the_first_question_asks_it_again(
         self, console: MagicMock, theme: Theme, tmp_path: Path
     ) -> None:
-        answers = [GoBack(), "openai", "m", "", "", "", ""]
+        answers = [GoBack(), "openai", "", "", "m", "", ""]
 
         result = _run(console, theme, answers, tmp_path)
 
@@ -86,7 +86,7 @@ class TestGoingBack:
         assert _provider(result)["model_name"] == "m"
 
     def test_going_back_says_so(self, console: MagicMock, theme: Theme, tmp_path: Path) -> None:
-        _run(console, theme, ["openai", GoBack(), "openai", "m", "", "", "", ""], tmp_path)
+        _run(console, theme, ["openai", GoBack(), "openai", "", "", "m", "", ""], tmp_path)
 
         printed = [str(c.args[0]) for c in console.print.call_args_list if c.args]
         assert "  ← back" in printed
@@ -98,7 +98,7 @@ class TestGoingBack:
         # back to the context window.
         instructions = MagicMock(side_effect=[GoBack(), None])
         monkeypatch.setattr(setup, "_choose_instructions", instructions)
-        answers = ["openai", "m", "", "", "", "", "2000"]
+        answers = ["openai", "", "", "m", "", "", "2000"]
 
         result = _run(console, theme, answers, tmp_path)
 
@@ -108,10 +108,10 @@ class TestGoingBack:
     def test_a_step_that_asked_nothing_is_passed_over(
         self, console: MagicMock, theme: Theme, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # The key is found, so its step asks nothing: back on the max tokens goes
-        # to the URL, rather than to the key step and straight forward again.
+        # The key is found, so its step asks nothing: back on the model goes to the
+        # URL, rather than to the key step and straight forward again.
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-        answers = ["openai", "m", "http://u", GoBack(), "http://v", "", ""]
+        answers = ["openai", "http://u", GoBack(), "http://v", "m", "", ""]
 
         result = _run(console, theme, answers, tmp_path)
 
@@ -120,16 +120,41 @@ class TestGoingBack:
     def test_back_to_a_key_pasted_in_this_run_offers_it_again(
         self, console: MagicMock, theme: Theme, tmp_path: Path
     ) -> None:
-        # Back on the max tokens lands on the key just pasted, offered masked, rather
-        # than on a step that asks nothing and comes straight forward again.
-        answers = ["openai", "m", "", "sk-first", GoBack(), "sk-second", "", ""]
+        # Back on the model lands on the key just pasted, offered masked, rather than
+        # on a step that asks nothing and comes straight forward again.
+        answers = ["openai", "", "sk-first", GoBack(), "sk-second", "m", "", ""]
 
         _run(console, theme, answers, tmp_path)
 
         assert cfg.read_credentials() == {"OPENAI_API_KEY": "sk-second"}
 
+    def test_domyn_goes_back_through_the_shared_key_step(
+        self, console: MagicMock, theme: Theme, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Domyn shares the key and model steps: back on the model lands on the key pasted
+        # in this run, and back again on the configuration id, the last Domyn-only question.
+        for name in ("DOMYN_API_KEY", "DOMYN_BASE_URL", "DOMYN_SPACE_ID"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setattr(setup, "_discover_models", lambda *_: {})
+        answers = [
+            *("domyn", "https://p.example.com", "space-1", ""),
+            "dk-first",
+            GoBack(),  # on the model: back to the key
+            GoBack(),  # on the key: back to the configuration id
+            "cfg-2",
+            "dk-second",
+            "qwen",
+            *("", ""),
+        ]
+
+        result = _run(console, theme, answers, tmp_path)
+
+        assert _provider(result)["configuration_id"] == "cfg-2"
+        assert _provider(result)["model_name"] == "qwen"
+        assert cfg.read_credentials() == {"DOMYN_API_KEY": "dk-second"}
+
     def test_ctrl_c_still_aborts(self, console: MagicMock, theme: Theme, tmp_path: Path) -> None:
-        answers = ["openai", "m", GoBack(), KeyboardInterrupt()]
+        answers = ["openai", "", GoBack(), KeyboardInterrupt()]
 
         assert _run(console, theme, answers, tmp_path) is None
         assert not (tmp_path / "config.yaml").exists()
@@ -139,22 +164,23 @@ class TestAnotherProvider:
     def test_the_same_provider_keeps_what_was_typed(
         self, console: MagicMock, theme: Theme, tmp_path: Path
     ) -> None:
-        # Back from the URL to the model, then to the provider, Enter on both.
-        answers = ["openai", "m1", GoBack(), GoBack(), "", "", "", "", "", ""]
+        # Back from the key to the URL, then to the provider, Enter on both.
+        answers = ["openai", "http://u", GoBack(), GoBack(), "", "", "", "m1", "", ""]
 
         result = _run(console, theme, answers, tmp_path)
 
+        assert _provider(result)["url"] == "http://u"
         assert _provider(result)["model_name"] == "m1"
 
     def test_another_provider_forgets_what_was_typed_for_the_first(
         self, console: MagicMock, theme: Theme, tmp_path: Path
     ) -> None:
-        answers = ["vllm", "llama", GoBack(), GoBack(), "openai", "", "", "", "", ""]
+        answers = ["vllm", "http://h:8000", GoBack(), GoBack(), "openai", "", "", "", "", ""]
 
         result = _run(console, theme, answers, tmp_path)
 
         assert _provider(result)["type"] == "openai"
-        assert _provider(result)["model_name"] == ""
+        assert "url" not in _provider(result)
 
 
 class TestAStepAskedAgain:
@@ -175,7 +201,7 @@ class TestAStepAskedAgain:
             setup, "_choose_local_skills", lambda c, t, current, **k: local() or current
         )
         # Enter on the folder question asked again: the folder typed the first time.
-        answers = ["openai", "m", "", "", "", "", str(mine), ""]
+        answers = ["openai", "", "", "m", "", "", str(mine), ""]
 
         result = _run(console, theme, answers, tmp_path)
 
@@ -219,11 +245,11 @@ class TestOnATerminal:
         self, theme: Theme, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # The model step prints one row (the model names) before its question; back on
-        # the URL erases it, rather than saying "back" below.
+        # the max tokens erases it, rather than saying "back" below.
         monkeypatch.setattr(setup, "interactive_terminal", lambda: True)
         out = io.StringIO()
         console = Console(file=out, force_terminal=True)
-        answers = ["openai", "m", GoBack(), "m2", "", "", "", ""]
+        answers = ["openai", "", "", "m", GoBack(), "m2", "", ""]
 
         with patch("builtins.input", side_effect=answers):
             result = setup.run_setup(console, theme, path=tmp_path / "config.yaml")

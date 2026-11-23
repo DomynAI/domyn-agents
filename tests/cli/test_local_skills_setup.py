@@ -27,7 +27,7 @@ from domyn.agents.skills import InMemorySkillSource, LocalDirSkillSource, Skills
 AUTO = [".domyn/skills", ".agents/skills"]
 """What a yes writes, in precedence order."""
 
-FIELDS = ["openai", "m", "", "", "", ""]
+FIELDS = ["openai", "", "", "m", "", ""]
 """The answers up to the max tokens and context window; the two skill steps follow."""
 
 

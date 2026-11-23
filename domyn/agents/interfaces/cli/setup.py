@@ -1738,7 +1738,6 @@ def run_setup(
     # An import offers the project's own skills, and erases its instructions when
     # they are not kept (`_choose_project_skills`, `_choose_imported_instructions`).
     import_into = project if imported is not None else None
-    domyn_key = ProviderConfig(type="domyn", api_key_env=PROVIDER_HINTS["domyn"].get("env"))
     # The space's models by what they were asked with. Outside the draft, so going
     # back over the lookup does not ask the platform again.
     domyn_models: dict[tuple[str, ...], dict[str, str]] = {}
@@ -1839,7 +1838,7 @@ def run_setup(
 
     def choose_domyn_model(d: _Draft) -> None:
         settings = PlatformSettings(
-            api_key=resolve_api_key(domyn_key) or "",
+            api_key=resolve_api_key(endpoint_key(d)) or "",
             space_id=d.space_id,
             base_url=d.url,
             configuration_id=d.configuration_id or None,
@@ -1875,7 +1874,16 @@ def run_setup(
             api_key_env=PROVIDER_HINTS.get(d.provider_type, {}).get("env", "LLM_API_KEY"),
         )
 
-    def choose_endpoint_model(d: _Draft) -> None:
+    def choose_model(d: _Draft) -> None:
+        """Picked from the models the connection just given lists: the space's for Domyn,
+        the endpoint's `/models` for an OpenAI-compatible one, which also checks the URL
+        and the key. Typed for a hosted API, and wherever the listing comes back empty."""
+        if d.provider_type == "domyn":
+            choose_domyn_model(d)
+            return
+        if d.provider_type not in OPENAI_COMPATIBLE:
+            ask_model(d)
+            return
         api_key = resolve_api_key(endpoint_key(d)) or ""
         asked_with = (d.url, api_key)
         if asked_with not in endpoint_models:
@@ -2118,33 +2126,22 @@ def run_setup(
     def asks_domyn(d: _Draft) -> bool:
         return not d.keep_model and d.provider_type == "domyn"
 
-    def asks_other(d: _Draft) -> bool:
-        return not d.keep_model and d.provider_type not in ("domyn", *OPENAI_COMPATIBLE)
-
-    def asks_endpoint(d: _Draft) -> bool:
-        return not d.keep_model and d.provider_type in OPENAI_COMPATIBLE
+    def asks_url(d: _Draft) -> bool:
+        return not d.keep_model and d.provider_type != "domyn"
 
     model_steps = [
         _Step("keep model", keep_model, lambda d: ask_keep_model),
         _Step("provider", choose_provider, asks_model),
-        _Step("model", ask_model, asks_other),
+        # One connection → model sequence for every provider: where, with what key, then
+        # the model, since the connection decides which models there are and the listed
+        # ones are asked with it. Domyn's URL is the platform's, and its space and
+        # configuration come between URL and key.
+        _Step("url", ask_url, asks_url),
         _Step("platform url", ask_platform_url, asks_domyn),
         _Step("space id", ask_space_id, asks_domyn),
         _Step("configuration id", ask_configuration_id, asks_domyn),
-        # The connection comes before the model: it is what the space's models are asked with.
-        _Step("domyn api key", lambda d: _ensure_api_key(console, theme, domyn_key), asks_domyn),
-        _Step("domyn model", choose_domyn_model, asks_domyn),
-        _Step("url", ask_url, asks_other),
-        _Step("api key", lambda d: _ensure_api_key(console, theme, endpoint_key(d)), asks_other),
-        # An OpenAI-compatible endpoint: URL and key first, then the models it lists,
-        # which also checks both before the first message.
-        _Step("endpoint url", ask_url, asks_endpoint),
-        _Step(
-            "endpoint api key",
-            lambda d: _ensure_api_key(console, theme, endpoint_key(d)),
-            asks_endpoint,
-        ),
-        _Step("endpoint model", choose_endpoint_model, asks_endpoint),
+        _Step("api key", lambda d: _ensure_api_key(console, theme, endpoint_key(d)), asks_model),
+        _Step("model", choose_model, asks_model),
         _Step("max tokens", ask_max_tokens, asks_model),
         _Step("context window", ask_context_window, asks_model),
         # Asks nothing, and runs for a kept model too: a config written before

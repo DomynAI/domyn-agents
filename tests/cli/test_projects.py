@@ -615,7 +615,7 @@ class TestPathsInAProject:
 
         monkeypatch.setattr(cli_setup, "_choose_builtin_skills", _skills)
         monkeypatch.setattr(select_mod, "_interactive", lambda theme: False)
-        answers = iter(["vllm", "m", "http://x/v1/chat/completions", "", "", "", "", ""])
+        answers = iter(["vllm", "http://x/v1/chat/completions", "", "m", "", "", "", ""])
         monkeypatch.setattr("builtins.input", lambda *_: next(answers, ""))
 
         saved = cli_setup.run_setup(
