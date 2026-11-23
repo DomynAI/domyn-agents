@@ -640,19 +640,29 @@ def build_discover(conversation: str = "", *, home: str = HOME) -> str:
     running, still writing, unreachable. Now it is one listing away.
     """
     d = shlex.quote(f"{home}/{safe_id(conversation)}")
+    # Builtins wherever POSIX sh has one, and one stat for every log at the end:
+    # under Git Bash every program started costs tens of milliseconds, and the
+    # ten each process took here made /ps wait 0.7s for every command the
+    # conversation ever started (7s for ten).
     return (
+        "N=$(date +%s); "
         f"for p in {d}/*/; do "
-        f'[ -d "$p" ] || continue; '
-        f'h=$(basename "$p"); '
-        f'P=$(cat "$p/run.pid" 2>/dev/null); '
-        f'if kill -0 "$P" 2>/dev/null; then A=1; else A=0; fi; '
-        f'echo "P $h $A $(cat "$p/run.exit" 2>/dev/null || echo -) '
-        f'$([ -f "$p/run.killed" ] && echo 1 || echo 0) '
-        f'$(cat "$p/run.started" 2>/dev/null || echo 0) $(date +%s) '
-        f'$(stat -c %Y "$p/out.log" 2>/dev/null || stat -f %m "$p/out.log" 2>/dev/null || echo 0) '
-        f'$(wc -c < "$p/out.log" 2>/dev/null | tr -d " " || echo 0)"; '
-        f'echo "C $h $(head -c 200 "$p/cmd.sh" 2>/dev/null | tr "\n" " ")"; '
-        f"done"
+        '[ -d "$p" ] || continue; '
+        "p=${p%/}; h=${p##*/}; "
+        'P=; [ -f "$p/run.pid" ] && read -r P < "$p/run.pid"; '
+        'if [ -n "$P" ] && kill -0 "$P" 2>/dev/null; then A=1; else A=0; fi; '
+        'X=; [ -f "$p/run.exit" ] && read -r X < "$p/run.exit"; '
+        'K=0; [ -f "$p/run.killed" ] && K=1; '
+        'T=; [ -f "$p/run.started" ] && read -r T < "$p/run.started"; '
+        'echo "P $h $A ${X:--} $K ${T:-0} $N"; '
+        "C=; L=; "
+        'if [ -f "$p/cmd.sh" ]; then '
+        'while [ ${#C} -lt 200 ] && { IFS= read -r L || [ -n "$L" ]; }; do C="$C$L "; L=; done '
+        '< "$p/cmd.sh"; fi; '
+        'echo "C $h $C"; '
+        "done; "
+        f"stat -c 'S %Y %s %n' {d}/*/out.log 2>/dev/null "
+        f"|| stat -f 'S %m %z %N' {d}/*/out.log 2>/dev/null; true"
     )
 
 
@@ -664,6 +674,15 @@ def parse_discover(output: str) -> dict[str, dict[str, Any]]:
     we cannot describe, never a failure.
     """
     found: dict[str, dict[str, Any]] = {}
+    # Each log's modification time and size, from the one stat at the end:
+    # `S <mtime> <bytes> <path>`, the path last since it may hold spaces.
+    logs: dict[str, str] = {}
+    for line in output.splitlines():
+        bits = line.split(" ", 3)
+        if len(bits) == 4 and bits[0] == "S" and bits[1].isdigit() and bits[2].isdigit():
+            parts = re.split(r"[\\/]", bits[3].rstrip())
+            if len(parts) >= 2:
+                logs[parts[-2]] = f"{bits[1]} {bits[2]}"
     for line in output.splitlines():
         bits = line.split(" ", 2)
         if len(bits) < 2:
@@ -673,11 +692,18 @@ def parse_discover(output: str) -> dict[str, dict[str, Any]]:
         if not HANDLE.fullmatch(handle):
             continue
         if kind == "P":
-            facts = parse_sweep(f"{handle} {bits[2] if len(bits) > 2 else ''}")
+            rest = bits[2] if len(bits) > 2 else ""
+            # Five facts, the log's two from the stat; seven when a listing still
+            # carries them on the line, as it did before.
+            if len(rest.split()) == 5:
+                rest = f"{rest} {logs.get(handle, '0 0')}"
+            facts = parse_sweep(f"{handle} {rest}")
             if handle in facts:
                 found.setdefault(handle, {}).update(facts[handle])
-        elif (kind == "C" and handle in found) or kind == "C":
-            found.setdefault(handle, {})["command"] = (bits[2] if len(bits) > 2 else "").strip()
+        elif kind == "C":
+            found.setdefault(handle, {})["command"] = (bits[2] if len(bits) > 2 else "").strip()[
+                :200
+            ]
     return {h: v for h, v in found.items() if "running" in v}
 
 

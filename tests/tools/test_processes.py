@@ -990,6 +990,32 @@ class TestTheFilesystemIsTheTruth:
         assert len(found) == 2
         assert {v["command"] for v in found.values()} == {"sleep 30", "echo done"}
         assert sum(1 for v in found.values() if v["running"]) == 1
+        # The log's size from the one stat at the end, joined to its process.
+        assert all(v["out_bytes"] >= 0 for v in found.values())
+
+    def test_each_log_is_matched_to_its_process_whatever_the_path(self) -> None:
+        """One stat for every log, `S <mtime> <bytes> <path>`: a Windows path with
+        spaces and a POSIX one alike. A listing with the log's facts still on the
+        process line, as it was written before, reads as it did."""
+        found = processes.parse_discover(
+            "\n".join(
+                [
+                    "P abcd1234 0 0 0 1700000000 1700000100",
+                    "C abcd1234 sleep 30",
+                    r"S 1700000050 70 C:\Users\me x\processes\c1\abcd1234\out.log",
+                    "P 0123abcd 1 - 0 1700000000 1700000100",
+                    "C 0123abcd echo hi",
+                    "S 1700000060 12 /home/me/processes/c1/0123abcd/out.log",
+                    "P 0a0a0a0a 1 - 0 880 1000 970 42",
+                    "C 0a0a0a0a written before",
+                ]
+            )
+        )
+        assert {h: (v["out_bytes"], v["idle_s"], v["command"]) for h, v in found.items()} == {
+            "abcd1234": (70, 50, "sleep 30"),
+            "0123abcd": (12, 40, "echo hi"),
+            "0a0a0a0a": (42, 30, "written before"),
+        }
 
     @pytest.mark.asyncio
     async def test_it_does_not_see_another_conversation(self, backend: LocalBackend) -> None:
