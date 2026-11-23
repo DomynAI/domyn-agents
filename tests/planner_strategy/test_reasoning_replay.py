@@ -37,9 +37,13 @@ from domyn.agents.llm.openai import OpenAIProvider
 from domyn.agents.planner_strategy import PlannerStrategyFactory
 from domyn.agents.planner_strategy.context_management.budget import HeuristicEstimator
 from domyn.agents.planner_strategy.context_management.compaction import (
+    CompactionConfig,
     CompactionPolicy,
     Compactor,
+    ConversationSummarizer,
     PruneOnlyCompaction,
+    TwoPhaseCompaction,
+    build_compactor,
 )
 from domyn.agents.planner_strategy.context_management.tool_use import (
     ToolUseWithThoughtContextManager,
@@ -439,3 +443,98 @@ def test_reasoning_brings_compaction_to_its_threshold() -> None:
 
     assert compactor.assess(bare, agent).needed is False
     assert compactor.assess(with_reasoning, agent).needed is True
+
+
+class TestTheSummarizer:
+    """A message sent back with the reasoning has no short thoughts as its text:
+    the summarizer reads them from the calls' arguments, or the calls reach it with
+    no reason behind them. The whole reasoning is not read."""
+
+    @pytest.mark.asyncio
+    async def test_reads_the_short_thoughts_not_the_reasoning(self) -> None:
+        provider = _Script(replies=[_answer("summary")])
+        calls = LLMMessage(
+            role="assistant",
+            tool_calls=[_call(0, "a", "look at a"), _call(1, "b", "look at b")],
+            reasoning_content=REASONING,
+        )
+
+        await ConversationSummarizer().summarize([calls], llm_provider=provider)
+
+        transcript = provider.requests[0][-1].content or ""
+        assert "assistant: look at a\nlook at b (calls: look, look)" in transcript
+        assert REASONING not in transcript
+
+    @pytest.mark.parametrize("sent", [True, False])
+    @pytest.mark.asyncio
+    async def test_reads_the_same_whether_the_reasoning_was_sent_or_not(self, sent: bool) -> None:
+        """Sent, the thoughts are only in the arguments; not sent, they are the
+        message's text too, and are not read twice."""
+        provider = _Script(replies=[_calls(), _answer("done")], send_reasoning=sent)
+        await _turn(Runner(), _agent(provider), "list a and b", f"summary {sent}")
+        (calls,) = _assistants_with_calls(provider.requests[1])
+        summarizer = _Script(replies=[_answer("summary")])
+
+        await ConversationSummarizer().summarize([calls], llm_provider=summarizer)
+
+        transcript = summarizer.requests[0][-1].content or ""
+        assert transcript.endswith("assistant: look at a\nlook at b (calls: look, look)")
+
+
+class TestTheSummarizerReadingTheReasoning:
+    """`read_full_reasoning` reads the whole reasoning in place of the short thoughts."""
+
+    @pytest.mark.asyncio
+    async def test_reads_it_in_place_of_the_thoughts(self) -> None:
+        provider = _Script(replies=[_answer("summary")])
+        calls = LLMMessage(
+            role="assistant",
+            tool_calls=[_call(0, "a", "look at a"), _call(1, "b", "look at b")],
+            reasoning_content=REASONING,
+        )
+
+        await ConversationSummarizer(read_full_reasoning=True).summarize(
+            [calls], llm_provider=provider
+        )
+
+        transcript = provider.requests[0][-1].content or ""
+        assert transcript.endswith(f"assistant: (calls: look, look)\n(reasoning: {REASONING})")
+        assert "look at a\nlook at b" not in transcript
+
+    @pytest.mark.asyncio
+    async def test_without_reasoning_on_the_message_reads_the_thoughts(self) -> None:
+        provider = _Script(replies=[_answer("summary")])
+        calls = LLMMessage(role="assistant", tool_calls=[_call(0, "a", "look at a")])
+
+        await ConversationSummarizer(read_full_reasoning=True).summarize(
+            [calls], llm_provider=provider
+        )
+
+        assert (provider.requests[0][-1].content or "").endswith("look at a (calls: look)")
+
+    @pytest.mark.asyncio
+    async def test_a_cut_takes_the_reasoning_before_the_text(self) -> None:
+        provider = _Script(replies=[_answer("summary")])
+        answer = LLMMessage(role="assistant", content="the answer", reasoning_content="x" * 500)
+
+        await ConversationSummarizer(read_full_reasoning=True, max_chars_per_message=100).summarize(
+            [answer], llm_provider=provider
+        )
+
+        transcript = provider.requests[0][-1].content or ""
+        assert "assistant: the answer\n(reasoning: xxx" in transcript
+        assert transcript.endswith("…(truncated)")
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_it_is_read_from_a_compactor_config(self, value: bool) -> None:
+        compactor = build_compactor(CompactionConfig(read_full_reasoning=value))
+
+        assert isinstance(compactor.strategy, TwoPhaseCompaction)
+        assert compactor.strategy.summarizer.read_full_reasoning is value
+
+    def test_off_by_default(self) -> None:
+        compactor = build_compactor(CompactionConfig())
+
+        assert isinstance(compactor.strategy, TwoPhaseCompaction)
+        assert compactor.strategy.summarizer.read_full_reasoning is False
+        assert "read_full_reasoning" not in CompactionConfig().model_dump(exclude_none=True)

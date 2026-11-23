@@ -14,6 +14,7 @@ Two properties hold for every strategy and are not negotiable:
   history is used. Compressing when it is not needed is a free loss.
 """
 
+import json
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
@@ -1524,6 +1525,16 @@ class ConversationSummarizer(BaseModel):
         "not in the text. Write prose, not a transcript."
     )
     user_preamble: str = "Summarize this conversation:\n\n"
+    read_full_reasoning: bool = Field(
+        default=False,
+        description=(
+            "Read the model's whole reasoning on an assistant message that carries "
+            "it, instead of each call's short thought: a fuller account of why, at "
+            "many more characters, cut first by `max_chars_per_message`. Only "
+            "reasoning that is sent back is on the messages (`send_reasoning`): "
+            "without it, the short thoughts are read either way."
+        ),
+    )
     max_chars_per_message: int = Field(
         default=2_000,
         gt=0,
@@ -1585,9 +1596,31 @@ class ConversationSummarizer(BaseModel):
     def _render(self, message: LLMMessage) -> str:
         """One message as plain text, for the summarizer to read."""
         body = message.content if isinstance(message.content, str) else ""
+        reasoning = (message.reasoning_content or "").strip() if self.read_full_reasoning else ""
         if message.tool_calls:
             names = ", ".join(call.function.name for call in message.tool_calls)
+            # A message sent back with the model's reasoning has no short thoughts
+            # as its text: they are only in each call's `reasoning` argument
+            # (`tool_use_thought`), and without them a call reaches the summary
+            # with no reason behind it. They are read as the text the message has
+            # when the reasoning is not sent; the whole reasoning only with
+            # `read_full_reasoning`, as the thoughts say why in a fraction of the
+            # characters.
+            if not body.strip() and not reasoning:
+                thoughts = []
+                for call in message.tool_calls:
+                    try:
+                        arguments = json.loads(call.function.arguments or "{}")
+                    except json.JSONDecodeError:
+                        continue
+                    thought = arguments.get("reasoning") if isinstance(arguments, dict) else None
+                    if isinstance(thought, str) and thought.strip():
+                        thoughts.append(thought.strip())
+                body = "\n".join(thoughts)
             body = f"{body} (calls: {names})".strip()
+        # Last, so the cap below cuts it before the text and the calls.
+        if reasoning:
+            body = f"{body}\n(reasoning: {reasoning})".strip()
         if not body:
             return ""
         if len(body) > self.max_chars_per_message:
@@ -1927,6 +1960,14 @@ class CompactionConfig(BaseModel):
         default=None,
         description="Recent conversation left untouched. `None` uses the framework default.",
     )
+    read_full_reasoning: bool | None = Field(
+        default=None,
+        description=(
+            "Summarize from the model's whole reasoning instead of the short "
+            "thoughts of its calls (`ConversationSummarizer.read_full_reasoning`). Only "
+            "`two_phase` summarizes. `None` uses the framework default, off."
+        ),
+    )
 
 
 def build_compactor(config: CompactionConfig) -> Compactor:
@@ -1949,4 +1990,8 @@ def build_compactor(config: CompactionConfig) -> Compactor:
         policy.reserve_tokens = config.reserve_tokens
     if config.keep_recent_tokens is not None:
         policy.keep_recent_tokens = config.keep_recent_tokens
+    if config.read_full_reasoning is not None and isinstance(strategy, TwoPhaseCompaction):
+        strategy.summarizer = strategy.summarizer.model_copy(
+            update={"read_full_reasoning": config.read_full_reasoning}
+        )
     return Compactor(strategy=strategy, policy=policy)
