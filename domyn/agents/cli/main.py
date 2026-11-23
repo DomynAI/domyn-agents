@@ -1,7 +1,5 @@
 from dotenv import find_dotenv, load_dotenv
 
-from domyn.agents.cli.cli import app
-
 
 def _load_dotenv() -> None:
     """Load a .env file from the working directory (or a parent of it), if present.
@@ -37,6 +35,15 @@ def _load_credentials() -> None:
 
 
 def cli() -> None:
+    # Before the commands are imported: each makes a rich Console when imported, and
+    # on Windows rich settles on the console API's sixteen colours for good if the
+    # console does not take escape sequences yet at that moment.
+    from domyn.agents.interfaces.cli.theme import enable_escape_sequences
+
+    enable_escape_sequences()
+
+    from domyn.agents.cli.cli import app
+
     _load_dotenv()
     _load_credentials()
     app()

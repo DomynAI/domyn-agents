@@ -1,0 +1,7 @@
+# Shell scripts and files they source keep LF on every checkout. Git for Windows
+# converts to CRLF by default (core.autocrlf), and bash stops at the first `\r`: the
+# standalone build would fail on a Windows runner, the checksums it reads from the
+# lock would end in `\r`, and the install.sh it copies into the release would break
+# the installer for every macOS and Linux user.
+*.sh text eol=lf
+scripts/agent_browser.lock text eol=lf

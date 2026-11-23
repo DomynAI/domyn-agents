@@ -423,18 +423,22 @@ compact_once() {{
     # what the command wrote meanwhile; when it finished meanwhile that was its
     # end, the part the tail is kept for, and the wrapper's last pass, waiting on
     # the lock, found nothing left to save. Seen on Windows, where every process
-    # of the pass starts slowly: 5,000 last lines of 300,000 gone. Twenty rounds at
-    # most: a command that finished is still by the second, and one writing faster
-    # than this can read would otherwise be chased, the copy growing, until it ends.
+    # of the pass starts slowly: 5,000 last lines of 300,000 gone. Bounded by what
+    # it adds, one tail's worth, and by rounds: a command that finished is still by
+    # the second look, while one still writing fast would be chased, the copy
+    # growing to the whole log, which then went unread while it was rewritten.
     if head -c "$s" "$f" | tail -c {tail_bytes} > "$f.part"; then
+      # Read first: between the last look at the size and the rewrite, nothing
+      # else may start a process, each one tens of milliseconds under Git Bash.
+      prev=$(cat "$f.cut" 2>/dev/null || echo 0)
       e=$s
       for _ in $(seq 20); do
         n=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
         [ "${{n:-0}}" -gt "$e" ] || break
         tail -c +$(( e + 1 )) "$f" | head -c $(( n - e )) >> "$f.part"
         e=$n
+        [ $(( e - s )) -lt {tail_bytes} ] || break
       done
-      prev=$(cat "$f.cut" 2>/dev/null || echo 0)
       cat "$f.part" > "$f"
       rm -f "$f.part"
       echo $(( prev + s - {tail_bytes} )) > "$f.cut"

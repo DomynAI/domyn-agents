@@ -51,14 +51,33 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             alpine: true
+          # Windows x64, built in Git Bash and installed with install.ps1. Windows
+          # on ARM runs it emulated: some dependencies have no win_arm64 wheel.
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            windows: true
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.alpine && 30 || 10 }}
+    timeout-minutes: ${{ (matrix.alpine || matrix.windows) && 30 || 10 }}
+    defaults:
+      run:
+        # Git Bash on Windows, where the default is PowerShell; bash elsewhere anyway.
+        shell: bash
     permissions:
       contents: read
       id-token: write      # provenance attestation
       attestations: write
 
     steps:
+      # The docs skill's pages are a symlink to docs/docs, which Git for Windows
+      # checks out as a text file unless told otherwise (the build checks it).
+      # Files as committed, too: .gitattributes keeps the scripts LF, and this
+      # keeps anything else bash or the archive reads from turning CRLF.
+      - name: Check out symlinks as symlinks, and files as committed
+        if: ${{ matrix.windows }}
+        run: |
+          git config --global core.symlinks true
+          git config --global core.autocrlf false
+
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -94,6 +113,7 @@ jobs:
             '
 
       - name: Smoke test
+        if: ${{ !matrix.windows }}
         env:
           # A clean Alpine, without the compilers and libraries of the build.
           IMAGE: ${{ matrix.alpine && 'alpine:3.22' || '' }}
@@ -126,6 +146,32 @@ jobs:
             sh "$RUNNER_TEMP/smoke.sh"
           fi
 
+      # With the Windows PowerShell 5.1 every Windows has, run as a file so a
+      # failure is the exit code; `irm | iex` runs the same function.
+      - name: Smoke test (Windows)
+        if: ${{ matrix.windows }}
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'smoke'
+          $env:DOMYN_HOME = Join-Path $root 'runtime'
+          $env:DOMYN_BIN_DIR = Join-Path $root 'bin'
+          powershell -NoProfile -ExecutionPolicy Bypass -File dist/standalone/install.ps1 dist/standalone
+          if ($LASTEXITCODE) { exit 1 }
+          $got = & (Join-Path $env:DOMYN_BIN_DIR 'domyn.exe') --version | Select-Object -Last 1
+          if ($LASTEXITCODE) { exit 1 }
+          "installed $got"
+          # The browser tools' program ships in the runtime; Chrome is downloaded on first use.
+          & (Join-Path $env:DOMYN_HOME 'python\bin\agent-browser.exe') --version
+          if ($LASTEXITCODE) { exit 1 }
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $want = $env:GITHUB_REF_NAME.TrimStart('v')
+            "expected $want"
+            & (Join-Path $env:DOMYN_HOME 'python\python.exe') -c `
+              'import sys; from pip._vendor.packaging.version import Version; sys.exit(Version(sys.argv[1]) != Version(sys.argv[2]))' `
+              $got $want
+            if ($LASTEXITCODE) { exit 1 }
+          }
+
       # Verifiable with `gh attestation verify <archive> --repo <owner>/<repo>`.
       # Public repositories only on GitHub's plans, so skipped while private.
       - name: Attest provenance
@@ -142,6 +188,7 @@ jobs:
             dist/standalone/domyn-${{ matrix.target }}.tar.gz
             dist/standalone/domyn-${{ matrix.target }}.tar.gz.sha256
             dist/standalone/install.sh
+            dist/standalone/install.ps1
           if-no-files-found: error
 
   release:

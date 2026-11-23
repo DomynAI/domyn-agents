@@ -536,7 +536,7 @@ class BrowserSessions:
         """The agent-browser to run. On this machine the copy that ships with the
         standalone build when it is not on ``PATH``; anywhere else (a container image)
         the one on that machine's ``PATH``, which this machine's paths say nothing about."""
-        if self.backend.name == "local":
+        if self.backend.name in ("local", "git_bash"):
             return browser_install.resolve_binary(self.options.binary)
         return self.options.binary
 

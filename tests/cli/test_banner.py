@@ -15,6 +15,7 @@ from rich.console import Console
 
 from domyn.agents.interfaces.cli import Capabilities, Theme, render_banner
 from domyn.agents.interfaces.cli import banner as banner_mod
+from domyn.agents.interfaces.cli import theme as theme_mod
 
 
 def _theme(*, color: bool = True, unicode: bool = True, animation: bool = False) -> Theme:
@@ -117,6 +118,62 @@ class TestCapabilityGates:
         console = Console(file=buffer, width=400)  # not a terminal
         render_banner(console, Theme.build(), subtitle="v1", animate=False)
         assert "\x1b" not in buffer.getvalue()
+
+
+class _Tty(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+class TestDetectingTheTerminal:
+    """Windows consoles set no TERM, so reading an empty one as a dumb terminal left
+    every Windows session without colour, markdown or the animated banner."""
+
+    @pytest.fixture(autouse=True)
+    def _no_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("TERM", raising=False)
+        monkeypatch.delenv("NO_COLOR", raising=False)
+
+    def test_an_empty_term_is_dumb_off_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert not Capabilities.detect(stream=_Tty()).color
+
+    def test_an_empty_term_is_the_norm_on_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(theme_mod, "_windows_vt", lambda stream: True)
+        caps = Capabilities.detect(stream=_Tty())
+        assert caps.color and caps.animation
+
+    def test_a_windows_console_without_escape_sequences_has_no_colour(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """rich would fall back to the console API's sixteen colours, where the art
+        is noise."""
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(theme_mod, "_windows_vt", lambda stream: False)
+        assert not Capabilities.detect(stream=_Tty()).color
+
+    def test_term_dumb_still_wins_on_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(theme_mod, "_windows_vt", lambda stream: True)
+        monkeypatch.setenv("TERM", "dumb")
+        assert not Capabilities.detect(stream=_Tty()).color
+
+    def test_no_color_still_wins_on_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(theme_mod, "_windows_vt", lambda stream: True)
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert not Capabilities.detect(stream=_Tty()).color
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="asks the Windows console")
+    def test_a_stream_that_is_no_console_goes_by_its_term(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Git Bash's mintty is a pipe to Python: no console mode to ask."""
+        with open(tmp_path / "out", "w", encoding="utf-8") as stream:
+            assert theme_mod._windows_vt(stream) is False
+            monkeypatch.setenv("TERM", "xterm-256color")
+            assert theme_mod._windows_vt(stream) is True
 
 
 class _VirtualClock:

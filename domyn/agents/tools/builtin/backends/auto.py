@@ -91,7 +91,9 @@ class AutoBackend(DockerBackend):
         if self.on_notice is not None:
             self.on_notice(f"{problem.problem} Commands run on this machine, not in a container.")
         self._decided = self._on_this_machine = True
-        self.name, self.is_isolated, self.destroys_on_close = "local", False, False
+        # The name of what now runs the commands: `git_bash` on Windows, which the
+        # browser reads to write its lines for a Windows agent-browser.
+        self.name, self.is_isolated, self.destroys_on_close = self._local.name, False, False
 
     async def check(self) -> None:
         await self.decide()

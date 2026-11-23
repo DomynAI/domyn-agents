@@ -21,6 +21,9 @@ from domyn.agents.tools.builtin.backends.auto import AutoBackend
 from domyn.agents.tools.builtin.backends.docker import backend as docker_backend
 from domyn.agents.tools.builtin.backends.local import GitBashBackend
 
+# What a fallback is named after: what now runs the commands, Git Bash on Windows.
+this_machine_name = "git_bash" if os.name == "nt" else "local"
+
 
 @pytest.fixture
 def docker_works(monkeypatch: pytest.MonkeyPatch) -> list[str]:
@@ -80,7 +83,7 @@ class TestFallback:
 
         assert backend._on_this_machine and isinstance(backend._local, LocalBackend)
         assert backend.fallback is not None and "Docker was not found" in backend.fallback.problem
-        assert backend.is_isolated is False and backend.name == "local"
+        assert backend.is_isolated is False and backend.name == this_machine_name
         assert len(notices) == 1 and "not in a container" in notices[0]
 
         result = await backend.run("echo hi", timeout=10, conversation_id="c")
@@ -156,7 +159,7 @@ class TestAnImageThatWillNotPull:
         assert backend.name == "docker" and backend.fallback is None
         await backend.prepare()
 
-        assert backend.name == "local" and backend.is_isolated is False
+        assert backend.name == this_machine_name and backend.is_isolated is False
         assert backend.fallback is not None and "could not pull" in backend.fallback.problem
         assert notices and "not in a container" in notices[-1]
         assert (
@@ -277,7 +280,7 @@ class TestOnWindows:
 
         await backend.check()
 
-        assert backend._on_this_machine and backend.name == "local"
+        assert backend._on_this_machine and backend.name == this_machine_name
         assert backend.fallback is not None and "Windows" in backend.fallback.problem
         # Refused before Docker is looked for: not "Docker was not found".
         assert "not found" not in backend.fallback.problem

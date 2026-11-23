@@ -78,3 +78,20 @@ def test_is_a_silent_noop_when_no_credentials_file_exists(tmp_path: Path, monkey
     monkeypatch.setattr(cli_config, "credentials_path", lambda: tmp_path / "credentials")
 
     _load_credentials()  # should not raise
+
+
+def test_importing_the_entry_point_loads_no_command() -> None:
+    """The commands make their rich Consoles when imported, and on Windows rich keeps
+    the sixteen colours of the console API if the console did not yet take escape
+    sequences: `cli()` turns those on first, so importing this module must not."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, domyn.agents.cli.main; "
+        "print([m for m in sys.modules if m.startswith('domyn.agents.cli.commands')])"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    ).stdout
+    assert out.strip() == "[]"

@@ -95,8 +95,18 @@ def default_browsers_dir() -> Path:
 
 
 def bundled_binary(name: str = "agent-browser") -> str | None:
-    """The copy of ``name`` that ships with the standalone build, if there is one."""
-    candidate = Path(sys.prefix) / "bin" / name
+    """The copy of ``name`` that ships with the standalone build, if there is one.
+
+    On Windows it is ``<runtime>/bin/<name>.exe``, given with forward slashes: it
+    is run from a Git Bash line, where a backslash is an escape.
+    """
+    folder = Path(sys.prefix) / "bin"
+    if sys.platform == "win32":
+        for candidate in (folder / f"{name}.exe", folder / name):
+            if candidate.is_file():
+                return candidate.as_posix()
+        return None
+    candidate = folder / name
     return str(candidate) if candidate.is_file() and os.access(candidate, os.X_OK) else None
 
 

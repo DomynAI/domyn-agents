@@ -113,7 +113,18 @@ class TestFindingPrograms:
         binary.chmod(0o755)
         monkeypatch.setattr(bi.shutil, "which", lambda name: None)
         monkeypatch.setattr(bi.sys, "prefix", str(tmp_path))
+        monkeypatch.setattr(bi.sys, "platform", "linux")
         assert bi.resolve_binary("agent-browser") == str(binary)
+
+    def test_on_windows_the_bundled_copy_is_the_exe_in_bash_spelling(self, monkeypatch, tmp_path):
+        """Run from a Git Bash line, where a backslash is an escape."""
+        (tmp_path / "bin").mkdir()
+        binary = tmp_path / "bin" / "agent-browser.exe"
+        binary.write_bytes(b"MZ")
+        monkeypatch.setattr(bi.shutil, "which", lambda name: None)
+        monkeypatch.setattr(bi.sys, "prefix", str(tmp_path))
+        monkeypatch.setattr(bi.sys, "platform", "win32")
+        assert bi.resolve_binary("agent-browser") == binary.as_posix()
 
     def test_a_missing_binary_keeps_its_name_so_the_usual_error_follows(
         self, monkeypatch, tmp_path
@@ -394,6 +405,7 @@ class TestThePinnedBinary:
             "aarch64_unknown_linux_gnu",
             "x86_64_unknown_linux_musl",
             "aarch64_unknown_linux_musl",
+            "x86_64_pc_windows_msvc",
         ):
             digest = values[f"AGENT_BROWSER_SHA256_{target}"]
             assert len(digest) == 64 and set(digest) <= set("0123456789abcdef")

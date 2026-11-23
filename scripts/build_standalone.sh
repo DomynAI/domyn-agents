@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build a self-contained domyn: a relocatable Python with domyn installed in it.
-# Runs on the target platform (compiled wheels rule out cross-building).
+# Runs on the target platform (compiled wheels rule out cross-building); on Windows
+# in Git Bash.
 #
 # Usage: scripts/build_standalone.sh [OUTDIR]
 #
@@ -47,8 +48,16 @@ case "$(uname -s)-$ARCH" in
   Darwin-x86_64) fail "Intel Macs are not supported: build on Apple Silicon" ;;
   Linux-aarch64) TARGET="aarch64-unknown-linux-gnu" ;;
   Linux-x86_64)  TARGET="x86_64-unknown-linux-gnu" ;;
+  # x64 on every Windows: pdf-inspector, firecrawl-anydoc and others publish no
+  # win_arm64 wheel, and Windows on ARM runs the x64 build emulated. Built on an
+  # ARM machine too, as the embedded Python is the x64 one and pip picks its wheels.
+  MINGW*-* | MSYS*-*) TARGET="x86_64-pc-windows-msvc" ;;
   *) fail "unsupported platform: $(uname -s)-$(uname -m)" ;;
 esac
+WINDOWS=""
+# GNU tar in Git Bash reads the `C:` of a Windows path as a remote host.
+TAR_LOCAL=()
+if [ "$TARGET" = "x86_64-pc-windows-msvc" ]; then WINDOWS=1; TAR_LOCAL=(--force-local); fi
 # On musl (Alpine): pdf-inspector publishes no musllinux wheel, so pip builds it
 # from its sdist, which takes Rust 1.95 or newer (rustup's; Alpine's is older);
 # onnxruntime has neither, so the audio extra is left out.
@@ -63,6 +72,12 @@ info "target: $TARGET"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+
+# The documentation pages reach the wheel through a symlink (domyn-docs/pages ->
+# docs/docs). A checkout without symlinks (Git for Windows' default) makes it a
+# one-line text file, and the docs skill would ship empty.
+[ -d domyn/agents/skills/builtin/cli/domyn-docs/pages ] \
+  || fail "domyn-docs/pages is not a folder: check out with symlinks (git config core.symlinks true)"
 
 info "building the wheel"
 uv build --wheel -o "$WORK/wheel" >/dev/null
@@ -96,17 +111,19 @@ EXPECTED="$(awk -v f="$RUNTIME_FILE" '$2 == f { print $1 }' "$WORK/SHA256SUMS")"
 [ "$(sha256_of "$WORK/runtime.tar.gz")" = "$EXPECTED" ] || fail "checksum mismatch for $RUNTIME_FILE"
 info "runtime checksum verified"
 mkdir -p "$WORK/stage"
-tar -xzf "$WORK/runtime.tar.gz" -C "$WORK/stage"
-[ -x "$WORK/stage/python/bin/python3" ] || fail "unexpected archive layout"
+tar ${TAR_LOCAL[@]+"${TAR_LOCAL[@]}"} -xzf "$WORK/runtime.tar.gz" -C "$WORK/stage"
+# The Windows runtime has python.exe at its top and no bin/.
+if [ -n "$WINDOWS" ]; then PY="$WORK/stage/python/python.exe"; else PY="$WORK/stage/python/bin/python3"; fi
+[ -x "$PY" ] || fail "unexpected archive layout"
 
 # Dependencies pinned and hash-checked from uv.lock, then domyn itself.
 # --no-compile: no .pyc in the archive (a third smaller); Python writes them on
 # first import, and install.sh's pre-swap check already imports the main ones.
 info "installing domyn with ${EXTRAS[*]} into the runtime, pinned to uv.lock"
 uv export --frozen --no-dev "${EXTRAS[@]}" --no-emit-project -o "$WORK/requirements.txt" >/dev/null
-"$WORK/stage/python/bin/python3" -m pip install --quiet --no-warn-script-location --no-compile \
+"$PY" -m pip install --quiet --no-warn-script-location --no-compile \
   --require-hashes -r "$WORK/requirements.txt"
-"$WORK/stage/python/bin/python3" -m pip install --quiet --no-warn-script-location --no-compile \
+"$PY" -m pip install --quiet --no-warn-script-location --no-compile \
   --no-deps "$WHEEL"
 
 # A module compiled here (pdf-inspector, on musl) needs libgcc_s, which a clean
@@ -122,8 +139,8 @@ if [[ "$TARGET" == *-musl ]]; then
   done < <(find "$WORK/stage/python/lib" -name '*.so')
 fi
 
-# Its shebang points at this build directory; install.sh writes its own launcher.
-rm -f "$WORK/stage/python/bin/domyn"
+# Its shebang points at this build directory; the installer writes its own launcher.
+rm -f "$WORK/stage/python/bin/domyn" "$WORK/stage/python/Scripts/domyn.exe"
 
 # The browser tools' program, beside the runtime's own: domyn looks for it in
 # <runtime>/bin when it is not on PATH. Chrome is not here; the first browser tool
@@ -136,13 +153,18 @@ case "$TARGET" in
   aarch64-unknown-linux-gnu) AB_ASSET="agent-browser-linux-arm64";  AB_SHA="$AGENT_BROWSER_SHA256_aarch64_unknown_linux_gnu" ;;
   x86_64-unknown-linux-musl)  AB_ASSET="agent-browser-linux-musl-x64";   AB_SHA="$AGENT_BROWSER_SHA256_x86_64_unknown_linux_musl" ;;
   aarch64-unknown-linux-musl) AB_ASSET="agent-browser-linux-musl-arm64"; AB_SHA="$AGENT_BROWSER_SHA256_aarch64_unknown_linux_musl" ;;
+  x86_64-pc-windows-msvc)     AB_ASSET="agent-browser-win32-x64.exe";    AB_SHA="$AGENT_BROWSER_SHA256_x86_64_pc_windows_msvc" ;;
   *) fail "no agent-browser binary for $TARGET" ;;
 esac
+# <runtime>/bin on Windows too, where the runtime has no bin/ of its own: that is
+# where domyn looks (browser_install.bundled_binary), as agent-browser.exe.
+AB_FILE="$WORK/stage/python/bin/agent-browser${WINDOWS:+.exe}"
+mkdir -p "$WORK/stage/python/bin"
 info "downloading agent-browser $AGENT_BROWSER_VERSION ($AB_ASSET)"
-curl -fsSL -o "$WORK/stage/python/bin/agent-browser" \
+curl -fsSL -o "$AB_FILE" \
   "https://github.com/vercel-labs/agent-browser/releases/download/v${AGENT_BROWSER_VERSION}/${AB_ASSET}"
-[ "$(sha256_of "$WORK/stage/python/bin/agent-browser")" = "$AB_SHA" ] || fail "checksum mismatch for $AB_ASSET"
-chmod +x "$WORK/stage/python/bin/agent-browser"
+[ "$(sha256_of "$AB_FILE")" = "$AB_SHA" ] || fail "checksum mismatch for $AB_ASSET"
+chmod +x "$AB_FILE"
 info "agent-browser checksum verified"
 
 if [ -n "${SEED:-}" ]; then
@@ -167,18 +189,24 @@ info "packing $NAME"
 CONTENTS="python"
 [ -d "$WORK/stage/seed" ] && CONTENTS="python seed"
 # shellcheck disable=SC2086  # deliberate word splitting: one or two members
-tar -czf "$OUTDIR/$NAME" -C "$WORK/stage" $CONTENTS
+tar ${TAR_LOCAL[@]+"${TAR_LOCAL[@]}"} -czf "$OUTDIR/$NAME" -C "$WORK/stage" $CONTENTS
 
 echo "$(sha256_of "$OUTDIR/$NAME")  $NAME" > "$OUTDIR/$NAME.sha256"
 
+# Both installers go with every build, as the release holds one of each: install.sh
+# for macOS and Linux, install.ps1 for Windows.
 if [ -n "${INSTALL_BASE_URL:-}" ]; then
   awk -v url="$INSTALL_BASE_URL" '!done && /^BASE_URL=""$/ { print "BASE_URL='\''" url "'\''"; done = 1; next } { print }' \
     scripts/install.sh > "$OUTDIR/install.sh"
   grep -qF "BASE_URL='$INSTALL_BASE_URL'" "$OUTDIR/install.sh" || fail "could not write INSTALL_BASE_URL into install.sh"
-  SHARE_URL="${INSTALL_BASE_URL%/}/install.sh"
+  awk -v url="$INSTALL_BASE_URL" '!done && /^\$BaseUrl = ""$/ { print "$BaseUrl = '\''" url "'\''"; done = 1; next } { print }' \
+    scripts/install.ps1 > "$OUTDIR/install.ps1"
+  grep -qF "\$BaseUrl = '$INSTALL_BASE_URL'" "$OUTDIR/install.ps1" || fail "could not write INSTALL_BASE_URL into install.ps1"
+  SHARE_BASE="${INSTALL_BASE_URL%/}"
 else
   cp scripts/install.sh "$OUTDIR/install.sh"
-  SHARE_URL="https://github.com/domynai/domyn-agents/releases/latest/download/install.sh"
+  cp scripts/install.ps1 "$OUTDIR/install.ps1"
+  SHARE_BASE="https://github.com/domynai/domyn-agents/releases/latest/download"
 fi
 chmod +x "$OUTDIR/install.sh"
 
@@ -189,9 +217,12 @@ cat >&2 <<TXT
     $NAME
     $NAME.sha256
     install.sh
+    install.ps1
 
-  Share remotely:  curl -fsSL $SHARE_URL | sh
+  Share remotely:  curl -fsSL $SHARE_BASE/install.sh | sh
+                   irm $SHARE_BASE/install.ps1 | iex    (Windows PowerShell)
   Install locally: sh $OUTDIR/install.sh $OUTDIR
+                   & $OUTDIR/install.ps1 $OUTDIR        (Windows PowerShell)
 
 TXT
 if [ -n "${SEEDED:-}" ]; then

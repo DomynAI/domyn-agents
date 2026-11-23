@@ -20,6 +20,7 @@ ASSETS = {
     "aarch64_unknown_linux_gnu": "agent-browser-linux-arm64",
     "x86_64_unknown_linux_musl": "agent-browser-linux-musl-x64",
     "aarch64_unknown_linux_musl": "agent-browser-linux-musl-arm64",
+    "x86_64_pc_windows_msvc": "agent-browser-win32-x64.exe",
 }
 
 
