@@ -224,20 +224,6 @@ jobs:
         shell: bash
         run: uv sync --all-extras
 
-      # A test that hangs is ended after two minutes and named, with its stack,
-      # rather than holding the job until its timeout with nothing to show:
-      # waiting on a process that never exits is how a POSIX assumption fails
-      # here. -rfE lists every failure and error at the end, by name.
-      # UTF-8 on the standard streams only: on the runner's cp1252 console, the
-      # first failure whose text has a character outside it (the banner art)
-      # ended pytest silently in the middle of its summary. Not PYTHONUTF8,
-      # which would also make every file read without an encoding read UTF-8
-      # and hide the very bugs this job is here to find.
-      # Coverage on Intel only, for the pull request's coverage check (the test
-      # job): ARM runs the same code, emulated and slower. Measured through
-      # sys.monitoring (COVERAGE_CORE=sysmon, Python 3.12+), which costs a fifth
-      # of the default tracer: on the tests that time themselves, +12% against
-      # +57% (Windows on ARM, x64 emulated). Unset off coverage, it changes nothing.
       - name: Run tests
         shell: bash
         env:
