@@ -137,6 +137,7 @@ When a conversation gets close to the limit, the session shortens it automatical
 
 ## Next steps
 
+- [Unattended tasks](fulfill.md): hand the agent one task with `domyn fulfill`, to carry out with nobody to answer.
 - [Files, commands and approvals](tools-and-approvals.md): what the agent can do in your directory, and how you approve it.
 - [Configuring the CLI](configuration.md): the model, the tools and the files in `~/.domyn`.
 - [CLI commands](../reference/cli.md): every `domyn` command and option.

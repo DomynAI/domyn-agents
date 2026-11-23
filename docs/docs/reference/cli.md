@@ -11,6 +11,7 @@ The `domyn` command is installed with the package (see [Installation](../getting
 | Command | What it does |
 |---|---|
 | [`domyn run`](#domyn-run) | Chat with an agent in the terminal |
+| [`domyn fulfill`](#domyn-fulfill) | Carry out one task with nobody to answer and no follow-up, then exit |
 | [`domyn setup`](#domyn-setup) | Choose the provider, model and agent of `domyn run` |
 | [`domyn init`](#domyn-init) | Create a new project with an example agent |
 | [`domyn skills`](#domyn-skills) | List the skills the configuration loads |
@@ -27,7 +28,7 @@ Given before the command: `domyn --log-level DEBUG run`.
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `--log-level` | `str` | `WARNING` for `run`, `setup`, `init`, `skills` and `skill`; `INFO` for the servers | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. Any other value is taken as `INFO`. |
+| `--log-level` | `str` | `WARNING` for `run`, `fulfill`, `setup`, `init`, `skills` and `skill`; `INFO` for the servers | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. Any other value is taken as `INFO`. |
 | `--version` | | | Prints the version and exits. |
 
 ## Environment
@@ -67,6 +68,38 @@ From a Python file, the agent is the one that is not a sub-agent of another; fro
 The skills and the [standing instructions](../guides/standing-instructions.md) are those the configuration declares; no option adds or removes any.
 
 When the session ends, it prints the conversation id and the command that resumes it, with `FILE` when the session was started from one: `domyn run agent.yaml --resume <conversation_id>`.
+
+## `domyn fulfill`
+
+```bash
+domyn fulfill [TASK] --base-url URL --model NAME [OPTIONS]
+```
+
+Carries out one task with nobody to answer and no follow-up, then exits: every tool call is approved, the agent is told it works alone, and the session ends when its turn does. It reads no configuration from `~/.domyn` and needs no `domyn setup`. See [Unattended tasks](../cli/fulfill.md).
+
+| Argument | Description |
+|---|---|
+| `TASK` | The task. Or `--prompt-file`, to keep it off the command line. |
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--prompt-file` | path | | Reads the task from this file, or from standard input for `-`. Cannot be combined with `TASK`. |
+| `--base-url` | `str` | required | The OpenAI-compatible endpoint: `http://host:8000`, `…/v1` or `…/v1/chat/completions`. |
+| `--model`, `-m` | `str` | required | The model's name on the endpoint. |
+| `--api-key-env` | `str` | | The environment variable holding the endpoint's key. Without it no key is sent; a variable that is not set is an error. |
+| `--context-window` | `int` | asked of the endpoint | The model's context window in tokens. |
+| `--max-tokens` | `int` | the endpoint's | The longest reply to ask for. Compaction keeps that much room for it under the window. |
+| `--temperature` | `float` | the endpoint's | Sampling temperature. |
+| `--reasoning-effort` | `str` | `default` | Sent as `reasoning_effort` on every call, such as `low`, `medium` or `high`. `default` sends none. |
+| `--max-iterations` | `int` | `1000` | The most model calls in the turn. |
+| `--instructions` | path | | A file whose text replaces the built-in standing instructions. |
+| `--no-instructions` | flag | off | Runs with no standing instructions. Cannot be combined with `--instructions`. |
+| `--skills` / `--no-skills` | flag | `--skills` | Installs the built-in skills into the state folder and offers them to the agent. |
+| `--workspace` | `str` | `/` | The folder the file tools may read and write under. |
+| `--state-dir` | path | a new temporary folder | The folder for the session's configuration, skills, conversation history and tools' working files. Never `~/.domyn`. |
+| `--verbose`, `-v` | flag | off | Shows internal events: model calls, hooks, hand-offs. |
+
+The exit code is `0` once the turn has ended, `130` when it is interrupted, `2` for a mistake on the command line and `1` when the agent cannot be built.
 
 ## `domyn setup`
 
