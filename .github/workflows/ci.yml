@@ -266,9 +266,20 @@ jobs:
           echo "OPENSSL_DIR=$VCPKG_INSTALLATION_ROOT\installed\arm64-windows-static-md" >> "$GITHUB_ENV"
           echo "OPENSSL_STATIC=1" >> "$GITHUB_ENV"
 
+      # On ARM, when uv builds the packages above: one at a time, and once more
+      # after a failure, which starts where it stopped (what was built is in uv's
+      # cache). Building them all at once, pyo3's build script, which runs Python
+      # to read its configuration, failed once on the runner with "Bad file
+      # descriptor" writing to stdout, a run after the same build had passed.
       - name: Install dependencies
         shell: bash
-        run: uv sync --all-extras
+        run: |
+          if [ "$PYTHON_ARCH" = aarch64 ]; then
+            export UV_CONCURRENT_BUILDS=1
+            uv sync --all-extras || { echo "::warning::uv sync failed, trying once more"; uv sync --all-extras; }
+          else
+            uv sync --all-extras
+          fi
 
       # A test that hangs is ended after two minutes and named, with its stack,
       # rather than holding the job until its timeout with nothing to show:
