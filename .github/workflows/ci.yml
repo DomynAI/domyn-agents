@@ -203,10 +203,16 @@ jobs:
         with:
           persist-credentials: false
 
+      # The cache keyed by Python's architecture too: its key names the runner's
+      # (aarch64 on ARM) whatever Python runs there, so the ARM job restored the
+      # cache of its earlier, emulated x64 runs, and as an existing key is never
+      # saved again, the ARM64 wheels it built were lost on every run.
       - name: Install uv
+        id: uv
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           enable-cache: true
+          cache-suffix: ${{ env.PYTHON_ARCH }}
 
       # The machine's own Python, as the standalone build of each runs: x64 on
       # Intel, ARM64 on ARM. uv's build of the version in .python-version, which
@@ -223,17 +229,19 @@ jobs:
       # Tools' Clang (for ring, which pdf-inspector uses) and OpenSSL. Only when
       # uv.lock changes: setup-uv keeps the wheels uv built in its cache (its
       # `uv cache prune --ci` drops the downloaded ones only), so later runs
-      # build nothing. OpenSSL is kept as vcpkg's binary cache, nine minutes to
-      # build once.
+      # build nothing, and these two steps are skipped when that cache is there.
+      # OpenSSL is kept as vcpkg's binary cache, six minutes to build once. The
+      # runner's image has Rust and the Clang component already: the step adds
+      # them only for an image that lacks them.
       - name: Cache OpenSSL for arm64
-        if: ${{ env.PYTHON_ARCH == 'aarch64' }}
+        if: ${{ env.PYTHON_ARCH == 'aarch64' && steps.uv.outputs.cache-hit != 'true' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/vcpkg-cache
           key: vcpkg-openssl-arm64-windows-static-md-v1
 
       - name: Rust, Clang and OpenSSL for arm64
-        if: ${{ env.PYTHON_ARCH == 'aarch64' }}
+        if: ${{ env.PYTHON_ARCH == 'aarch64' && steps.uv.outputs.cache-hit != 'true' }}
         shell: bash
         env:
           VCPKG_DEFAULT_BINARY_CACHE: ${{ runner.temp }}/vcpkg-cache
