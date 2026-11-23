@@ -149,7 +149,7 @@ What the browser may open:
 - No address on your machine or your local network, such as `localhost:3000`, unless you set `allow_private_urls` (see [Configuring the CLI](configuration.md)). Cloud metadata addresses are refused even then.
 - Any public site, unless you list the only ones allowed in `allowed_domains`.
 
-The text of a page reaches the agent marked as data from the page, not instructions. That makes a page that tries to give the agent orders easier to spot, but it is not a guarantee: the approvals above are what stop an action you did not want. Each conversation has its own browser, closed when the session ends, or after five minutes without a browser command.
+The text of a page reaches the agent marked as data from the page, not instructions. That makes a page that tries to give the agent orders easier to spot, but it is not a guarantee: the approvals above are what stop an action you did not want. Each conversation has its own browser, closed when the session ends, or after five minutes without a browser command. Every call to a sub-agent has a browser of its own too, starting on no page and closed when the call ends: sub-agents that browse at the same time never share a page, nor what the agent that called them is logged in to. In a container each one is a browser process of a few hundred megabytes, within the container's `docker.memory` (2 GB by default). The browser calls of one answer run one after the other, in the order the model made them, since each acts on the page the one before left.
 
 ## Approvals
 

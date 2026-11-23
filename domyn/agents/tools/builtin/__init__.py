@@ -125,6 +125,12 @@ class BuiltinTools:
     def __len__(self) -> int:
         return len(self.tools)
 
+    async def end_agent_call(self, conversation_id: str, agent_call: str) -> None:
+        """A call to a sub-agent ended: release what the tools kept for it (its
+        browser). The runner calls it on every AGENT_END."""
+        if self.browser is not None:
+            await self.browser.end_agent_call(conversation_id, agent_call)
+
     async def close(self) -> None:
         """Release anything the tools hold. Safe to call more than once, and
         safe when nothing was ever started."""

@@ -83,8 +83,13 @@ Lightpanda 1.0.0-nightly, macOS arm64, every command through
   back with it at 300), and ``--content-boundaries`` only adds a field to it.
   Truncation and framing are done here.
 * **A Chrome session costs about 1 GB** of resident memory across 14
-  processes; Lightpanda about 58 MB. One conversation, one session — hence a
-  short idle timeout.
+  processes; Lightpanda about 58 MB. One session for the conversation and one
+  for each call to a sub-agent (``Session``), closed when the call ends — hence
+  a short idle timeout as the backstop.
+* **Commands queue, tools do not.** The daemon runs one command at a time per
+  session, but a tool is several (verify, act, see where it landed), and a
+  ``back`` sent by another call landed between a click's check and the click.
+  Each tool holds its session's lock for its whole run (``exclusive``).
 """
 
 # No `from __future__ import annotations` here: FunctionTool reads the signature
@@ -100,6 +105,7 @@ from domyn.agents.tools.builtin.backends import CommandBackend
 from domyn.agents.tools.builtin.browser_sessions import (
     BrowserOptions,
     BrowserSessions,
+    Session,
     UrlPolicy,
     _ref_key,
 )
@@ -211,8 +217,8 @@ def browser_tools(
         browser_dir=f"{backend.state_dir}/{StateFolders.BROWSER}",
     )
 
-    async def browser_open(url: str, conversation_id: str = "") -> str:
-        """Open a web page in this conversation's browser and show its interactive elements.
+    async def browser_open(url: str, conversation_id: str = "", agent_call_id: str = "") -> str:
+        """Open a web page in your browser and show its interactive elements.
 
         The page stays open between calls, with its cookies, so you can act on it
         with the other browser tools. The result lists the elements you can click
@@ -223,10 +229,13 @@ def browser_tools(
         Args:
             url: The address to open, e.g. https://example.com/docs.
         """
-        result = await sessions.open(url=url, conversation_id=conversation_id)
-        return result
+        session = Session(conversation_id, agent_call_id)
+        async with sessions.exclusive(session):
+            return await sessions.open(url=url, session=session)
 
-    async def browser_snapshot(full: bool = False, conversation_id: str = "") -> str:
+    async def browser_snapshot(
+        full: bool = False, conversation_id: str = "", agent_call_id: str = ""
+    ) -> str:
         """Show the elements on the current page, each with a ref to act on.
 
         Call it after anything that may have changed the page - a click that
@@ -237,10 +246,13 @@ def browser_tools(
         Args:
             full: Include every element, not only interactive ones. Much longer.
         """
-        result = await sessions.take_snapshot(conversation_id, full=flag(full))
-        return result
+        session = Session(conversation_id, agent_call_id)
+        async with sessions.exclusive(session):
+            return await sessions.take_snapshot(session, full=flag(full))
 
-    async def browser_read(url: str = "", ref: str = "", conversation_id: str = "") -> str:
+    async def browser_read(
+        url: str = "", ref: str = "", conversation_id: str = "", agent_call_id: str = ""
+    ) -> str:
         """Read the current page's text, as markdown, or the text of one element.
 
         Use it to find out what a page says; use browser_snapshot to find out what
@@ -252,24 +264,31 @@ def browser_tools(
             ref: An element ref from the latest snapshot, to read only that
                 element. Empty reads the whole page.
         """
-        result = await sessions.read(conversation_id=conversation_id, url=url, ref=ref)
-        return result
+        session = Session(conversation_id, agent_call_id)
+        async with sessions.exclusive(session):
+            return await sessions.read(session=session, url=url, ref=ref)
 
-    async def browser_scroll(direction: str, conversation_id: str = "") -> str:
+    async def browser_scroll(
+        direction: str, conversation_id: str = "", agent_call_id: str = ""
+    ) -> str:
         """Scroll the page, to load content that only appears when scrolled to.
 
         Args:
             direction: up or down.
         """
-        result = await sessions.scroll(direction=direction, conversation_id=conversation_id)
-        return result
+        session = Session(conversation_id, agent_call_id)
+        async with sessions.exclusive(session):
+            return await sessions.scroll(direction=direction, session=session)
 
-    async def browser_back(conversation_id: str = "") -> str:
-        """Go back to the previous page in this conversation's browser."""
-        result = await sessions.back(conversation_id=conversation_id)
-        return result
+    async def browser_back(conversation_id: str = "", agent_call_id: str = "") -> str:
+        """Go back to the previous page in your browser."""
+        session = Session(conversation_id, agent_call_id)
+        async with sessions.exclusive(session):
+            return await sessions.back(session=session)
 
-    async def browser_click(url: str, ref: str, name: str, conversation_id: str = "") -> str:
+    async def browser_click(
+        url: str, ref: str, name: str, conversation_id: str = "", agent_call_id: str = ""
+    ) -> str:
         """Click an element on the current page: a link, a button, a checkbox.
 
         All three arguments come from the latest browser_snapshot, and all three
@@ -281,11 +300,18 @@ def browser_tools(
             ref: The element's ref, e.g. e5.
             name: The element's name, exactly as the snapshot shows it.
         """
-        result = await sessions.click(url=url, ref=ref, name=name, conversation_id=conversation_id)
-        return result
+        session = Session(conversation_id, agent_call_id)
+        async with sessions.exclusive(session):
+            return await sessions.click(url=url, ref=ref, name=name, session=session)
 
     async def browser_type(
-        url: str, ref: str, name: str, text: str, submit: bool = False, conversation_id: str = ""
+        url: str,
+        ref: str,
+        name: str,
+        text: str,
+        submit: bool = False,
+        conversation_id: str = "",
+        agent_call_id: str = "",
     ) -> str:
         """Type text into a field on the current page, replacing what is in it.
 
@@ -300,17 +326,20 @@ def browser_tools(
             text: What to type.
             submit: Press Enter afterwards, to submit the form.
         """
-        result = await sessions.type(
-            url=url,
-            ref=ref,
-            name=name,
-            text=text,
-            submit=flag(submit),
-            conversation_id=conversation_id,
-        )
-        return result
+        session = Session(conversation_id, agent_call_id)
+        async with sessions.exclusive(session):
+            return await sessions.type(
+                url=url,
+                ref=ref,
+                name=name,
+                text=text,
+                submit=flag(submit),
+                session=session,
+            )
 
-    async def browser_press(url: str, key: str, conversation_id: str = "") -> str:
+    async def browser_press(
+        url: str, key: str, conversation_id: str = "", agent_call_id: str = ""
+    ) -> str:
         """Press one of these keys on the current page: Enter, Tab, Escape, ArrowDown, Control+a.
 
         Args:
@@ -318,8 +347,9 @@ def browser_tools(
                 page is not at that url, nothing is pressed.
             key: The key to press, spelt exactly as listed above.
         """
-        result = await sessions.press(url=url, key=key, conversation_id=conversation_id)
-        return result
+        session = Session(conversation_id, agent_call_id)
+        async with sessions.exclusive(session):
+            return await sessions.press(url=url, key=key, session=session)
 
     gated: dict[str, Callable[..., str]] = {
         "browser_open": open_subject,
@@ -345,6 +375,9 @@ def browser_tools(
                 approval_type=ApprovalType.USER_CONFIRM if subject else None,
                 approval_subject=subject,
                 approval_pattern=site_pattern if subject else None,
+                # One page per agent call: calls of one response run in the
+                # order they were made, not side by side on it.
+                parallel_safe=False,
             )
         )
     return tools, sessions

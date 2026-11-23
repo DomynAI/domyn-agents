@@ -1,4 +1,4 @@
-"""The browser runtime: one agent-browser session per conversation.
+"""The browser runtime: one agent-browser session per conversation, and one per sub-agent call.
 
 ``BrowserSessions`` runs every browser command through the command backend,
 and holds what it needs to do so safely: the options, the URL policy and the
@@ -17,7 +17,9 @@ import re
 import secrets
 import shlex
 import socket
+import weakref
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, ClassVar, Literal, NoReturn
 from urllib.parse import urlsplit, urlunsplit
 
@@ -344,10 +346,44 @@ class UrlPolicy:
         )
 
 
-def session_name(conversation_id: str) -> str:
-    """A session name that fits the socket path budget whatever the id."""
-    digest = hashlib.sha256((conversation_id or "default").encode()).hexdigest()
+def session_name(conversation_id: str, agent_call: str = "") -> str:
+    """A session name that fits the socket path budget whatever the ids.
+
+    The agent the conversation is addressed to has the conversation's own
+    session; every call to a sub-agent has one of its own (``agent_call``, the
+    call's interaction id), so agents running at the same time never share a
+    page. Without ``agent_call`` the name is the one it always was."""
+    key = conversation_id or "default"
+    if agent_call:
+        key = f"{key}\0{agent_call}"
+    digest = hashlib.sha256(key.encode()).hexdigest()
     return f"d-{digest[:12]}"
+
+
+@dataclass(frozen=True)
+class Session:
+    """One browser: the conversation it belongs to, which says where its
+    commands run (a container is per conversation), and the agent call within
+    it, empty for the agent the conversation is addressed to."""
+
+    conversation_id: str
+    agent_call: str = ""
+
+    @classmethod
+    def of(cls, value: "Session | str") -> "Session":
+        return value if isinstance(value, Session) else cls(str(value))
+
+    @property
+    def name(self) -> str:
+        return session_name(self.conversation_id, self.agent_call)
+
+
+# One lock per session, for the process: an agent's tools and a sub-agent's tools
+# are built by separate `BrowserSessions`, and a tool is several agent-browser
+# commands (verify, act, see where it landed) that must not interleave with
+# another tool's on the same page. Weak values: a lock lives while it is held or
+# waited on, so none outlives its event loop.
+_SESSION_LOCKS: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
 
 
 # --- Sessions --------------------------------------------------------------
@@ -409,7 +445,8 @@ def clip(text: str, limit: int) -> str:
 
 
 class BrowserSessions:
-    """One browser session per conversation, behind one command backend.
+    """The browser sessions of one agent's tools, behind one command backend:
+    the conversation's, and one for each call to a sub-agent (``Session``).
 
     Holds no copy of any page: the browser is the only record of where it is,
     and every tool asks it. What is kept is which sessions were started, so
@@ -446,7 +483,7 @@ class BrowserSessions:
     )
 
     _NO_PAGE: ClassVar[str] = (
-        "No page is open in this conversation's browser: none was opened yet, or the browser "
+        "No page is open in your browser: none was opened yet, or the browser "
         "closed after its inactivity timeout. Call browser_open first, then try again."
     )
 
@@ -487,7 +524,7 @@ class BrowserSessions:
         self.options = options
         self.browser_dir = browser_dir
         self.policy = UrlPolicy(allow_private=options.allow_private_urls)
-        self._used: set[str] = set()
+        self._used: set[Session] = set()
         self._chrome: str | None = None
         self._chrome_checked = False
         self._chrome_lock = asyncio.Lock()
@@ -503,10 +540,10 @@ class BrowserSessions:
             return browser_install.resolve_binary(self.options.binary)
         return self.options.binary
 
-    def command(self, conversation_id: str, verb: str, *args: str, as_json: bool = True) -> str:
+    def command(self, session: Session | str, verb: str, *args: str, as_json: bool = True) -> str:
         """The shell line for one agent-browser command. Every value is quoted."""
         o = self.options
-        sid = session_name(conversation_id)
+        sid = Session.of(session).name
         argv = [self._binary, "--config", "/dev/stdin", "--namespace", self.NAMESPACE]
         argv += ["--session", sid]
         argv += ["--idle-timeout", f"{o.idle_timeout_s}s"]
@@ -590,49 +627,77 @@ class BrowserSessions:
         if self.on_notice is not None:
             self.on_notice(message)
 
-    async def call(self, conversation_id: str, verb: str, *args: str) -> _Reply:
+    async def call(self, session: Session | str, verb: str, *args: str) -> _Reply:
+        session = Session.of(session)
         await self.backend.start()
         await self._ensure_chrome()
-        self._used.add(conversation_id)
-        line = self.command(conversation_id, verb, *args)
-        get_logger().info(f"browser: {verb} in session {session_name(conversation_id)}")
+        self._used.add(session)
+        line = self.command(session, verb, *args)
+        get_logger().info(f"browser: {verb} in session {session.name}")
         get_logger().debug(f"browser: {line}")
         result = await self.backend.run(
-            line, timeout=self.options.command_timeout_s, conversation_id=conversation_id
+            line,
+            timeout=self.options.command_timeout_s,
+            conversation_id=session.conversation_id,
         )
         return _parse(result)
 
-    async def save(self, conversation_id: str, label: str, text: str) -> str | None:
+    def exclusive(self, session: Session | str) -> asyncio.Lock:
+        """The lock a tool holds for everything it does on *session*'s page."""
+        name = Session.of(session).name
+        lock = _SESSION_LOCKS.get(name)
+        if lock is None:
+            lock = _SESSION_LOCKS[name] = asyncio.Lock()
+        return lock
+
+    async def save(self, session: Session | str, label: str, text: str) -> str | None:
         """Write *text* where the file tools can page through it, through the
         backend so it lands beside the browser. The path, or ``None``."""
-        sid = session_name(conversation_id)
+        session = Session.of(session)
+        sid = session.name
         path = f"{self.browser_dir}/{sid}/{label}-{secrets.token_hex(4)}.txt"
         result = await self.backend.run(
             f"cat > {shlex.quote(path)}",
             timeout=30,
-            conversation_id=conversation_id,
+            conversation_id=session.conversation_id,
             stdin=text,
         )
         if result.backend_error or result.timed_out or result.exit_code != 0:
             return None
         return path
 
-    async def close(self) -> None:
-        """Close every session this process used, and remove what agent-browser
-        leaves behind. Safe to call twice, and when nothing was started."""
-        for conversation_id in sorted(self._used):
-            sid = session_name(conversation_id)
+    async def release(self, session: Session | str) -> None:
+        """Close *session*'s browser, if this process used it, and remove what
+        agent-browser leaves behind. A sub-agent's session is released when its
+        call ends: a Chrome is a few hundred megabytes, and a container has a
+        memory limit."""
+        session = Session.of(session)
+        if session not in self._used:
+            return
+        async with self.exclusive(session):
+            self._used.discard(session)
+            sid = session.name
             leftovers = " ".join(
                 f'"$HOME/.agent-browser/namespaces/{self.NAMESPACE}/run/{sid}.{ext}"'
                 for ext in ("config", "target")
             )
-            line = f"{self.command(conversation_id, 'close', as_json=False)}; rm -f {leftovers}"
+            line = f"{self.command(session, 'close', as_json=False)}; rm -f {leftovers}"
             try:
-                await self.backend.run(line, timeout=15, conversation_id=conversation_id)
+                await self.backend.run(line, timeout=15, conversation_id=session.conversation_id)
             except Exception as exc:
                 get_logger().warning(f"browser: closing {sid} failed: {type(exc).__name__}")
                 get_logger().debug(f"browser close detail: {exc}")
-        self._used.clear()
+
+    async def end_agent_call(self, conversation_id: str, agent_call: str) -> None:
+        """A sub-agent's call ended: its browser is not needed any more."""
+        if agent_call:
+            await self.release(Session(conversation_id, agent_call))
+
+    async def close(self) -> None:
+        """Close every session this process used, and remove what agent-browser
+        leaves behind. Safe to call twice, and when nothing was started."""
+        for session in sorted(self._used, key=lambda s: (s.conversation_id, s.agent_call)):
+            await self.release(session)
 
     def failure(self, reply: _Reply, doing: str) -> BrowserError:
         if reply.kind == "missing":
@@ -677,7 +742,7 @@ class BrowserSessions:
         return BrowserError(f"{doing} failed: {error}")
 
     async def verify(
-        self, conversation_id: str, url: str, doing: str, ref: str | None = None, name: str = ""
+        self, session: Session | str, url: str, doing: str, ref: str | None = None, name: str = ""
     ) -> tuple[str, str]:
         """Check what the model says it is acting on against the page as it is
         now, and return the URL and a description of the element.
@@ -696,9 +761,9 @@ class BrowserSessions:
                 raise BrowserError(
                     f"'{ref}' is not a ref. Refs look like e5, from browser_snapshot."
                 )
-            actual, _, refs = await self.snap(conversation_id, full=False)
+            actual, _, refs = await self.snap(session, full=False)
         else:
-            actual = await self.where(conversation_id)
+            actual = await self.where(session)
             if not actual or actual == "about:blank":
                 raise BrowserError(self._NO_PAGE)
         if not self.policy.same_page(str(url), actual):
@@ -733,45 +798,45 @@ class BrowserSessions:
             )
         return actual, f'{role} "{clip(found, 80)}" [@{key}]'
 
-    async def leave(self, conversation_id: str, url: str, reason: str) -> NoReturn:
+    async def leave(self, session: Session | str, url: str, reason: str) -> NoReturn:
         """Refuse a page the browser is already on, and take it off it."""
-        await self.call(conversation_id, "open", "about:blank")
+        await self.call(session, "open", "about:blank")
         raise BrowserError(f"Blocked: the page went to {url}, which cannot be browsed: {reason}.")
 
-    async def where(self, conversation_id: str) -> str:
+    async def where(self, session: Session | str) -> str:
         """The current URL. Checked against the policy, because a page can
         navigate on its own after any check."""
-        reply = await self.call(conversation_id, "get", "url")
+        reply = await self.call(session, "get", "url")
         if not reply.ok:
             raise self.failure(reply, "Reading the page's address")
         url = str(reply.data.get("url") or "")
         reason = await self.policy.check_landed(url)
         if reason:
-            await self.leave(conversation_id, url, reason)
+            await self.leave(session, url, reason)
         return url
 
-    async def open(self, url: str, conversation_id: str = "") -> str:
+    async def open(self, url: str, session: Session | str = "") -> str:
         target = self.policy.normalize(url)
         reason = await self.policy.check(target)
         if reason:
             raise BrowserError(f"Cannot open {target}: {reason}.")
-        reply = await self.call(conversation_id, "open", target)
+        reply = await self.call(session, "open", target)
         if not reply.ok:
             raise self.failure(reply, f"Opening {target}")
         final = str(reply.data.get("url") or target)
         if final != target:
             reason = await self.policy.check_landed(final)
             if reason:
-                await self.leave(conversation_id, final, reason)
+                await self.leave(session, final, reason)
         title = clip(str(reply.data.get("title") or ""), 200)
         try:
-            snapshot = await self.take_snapshot(conversation_id, full=False, title=title)
+            snapshot = await self.take_snapshot(session, full=False, title=title)
         except BrowserError as error:
             raise BrowserError(f"Opened {final}, but: {error}") from None
         return f"Opened {final}.\n\n{snapshot}"
 
     async def snap(
-        self, conversation_id: str, full: bool
+        self, session: Session | str, full: bool
     ) -> tuple[str, str, dict[str, tuple[str, str]]]:
         """Snapshot the page: its URL, its text, and ``ref -> (role, name)``.
         The URL comes with the snapshot, so it is the page the refs belong to.
@@ -781,13 +846,13 @@ class BrowserSessions:
         only clickable (``onclick``, ``cursor:pointer``) has no accessible name,
         and the text shows its ``textContent`` instead, which is what the model
         copies."""
-        reply = await self.call(conversation_id, "snapshot", *([] if full else ["-i", "-c"]))
+        reply = await self.call(session, "snapshot", *([] if full else ["-i", "-c"]))
         if not reply.ok:
             raise self.failure(reply, "Taking a snapshot")
         url = str(reply.data.get("origin") or "")
         reason = await self.policy.check_landed(url)
         if reason:
-            await self.leave(conversation_id, url, reason)
+            await self.leave(session, url, reason)
         if not url or url == "about:blank":
             raise BrowserError(self._NO_PAGE)
         refs = {
@@ -820,13 +885,13 @@ class BrowserSessions:
                     get_logger().debug(f"Label {label} on {url}, detail: {e}")
         return url, text, refs
 
-    async def take_snapshot(self, conversation_id: str, full: bool, title: str = "") -> str:
-        url, text, refs = await self.snap(conversation_id, full)
+    async def take_snapshot(self, session: Session | str, full: bool, title: str = "") -> str:
+        url, text, refs = await self.snap(session, full)
         if title:
             # The page writes its title, so it goes inside the fence with the
             # rest of what the page wrote.
             text = f"Title: {title}\n{text}"
-        body = await self.shown(conversation_id, "snapshot", text, url)
+        body = await self.shown(session, "snapshot", text, url)
         hint = (
             "To act on an element, pass this page's url, the element's ref and its exact "
             f"name, e.g. browser_click(url={url!r}, ref='e2', name='Rename')."
@@ -835,7 +900,7 @@ class BrowserSessions:
         )
         return f"Page: {url}\n{body}\n{hint}"
 
-    async def shown(self, conversation_id: str, label: str, text: str, url: str) -> str:
+    async def shown(self, session: Session | str, label: str, text: str, url: str) -> str:
         """Page text inline when it fits, else its head and where the rest is."""
         if len(text) <= self.INLINE_PAGE_CHARS:
             return self._frame(text, url)
@@ -843,7 +908,7 @@ class BrowserSessions:
         head = text[: cut if cut > 0 else self.INLINE_PAGE_CHARS]
         shown_lines = head.count("\n") + 1
         total = text.count("\n") + 1
-        path = await self.save(conversation_id, label, text)
+        path = await self.save(session, label, text)
         if path is None:
             note = f"[showing lines 1-{shown_lines} of {total}; the rest could not be saved]"
         else:
@@ -859,12 +924,12 @@ class BrowserSessions:
             )
         return f"{self._frame(head, url)}\n{note}"
 
-    async def settled(self, conversation_id: str, before: str, done: str) -> str:
+    async def settled(self, session: Session | str, before: str, done: str) -> str:
         """What an action led to. The next command waits for a navigation the
         action started, so the address read here is where it landed. A failure
         here still says the action ran, so it is not done twice."""
         try:
-            url = await self.where(conversation_id)
+            url = await self.where(session)
         except BrowserError as error:
             raise BrowserError(f"{done}, but: {error}") from None
         if self.policy.without_fragment(url) != self.policy.without_fragment(before):
@@ -874,7 +939,7 @@ class BrowserSessions:
             )
         return f"{done}. Still on {url}."
 
-    async def read(self, url: str = "", ref: str = "", conversation_id: str = "") -> str:
+    async def read(self, url: str = "", ref: str = "", session: Session | str = "") -> str:
         if ref:
             key = _ref_key(ref)
             if key is None:
@@ -886,11 +951,11 @@ class BrowserSessions:
                     "Reading one element needs the page's url too, as browser_snapshot "
                     "shows it: a ref only means something on the page it came from."
                 )
-            await self.verify(conversation_id, url, "read")
-            reply = await self.call(conversation_id, "get", "text", f"@{key}")
+            await self.verify(session, url, "read")
+            reply = await self.call(session, "get", "text", f"@{key}")
             text_key, url_key = "text", "origin"
         else:
-            reply = await self.call(conversation_id, "read")
+            reply = await self.call(session, "read")
             text_key, url_key = "content", "url"
         if not reply.ok:
             raise self.failure(reply, "Reading the page")
@@ -899,27 +964,27 @@ class BrowserSessions:
             raise BrowserError(self._NO_PAGE)
         reason = await self.policy.check_landed(url)
         if reason:
-            await self.leave(conversation_id, url, reason)
-        return await self.shown(conversation_id, "page", str(reply.data.get(text_key) or ""), url)
+            await self.leave(session, url, reason)
+        return await self.shown(session, "page", str(reply.data.get(text_key) or ""), url)
 
-    async def scroll(self, direction: str, conversation_id: str = "") -> str:
+    async def scroll(self, direction: str, session: Session | str = "") -> str:
         if direction not in ("up", "down"):
             raise BrowserError(f"Cannot scroll '{direction}': use up or down.")
-        before = await self.where(conversation_id)
-        reply = await self.call(conversation_id, "scroll", direction)
+        before = await self.where(session)
+        reply = await self.call(session, "scroll", direction)
         if not reply.ok:
             raise self.failure(reply, "Scrolling")
-        return await self.settled(conversation_id, before, f"Scrolled {direction}")
+        return await self.settled(session, before, f"Scrolled {direction}")
 
-    async def back(self, conversation_id: str = "") -> str:
-        before = await self.where(conversation_id)
-        reply = await self.call(conversation_id, "back")
+    async def back(self, session: Session | str = "") -> str:
+        before = await self.where(session)
+        reply = await self.call(session, "back")
         if reply.ok:
-            return await self.settled(conversation_id, before, "Went back")
+            return await self.settled(session, before, "Went back")
         # A failed `back` can still have navigated (to about:blank, measured),
         # so where the page is gets checked either way.
         try:
-            outcome = await self.settled(conversation_id, before, "Went back")
+            outcome = await self.settled(session, before, "Went back")
         except BrowserError as error:
             outcome = str(error)
         raise BrowserError(f"{self.failure(reply, 'Going back')} {outcome}")
@@ -931,40 +996,40 @@ class BrowserSessions:
         name: str,
         text: str,
         submit: bool = False,
-        conversation_id: str = "",
+        session: Session | str = "",
     ) -> str:
         if self._OPTION_SHAPED.fullmatch(str(text)):
             raise BrowserError(
                 f"Cannot type '{clip(str(text), 80)}': agent-browser would read it as one of "
                 "its own options. Nothing was typed."
             )
-        page_url, what = await self.verify(conversation_id, url, "typed", ref, str(name))
-        reply = await self.call(conversation_id, "fill", f"@{_ref_key(ref)}", str(text))
+        page_url, what = await self.verify(session, url, "typed", ref, str(name))
+        reply = await self.call(session, "fill", f"@{_ref_key(ref)}", str(text))
         if not reply.ok:
             raise self.failure(reply, f"Typing into {what}")
         done = f"Typed into {what}"
         if submit:
-            reply = await self.call(conversation_id, "press", "Enter")
+            reply = await self.call(session, "press", "Enter")
             if not reply.ok:
                 raise self.failure(reply, f"{done}, but pressing Enter")
             done += " and pressed Enter"
-        return await self.settled(conversation_id, page_url, done)
+        return await self.settled(session, page_url, done)
 
-    async def press(self, url: str, key: str, conversation_id: str = "") -> str:
+    async def press(self, url: str, key: str, session: Session | str = "") -> str:
         if key not in self.KEYS:
             raise BrowserError(f"Cannot press '{key}': use one of {', '.join(self.KEYS)}.")
-        page_url, _ = await self.verify(conversation_id, url, "pressed")
-        reply = await self.call(conversation_id, "press", str(key))
+        page_url, _ = await self.verify(session, url, "pressed")
+        reply = await self.call(session, "press", str(key))
         if not reply.ok:
             raise self.failure(reply, f"Pressing {key}")
-        return await self.settled(conversation_id, page_url, f"Pressed {key}")
+        return await self.settled(session, page_url, f"Pressed {key}")
 
-    async def click(self, url: str, ref: str, name: str, conversation_id: str = "") -> str:
-        page_url, what = await self.verify(conversation_id, url, "clicked", ref, str(name))
-        reply = await self.call(conversation_id, "click", f"@{_ref_key(ref)}")
+    async def click(self, url: str, ref: str, name: str, session: Session | str = "") -> str:
+        page_url, what = await self.verify(session, url, "clicked", ref, str(name))
+        reply = await self.call(session, "click", f"@{_ref_key(ref)}")
         if not reply.ok:
             raise self.failure(reply, f"Clicking {what}")
-        return await self.settled(conversation_id, page_url, f"Clicked {what}")
+        return await self.settled(session, page_url, f"Clicked {what}")
 
 
 __all__ = [
@@ -972,6 +1037,7 @@ __all__ = [
     "BrowserError",
     "BrowserOptions",
     "BrowserSessions",
+    "Session",
     "UrlPolicy",
     "clip",
     "session_name",

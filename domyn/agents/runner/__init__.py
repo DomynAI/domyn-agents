@@ -3592,8 +3592,13 @@ class Runner:
                 yield "event", call
                 yield "result", await self._tool_not_found(call, state, context)
                 continue
+            # A call needing approval runs alone and in order, and so does one to a
+            # tool that is not `parallel_safe` (the browser: one page, which the
+            # next call reads); only the first is asked about, below.
             gated = tool is not None and (
-                bool(tool.approval_type) or (isinstance(tool, MCPTool) and tool.use_oauth)
+                bool(tool.approval_type)
+                or (isinstance(tool, MCPTool) and tool.use_oauth)
+                or not getattr(tool, "parallel_safe", True)
             )
             if tool is not None and not gated:
                 group.append((call, tool))
@@ -4704,6 +4709,16 @@ class Runner:
             # something per conversation — a working directory, an environment —
             # has no other way to know which one it is in.
             "conversation_id": state.conversation_id,
+            # Reserved too: the call to a sub-agent the tool runs in, for what a tool
+            # keeps per agent call (the browser's page), so agents running at the
+            # same time do not share it. Empty for the agent the conversation is
+            # addressed to, unless it runs as a branch (a copy of it called in
+            # parallel). Released when the call ends (`_end_agent_call`).
+            "agent_call_id": (
+                context.interaction_id or ""
+                if context.is_subagent or state.branch is not None
+                else ""
+            ),
             # Per-call metadata (e.g. an auth token minted by a PRE_TOOL_CALL hook),
             # always forwarded to REST headers / MCP meta — unlike run_config it is
             # never gated by VisibilityScope. Seeded empty; hooks populate it.
@@ -5454,15 +5469,36 @@ class Runner:
         """Add event to conversation and interaction history."""
         event = self._ensure_event_identifiers(state=state, event=event, context=context)
         event.metadata.update(state.metadata)
-        if silent:
-            return
-        async with state.write_lock:
-            await self.conversation_manager.add_conversation_event(
-                state.application_name, state.user_id, state.conversation_id, event
-            )
-        # Add event also to interaction history if context is provided
-        if context is not None:
-            context.interaction_history.append(event)
+        if not silent:
+            async with state.write_lock:
+                await self.conversation_manager.add_conversation_event(
+                    state.application_name, state.user_id, state.conversation_id, event
+                )
+            # Add event also to interaction history if context is provided
+            if context is not None:
+                context.interaction_history.append(event)
+        if event.event_type == ExecutionEventType.AGENT_END and event.interaction_id:
+            await self._end_agent_call(state, event.interaction_id)
+
+    async def _end_agent_call(self, state: RunnerState, interaction_id: str) -> None:
+        """Tell the built-in tools that an agent call ended, so what they keep for
+        it (a sub-agent's browser) is released. Every AGENT_END is stored through
+        `_add_event`, ended, failed and interrupted alike, which is why this is
+        here. A call that is only paused has no AGENT_END and keeps its browser.
+        A failure is logged, never raised: the call ended either way."""
+        for agent in state.available_agents:
+            for tools in getattr(agent, "builtin_tools", None) or []:
+                end = getattr(tools, "end_agent_call", None)
+                if end is None:
+                    continue
+                try:
+                    await end(state.conversation_id, interaction_id)
+                except Exception as e:
+                    get_logger().warning(
+                        f"Releasing the tools of agent call {interaction_id} failed: "
+                        f"{type(e).__name__}"
+                    )
+                    get_logger().debug(f"Agent call release detail: {e}")
 
     @staticmethod
     async def _collect_hook_results(

@@ -248,6 +248,8 @@ A model can ask for several tools in one answer: read three files, query two ser
 
 A call to a tool that requires approval runs alone and in order: everything the model asked for before it has finished, and nothing after it has started. Those are the calls another may depend on, such as writing a file and then running the tests, and an approval is asked about a call that has not begun. While the approval is pending, the calls after it wait; they run once it is answered, before the model is asked again. See [Tool approvals](approvals.md#several-calls-in-one-answer).
 
+A tool that acts on something the next call reads, such as a browser's page, can ask for the same treatment without an approval: `FunctionTool(func=..., parallel_safe=False)` runs each of its calls alone and in order. The browser tools are declared this way.
+
 It is on by default, and an option of the planner strategy, so each agent decides. Turn it off and every call runs after the one before it, in order:
 
 ```python
