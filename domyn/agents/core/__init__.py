@@ -369,9 +369,10 @@ class BaseEvent(BaseModel):
 
     # The model's whole reasoning for the response this call came from, which the
     # short `thought` on the action does not carry. Set by a tool-use planner on
-    # the first TOOL_START (or AGENT_CALL) of a response, only when the model
-    # returned one; the context manager puts it on the assistant message of that
-    # response, in every turn, for a provider that sends it back
+    # the first TOOL_START (or AGENT_CALL) of a response, or on its final RESPONSE
+    # when it calls nothing, only when the model returned one; the context manager
+    # puts it on the assistant message of that response, in every turn, for a
+    # provider that sends it back
     # (`BaseLLMProvider.reasoning_key_in_use`).
     reasoning_content: str | None = Field(
         default=None,

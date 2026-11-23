@@ -1,7 +1,8 @@
 """The model's whole reasoning goes back to it with its assistant messages.
 
-The planner stores ``reasoning_content`` on the first call of a response
-(``BaseEvent.reasoning_content``); the context manager puts it on the assistant
+The planner stores ``reasoning_content`` on the first call of a response, or on
+its final answer when it calls nothing (``BaseEvent.reasoning_content``); the
+context manager puts it on the assistant
 message of that response, in every turn, for a provider that sends it
 (``reasoning_key_in_use``). A response without stored reasoning, and providers
 that do not send it, get the short thoughts of every call as the message's content.
@@ -215,6 +216,95 @@ class TestAnEarlierTurn:
         (message,) = _assistants_with_calls(provider.requests[2])
         assert message.reasoning_content is None
         assert message.content == "look at a\nlook at b"
+
+
+ANSWER_REASONING = "Both files are listed; I can answer now."
+
+
+def _reasoned_answer(text: str) -> LLMResponse:
+    return _answer(text).model_copy(update={"reasoning_content": ANSWER_REASONING})
+
+
+def _answers(messages: list[LLMMessage]) -> list[LLMMessage]:
+    return [m for m in messages if m.role == "assistant" and not m.tool_calls]
+
+
+class TestAFinalAnswer:
+    @pytest.mark.parametrize("stream", [False, True])
+    @pytest.mark.asyncio
+    async def test_carries_its_reasoning_on_the_next_turn(self, stream: bool) -> None:
+        """Streamed, the closing chunk of an answer has no reasoning: it is taken
+        from the chunk that carried it."""
+        provider = _Script(replies=[_reasoned_answer("hello"), _answer("again")])
+        runner, agent = Runner(), _agent(provider, stream)
+
+        await _turn(runner, agent, "hi", f"answer {stream}")
+        await _turn(runner, agent, "and now?", f"answer {stream}")
+
+        (message,) = _answers(provider.requests[1])
+        assert message.content == "hello"
+        assert message.reasoning_content == ANSWER_REASONING
+        assert message.to_dict(reasoning_key="reasoning_content")["reasoning_content"] == (
+            ANSWER_REASONING
+        )
+
+    @pytest.mark.asyncio
+    async def test_after_calls_carries_its_own_reasoning(self) -> None:
+        provider = _Script(replies=[_calls(), _reasoned_answer("done"), _answer("again")])
+        runner, agent = Runner(), _agent(provider)
+
+        await _turn(runner, agent, "list a and b", "calls then answer")
+        await _turn(runner, agent, "thanks", "calls then answer")
+
+        (calls,) = _assistants_with_calls(provider.requests[2])
+        (answer,) = _answers(provider.requests[2])
+        assert calls.reasoning_content == REASONING
+        assert (answer.content, answer.reasoning_content) == ("done", ANSWER_REASONING)
+
+    @pytest.mark.asyncio
+    async def test_without_reasoning_stores_none(self) -> None:
+        provider = _Script(replies=[_answer("hello"), _answer("again")])
+        runner, agent = Runner(), _agent(provider)
+
+        events = await _turn(runner, agent, "hi", "bare answer")
+        await _turn(runner, agent, "and now?", "bare answer")
+
+        assert all(e.reasoning_content is None for e in events)
+        (message,) = _answers(provider.requests[1])
+        assert (message.content, message.reasoning_content) == ("hello", None)
+
+    @pytest.mark.asyncio
+    async def test_a_provider_that_does_not_send_it_gets_the_text_alone(self) -> None:
+        provider = _Silent(replies=[_reasoned_answer("hello"), _answer("again")])
+        runner, agent = Runner(), _agent(provider)
+
+        events = await _turn(runner, agent, "hi", "silent answer")
+        await _turn(runner, agent, "and now?", "silent answer")
+
+        (message,) = _answers(provider.requests[1])
+        assert (message.content, message.reasoning_content) == ("hello", None)
+        (answer,) = [e for e in events if e.event_type == ExecutionEventType.RESPONSE]
+        assert answer.reasoning_content == ANSWER_REASONING
+
+    @pytest.mark.asyncio
+    async def test_another_agents_answer_never_brings_its_reasoning(self) -> None:
+        ask = BaseEvent(
+            event_type=ExecutionEventType.USER_INPUT, author="user", content=[Part(text="go")]
+        )
+        foreign = BaseEvent(
+            event_type=ExecutionEventType.RESPONSE,
+            author="Other",
+            content=[Part(text="hello")],
+            reasoning_content=ANSWER_REASONING,
+        )
+        context = InteractionContext(
+            conversation_id="c", user_id="u", agent_input=ask, interaction_history=[ask, foreign]
+        )
+
+        messages = await ToolUseWithThoughtContextManager().get_context(context, _agent(_Script()))
+
+        assert all(m.reasoning_content is None for m in messages)
+        assert ANSWER_REASONING not in json.dumps([m.to_dict() for m in messages])
 
 
 class TestAProviderThatDoesNotSendIt:

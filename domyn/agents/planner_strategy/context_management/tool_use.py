@@ -309,7 +309,15 @@ class ToolUseContextManager(ContextManager):
                             )
                         )
                     elif text:
-                        messages.append(LLMMessage(role=self.assistant_role, content=text))
+                        messages.append(
+                            LLMMessage(
+                                role=self.assistant_role,
+                                content=text,
+                                reasoning_content=(
+                                    event.reasoning_content if sends_reasoning else None
+                                ),
+                            )
+                        )
 
                 case ExecutionEventType.AGENT_END:
                     # AGENT_END is inbound feedback from a sub-agent to its
