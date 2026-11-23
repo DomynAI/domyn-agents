@@ -192,10 +192,11 @@ jobs:
     env:
       # Intel's run writes the coverage the test job checks, in pull requests.
       COVERAGE_REPORT: ${{ github.event_name == 'pull_request' }}
+      PYTHON_ARCH: x86_64
 
     # The same steps on ARM below (a YAML anchor): two jobs rather than a matrix,
     # so the test job can wait for this one alone, which has the coverage, while
-    # ARM, slower under emulation, runs beside it. Its check is still required.
+    # ARM runs beside it. Its check is still required.
     steps: &windows-steps
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -207,17 +208,55 @@ jobs:
         with:
           enable-cache: true
 
-      # An x64 Python on both: on ARM it runs emulated, which is what a Windows
-      # on ARM user runs, since cryptography, pdf-inspector and firecrawl-anydoc
-      # publish no win_arm64 wheel (built from source, cryptography needs OpenSSL).
-      # uv's own build of the version in .python-version, which uv sync downloads in
-      # seconds: setup-python spent two minutes installing it on the ARM runner.
-      # Left to itself uv would pick a native ARM64 one there.
-      - name: Use an x64 Python
+      # The machine's own Python, as the standalone build of each runs: x64 on
+      # Intel, ARM64 on ARM. uv's build of the version in .python-version, which
+      # uv sync downloads in seconds (setup-python spent two minutes on ARM).
+      - name: Use the machine's Python
         shell: bash
         run: |
           version="$(tr -d '\r\n ' < .python-version)"
-          echo "UV_PYTHON=cpython-${version}-windows-x86_64-none" >> "$GITHUB_ENV"
+          echo "UV_PYTHON=cpython-${version}-windows-${PYTHON_ARCH}-none" >> "$GITHUB_ENV"
+
+      # On ARM, cryptography, pdf-inspector, firecrawl-anydoc and tiktoken have no
+      # win_arm64 wheel, and uv sync builds them from their sdists, as the arm64
+      # standalone build does (scripts/build_standalone.sh): Rust, the Build
+      # Tools' Clang (for ring, which pdf-inspector uses) and OpenSSL. Only when
+      # uv.lock changes: setup-uv keeps the wheels uv built in its cache (its
+      # `uv cache prune --ci` drops the downloaded ones only), so later runs
+      # build nothing. OpenSSL is kept as vcpkg's binary cache, nine minutes to
+      # build once.
+      - name: Cache OpenSSL for arm64
+        if: ${{ env.PYTHON_ARCH == 'aarch64' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vcpkg-cache
+          key: vcpkg-openssl-arm64-windows-static-md-v1
+
+      - name: Rust, Clang and OpenSSL for arm64
+        if: ${{ env.PYTHON_ARCH == 'aarch64' }}
+        shell: bash
+        env:
+          VCPKG_DEFAULT_BINARY_CACHE: ${{ runner.temp }}/vcpkg-cache
+        run: |
+          if ! command -v cargo >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+            curl -fsSL -o "$RUNNER_TEMP/rustup-init.exe" \
+              https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe
+            "$RUNNER_TEMP/rustup-init.exe" -y --profile minimal --default-toolchain stable
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          installer="/c/Program Files (x86)/Microsoft Visual Studio/Installer"
+          vs="$("$installer/vswhere.exe" -latest -products '*' -property installationPath | tr -d '\r')"
+          clang="$(cygpath -u "$vs")/VC/Tools/Llvm/ARM64/bin"
+          if [ ! -x "$clang/clang.exe" ]; then
+            "$installer/setup.exe" modify --installPath "$vs" --quiet --norestart \
+              --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 \
+              --add Microsoft.VisualStudio.Component.VC.Llvm.Clang
+          fi
+          cygpath -w "$clang" >> "$GITHUB_PATH"
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+          "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install openssl:arm64-windows-static-md
+          echo "OPENSSL_DIR=$VCPKG_INSTALLATION_ROOT\installed\arm64-windows-static-md" >> "$GITHUB_ENV"
+          echo "OPENSSL_STATIC=1" >> "$GITHUB_ENV"
 
       - name: Install dependencies
         shell: bash
@@ -234,7 +273,7 @@ jobs:
       # and hide the very bugs this job is here to find.
       # Coverage measured through sys.monitoring (COVERAGE_CORE=sysmon, Python
       # 3.12+), which costs a fifth of the default tracer: on the tests that time
-      # themselves, +12% against +57% (Windows on ARM, x64 emulated).
+      # themselves, +12% against +57% (measured on Windows on ARM, x64 emulated).
       - name: Run tests
         shell: bash
         env:
@@ -263,11 +302,14 @@ jobs:
       always() && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true')
     name: test-windows (windows-11-arm)
     runs-on: windows-11-arm
-    timeout-minutes: 20
+    # Room for a run after uv.lock changed: OpenSSL and four packages compiled
+    # (some fifteen minutes) before the tests. Others take what Intel's does.
+    timeout-minutes: 40
     permissions:
       contents: read
     env:
       COVERAGE_REPORT: false
+      PYTHON_ARCH: aarch64
     steps: *windows-steps
 
   # Every Python version the package supports (pyproject.toml's classifiers,
