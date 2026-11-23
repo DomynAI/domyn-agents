@@ -35,6 +35,8 @@ The directory you start the session from is the agent's **workspace**. The file 
 
 Commands also start in the workspace, but a command can reach any path you could reach yourself. That is why every command asks for approval.
 
+On Windows, commands run in Git Bash, never in `cmd.exe` or PowerShell, so the agent writes them as on macOS and Linux and they are approved as written. Git Bash comes with [Git for Windows](https://git-scm.com/download/win); without it the session still starts, and each command says what to install. To use a Git Bash that is not in the usual place, set `DOMYN_GIT_BASH_PATH` to its `bash.exe`.
+
 ### What commands can see
 
 - **Their own Python environment.** Each conversation gets a virtual environment under `conversations/<conversation_id>/venv` next to your conversation history: in the project's folder when you run one with `--project`, otherwise in `~/.domyn`. So a package the agent installs stays there and cannot break the environment you run `domyn` from. To let commands use your own environment instead, for example when the agent works on that project, set `isolate_environment: false` (see [Configuring the CLI](configuration.md)).
@@ -59,6 +61,8 @@ If Docker is not installed or not running, or its image cannot be pulled, `domyn
 | `local` | Always this machine, with no warning |
 
 If Docker stops during a session, a command fails with a message; the session does not switch to your machine half way, because the files and packages of the conversation are in the container. Restart `domyn run` to choose again.
+
+On Windows the container is not used yet: `auto` runs the tools on your machine, in Git Bash, and says so, and `docker` does not start.
 
 ```yaml
 tool_bundles:
@@ -139,7 +143,7 @@ How it behaves:
 
 The `browser` set drives a real browser through [agent-browser](https://github.com/vercel-labs/agent-browser). In the container backend it and Chromium are in the image and need nothing from you. On your machine, the standalone build of domyn includes it. Otherwise install it yourself, with `npm install -g agent-browser` or `brew install agent-browser`; the setup wizard warns you when it is not on your `PATH`.
 
-The first time the agent uses a browser tool and no Chrome or Chromium is found, domyn downloads Chrome for Testing (about 200 MB) into `~/.domyn/browsers/`, once, and says so. A Chrome you already have is used as it is. To use another browser, set `browser.executable_path`. On Linux, Chrome also needs system libraries (`libnss3` and a few others, or `agent-browser install --with-deps`). On a musl system such as Alpine nothing can be downloaded, since Chrome for Testing needs glibc: install Chromium (`apk add chromium`), which is then found on its own, or set `browser.executable_path`.
+The first time the agent uses a browser tool and no Chrome or Chromium is found, domyn downloads Chrome for Testing (about 200 MB) into `~/.domyn/browsers/`, once, and says so. A Chrome you already have is used as it is. To use another browser, set `browser.executable_path`. On Linux, Chrome also needs system libraries (`libnss3` and a few others, or `agent-browser install --with-deps`). On a musl system such as Alpine nothing can be downloaded, since Chrome for Testing needs glibc: install Chromium (`apk add chromium`), which is then found on its own, or set `browser.executable_path`. On Windows on ARM, agent-browser and Chrome for Testing are the x64 builds, as neither has an ARM64 one for Windows, and run under Windows' emulation: the first page the agent opens can take long enough to time out, and the next ones open as usual.
 
 The agent reads the text of the open page or the list of elements on it, scrolls and goes back without asking. Opening a page waits for your approval, which names the site and the address, such as `https://github.com :: open 'https://github.com/docs'`. Clicking, typing and pressing a key wait for it too, naming the site and the element, such as `https://github.com :: click 'Sign in' [@e5]`. Before an approved action runs, the session checks that the browser is still on that page and that the element still has that name; if anything changed, nothing runs and the agent is told why. When the agent types into a field whose name looks like a password, a token or a card number, the approval shows how many characters it types, not the text. An address is not shortened that way: the approval shows it as the agent wrote it, parameters such as `?token=…` included, and a saved approval keeps it whole, so approving one address does not cover the same page with other parameters.
 

@@ -14,6 +14,12 @@ Install the CLI before you start. On macOS (Apple Silicon) and Linux, the instal
 curl -fsSL https://github.com/domynai/domyn-agents/releases/latest/download/install.sh | sh
 ```
 
+On Windows, in PowerShell (it also needs [Git for Windows](https://git-scm.com/download/win), as commands run in Git Bash):
+
+```powershell
+irm https://github.com/domynai/domyn-agents/releases/latest/download/install.ps1 | iex
+```
+
 or, with [uv](https://docs.astral.sh/uv/):
 
 ```bash
