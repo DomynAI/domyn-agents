@@ -165,6 +165,24 @@ class TestDetectingTheTerminal:
         monkeypatch.setenv("NO_COLOR", "1")
         assert not Capabilities.detect(stream=_Tty()).color
 
+    def test_the_cli_asks_a_windows_console_for_escapes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        asked: list[object] = []
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(sys, "stdout", _Tty())
+        monkeypatch.setattr(theme_mod, "_windows_vt", asked.append)
+        theme_mod.enable_escape_sequences()
+        assert asked == [sys.stdout]
+
+    def test_a_pipe_is_not_asked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        asked: list[object] = []
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(sys, "stdout", io.StringIO())
+        monkeypatch.setattr(theme_mod, "_windows_vt", asked.append)
+        theme_mod.enable_escape_sequences()
+        assert asked == []
+
     @pytest.mark.skipif(sys.platform != "win32", reason="asks the Windows console")
     def test_a_stream_that_is_no_console_goes_by_its_term(
         self, tmp_path, monkeypatch: pytest.MonkeyPatch

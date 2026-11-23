@@ -635,3 +635,24 @@ class TestTheTimeoutMessageSaysWhatToDo:
         # this retries in a way that works.
         assert "stdin" in text
         assert "yes |" in text
+
+
+class TestOffWindows:
+    """What the Windows-only parts of the Git Bash backend do anywhere else."""
+
+    # On Windows it would put this very process in a job.
+    @pytest.mark.skipif(os.name == "nt", reason="off Windows only")
+    def test_there_is_no_job(self) -> None:
+        assert local_backend._Job.around(os.getpid()) is None
+
+    def test_a_job_handle_is_inert_once_closed(self) -> None:
+        job = local_backend._Job(0)
+        job.close()
+        job.terminate()
+        job.close()
+
+    def test_the_state_folder_is_given_for_bash(self, workspace: Workspace, tmp_path: Path) -> None:
+        r"""Every path built on it goes into a bash line, where `\` is an escape."""
+        backend = GitBashBackend(workspace, state_dir=tmp_path / "home", bash=Path("bash"))
+        assert backend.state_dir == (tmp_path / "home").as_posix()
+        assert "\\" not in backend.state_dir

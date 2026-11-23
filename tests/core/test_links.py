@@ -4,7 +4,8 @@ Python reports a junction as a plain directory (``is_symlink()`` and ``S_ISLNK``
 false, ``is_dir(follow_symlinks=False)`` true), and any user can make one without
 privileges, so each check that asked ``is_symlink()`` alone followed it: ``.agents``
 made a junction to the home folder would have loaded ``~/skills``. Real junctions,
-made with ``mklink /J``, so Windows only.
+made with ``mklink /J``, so those tests are Windows only; a symbolic link is a link
+everywhere.
 """
 
 import os
@@ -19,7 +20,7 @@ from domyn.agents.skills.external_files import expand_files
 from domyn.agents.skills.layout import listed_path_is_linked, walk_skill_tree
 from domyn.agents.tools.builtin.session import linked_below
 
-pytestmark = pytest.mark.skipif(os.name != "nt", reason="junctions are Windows only")
+windows_only = pytest.mark.skipif(os.name != "nt", reason="junctions are Windows only")
 
 
 def _junction(link: Path, target: Path) -> Path:
@@ -40,6 +41,40 @@ def _skill(folder: Path, name: str) -> None:
     _write(folder / "SKILL.md", f"---\nname: {name}\ndescription: d\n---\nbody\n")
 
 
+def _symlink(link: Path, target: Path) -> Path:
+    """A symbolic link, or a skip where this account may not make one (Windows
+    without Developer Mode)."""
+    try:
+        link.symlink_to(target, target_is_directory=target.is_dir())
+    except OSError as exc:
+        pytest.skip(f"cannot make a symbolic link here: {exc}")
+    return link
+
+
+class TestASymbolicLink:
+    def test_is_a_link(self, tmp_path: Path) -> None:
+        (tmp_path / "target").mkdir()
+        assert is_link(_symlink(tmp_path / "link", tmp_path / "target"))
+
+    def test_and_its_directory_entry(self, tmp_path: Path) -> None:
+        (tmp_path / "target").mkdir()
+        _symlink(tmp_path / "link", tmp_path / "target")
+        (entry,) = [e for e in os.scandir(tmp_path) if e.name == "link"]
+        assert is_link(entry)
+
+    def test_and_its_lstat(self, tmp_path: Path) -> None:
+        _write(tmp_path / "file")
+        assert is_link_stat(_symlink(tmp_path / "link", tmp_path / "file").lstat())
+
+    def test_a_folder_and_a_file_are_not(self, tmp_path: Path) -> None:
+        (tmp_path / "folder").mkdir()
+        _write(tmp_path / "file")
+        for path in (tmp_path / "folder", tmp_path / "file"):
+            assert not is_link(path)
+            assert not is_link_stat(path.lstat())
+
+
+@windows_only
 class TestWhatAJunctionIs:
     def test_a_junction_is_a_link(self, tmp_path: Path) -> None:
         junction = _junction(tmp_path / "j", tmp_path / "target")
@@ -61,6 +96,7 @@ class TestWhatAJunctionIs:
         assert not is_link_stat((tmp_path / "target").lstat())
 
 
+@windows_only
 class TestNoCheckFollowsOne:
     def test_a_listed_skills_folder(self, tmp_path: Path) -> None:
         _skill(tmp_path / "elsewhere" / "secret", "secret")

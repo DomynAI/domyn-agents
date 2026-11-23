@@ -126,6 +126,22 @@ class TestFindingPrograms:
         monkeypatch.setattr(bi.sys, "platform", "win32")
         assert bi.resolve_binary("agent-browser") == binary.as_posix()
 
+    def test_on_windows_nothing_bundled_is_none(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(bi.sys, "prefix", str(tmp_path))
+        monkeypatch.setattr(bi.sys, "platform", "win32")
+        assert bi.bundled_binary("agent-browser") is None
+
+    def test_on_windows_chrome_is_found_where_it_installs(self, monkeypatch, tmp_path):
+        """Per machine or per user: Program Files, or the user's AppData."""
+        chrome = tmp_path / "Local" / "Google" / "Chrome" / "Application" / "chrome.exe"
+        chrome.parent.mkdir(parents=True)
+        chrome.write_bytes(b"MZ")
+        monkeypatch.setattr(bi.sys, "platform", "win32")
+        monkeypatch.setenv("ProgramFiles", str(tmp_path / "missing"))
+        monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+        assert bi.system_chrome() == str(chrome)
+
     def test_a_missing_binary_keeps_its_name_so_the_usual_error_follows(
         self, monkeypatch, tmp_path
     ):

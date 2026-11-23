@@ -979,3 +979,26 @@ class TestWhetherTheModelReadsImages:
         listed = {name.split("(")[0] for name in self._fields(raw, "Agents")["tools"].split(", ")}
 
         assert mounted == listed
+
+
+class TestCredentialsThatAreNoFile:
+    """A project folder can be someone else's: a credentials file that leads to
+    another file's secrets is not read, and the warning says why."""
+
+    def test_a_link_is_named_as_one(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+        (tmp_path / "secrets").write_text("OPENAI_API_KEY=sk-elsewhere\n", encoding="utf-8")
+        link = tmp_path / "credentials"
+        try:
+            link.symlink_to(tmp_path / "secrets")
+        except OSError as exc:
+            pytest.skip(f"cannot make a symbolic link here: {exc}")
+        assert cfg.read_credentials(link) == {}
+        assert f"{link} was not read: it is a link" in capsys.readouterr().err
+
+    def test_a_folder_is_not_a_regular_file(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        folder = tmp_path / "credentials"
+        folder.mkdir()
+        assert cfg.read_credentials(folder) == {}
+        assert f"{folder} was not read: it is not a regular file" in capsys.readouterr().err

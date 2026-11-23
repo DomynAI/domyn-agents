@@ -61,10 +61,13 @@ jobs:
 
   # Pull requests only: on main the job below runs the same tests on every
   # supported version, the one in .python-version included. A required check,
-  # with the coverage of the change checked here too.
+  # with the coverage of the change checked here too, on the Linux and the
+  # Windows runs together: code that runs only on Windows is covered there, and
+  # it waits for those jobs to have that report. Run whatever they end in.
   test:
-    needs: changes
-    if: github.event_name == 'pull_request' && needs.changes.outputs.code == 'true'
+    needs: [changes, test-windows]
+    if: >-
+      !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -123,14 +126,33 @@ jobs:
             echo "⚪ Coverage not checked: the pull request is labelled \`coverage-exempt\`." >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      # Missing when the Windows tests did not get as far as writing it.
+      - name: Windows coverage
+        if: steps.exempt.outputs.exempt != 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-windows
+
       # The lines the pull request adds or changes, at least 80% of them run by
-      # a test. The uncovered ones are listed in the job summary.
+      # a test, on Linux or on Windows: diff-cover counts a line covered in
+      # either report. The uncovered ones are listed in the job summary.
       - name: Coverage of the change
         if: steps.exempt.outputs.exempt != 'true'
         env:
           BASE: ${{ github.base_ref }}
         run: |
-          uv run diff-cover coverage.xml --compare-branch "origin/$BASE" \
+          reports=(coverage.xml)
+          if [ -f coverage-windows.xml ]; then
+            # Its files are named from the Windows checkout (D:\a\...), which
+            # matches nothing here: from the package folder, as diff-cover reads them.
+            sed -E -i 's#<source>[^<]*</source>#<source>domyn</source>#' coverage-windows.xml
+            reports+=(coverage-windows.xml)
+          else
+            echo "⚠️ No Windows coverage: the lines that run only on Windows count as not covered." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          uv run diff-cover "${reports[@]}" --compare-branch "origin/$BASE" \
             --fail-under 80 --format "markdown:$RUNNER_TEMP/diff-cover.md" \
             && status=0 || status=$?
           cat "$RUNNER_TEMP/diff-cover.md" >> "$GITHUB_STEP_SUMMARY"
@@ -211,13 +233,33 @@ jobs:
       # ended pytest silently in the middle of its summary. Not PYTHONUTF8,
       # which would also make every file read without an encoding read UTF-8
       # and hide the very bugs this job is here to find.
+      # Coverage on Intel only, for the pull request's coverage check (the test
+      # job): ARM runs the same code, emulated and slower. Measured through
+      # sys.monitoring (COVERAGE_CORE=sysmon, Python 3.12+), which costs a fifth
+      # of the default tracer: on the tests that time themselves, +12% against
+      # +57% (Windows on ARM, x64 emulated). Unset off coverage, it changes nothing.
       - name: Run tests
         shell: bash
         env:
           PYTHONIOENCODING: utf-8
+          COVERAGE_CORE: sysmon
+          COVERAGE: >-
+            ${{ matrix.os == 'windows-latest' && github.event_name == 'pull_request'
+            && '--cov=domyn --cov-report=xml:coverage-windows.xml' || '--no-cov' }}
         run: >-
-          uv run --with pytest-timeout pytest tests/ examples/ -q --no-cov
+          uv run --with pytest-timeout pytest tests/ examples/ -q $COVERAGE
           -p no:cacheprovider --timeout=120 -rfE
+
+      # Written even when a test failed, so the coverage check still has it.
+      - name: Upload coverage
+        if: >-
+          !cancelled() && matrix.os == 'windows-latest' && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-windows
+          path: coverage-windows.xml
+          retention-days: 1
+          if-no-files-found: ignore
 
   # Every Python version the package supports (pyproject.toml's classifiers,
   # and the Python badge in the README). On main and on release tags (called

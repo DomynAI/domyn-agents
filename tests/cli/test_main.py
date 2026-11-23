@@ -95,3 +95,20 @@ def test_importing_the_entry_point_loads_no_command() -> None:
         [sys.executable, "-c", code], capture_output=True, text=True, check=True
     ).stdout
     assert out.strip() == "[]"
+
+
+def test_cli_turns_escape_sequences_on_before_the_commands(monkeypatch) -> None:
+    """In this order: the commands' rich Consoles are made when they are imported."""
+    import domyn.agents.cli.cli as commands
+    from domyn.agents.cli import main
+    from domyn.agents.interfaces.cli import theme
+
+    calls: list[str] = []
+    monkeypatch.setattr(theme, "enable_escape_sequences", lambda: calls.append("escapes"))
+    monkeypatch.setattr(main, "_load_dotenv", lambda: calls.append("dotenv"))
+    monkeypatch.setattr(main, "_load_credentials", lambda: calls.append("credentials"))
+    monkeypatch.setattr(commands, "app", lambda: calls.append("app"))
+
+    main.cli()
+
+    assert calls == ["escapes", "dotenv", "credentials", "app"]
