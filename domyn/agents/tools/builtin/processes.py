@@ -432,13 +432,18 @@ compact_once() {{
       # else may start a process, each one tens of milliseconds under Git Bash.
       prev=$(cat "$f.cut" 2>/dev/null || echo 0)
       e=$s
+      still=""
       for _ in $(seq 20); do
         n=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
-        [ "${{n:-0}}" -gt "$e" ] || break
+        [ "${{n:-0}}" -gt "$e" ] || {{ still=1; break; }}
         tail -c +$(( e + 1 )) "$f" | head -c $(( n - e )) >> "$f.part"
         e=$n
         [ $(( e - s )) -lt {tail_bytes} ] || break
       done
+      if [ -z "$still" ] && [ "$e" -le $(( 2 * {compact_at} )) ]; then
+        rm -f "$f.part"
+        continue
+      fi
       cat "$f.part" > "$f"
       rm -f "$f.part"
       echo $(( prev + s - {tail_bytes} )) > "$f.cut"
