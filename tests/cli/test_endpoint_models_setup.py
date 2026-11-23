@@ -29,7 +29,6 @@ LISTING = {
 @pytest.fixture(autouse=True)
 def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cfg, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
-    monkeypatch.setattr(cfg, "PROJECT_DIR", tmp_path / "project" / ".domyn")
     for name in ("LLM_API_KEY", "VLLM_API_KEY"):
         monkeypatch.setenv(name, "")
         monkeypatch.delenv(name)
