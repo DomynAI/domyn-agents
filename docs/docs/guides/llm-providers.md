@@ -136,13 +136,12 @@ llm_providers:
 
 ### `custom`
 
-For any endpoint that speaks OpenAI Chat Completions, with full control over the request. It has no `generation_params`: request fields go in `body`. An `api_key` is sent as `Authorization: Bearer <key>`; set `Authorization` in `headers` instead for any other scheme, which then wins over `api_key`.
+For any endpoint that speaks OpenAI Chat Completions, with full control over the request. It has no `api_key` and no `generation_params`: credentials go in `headers`, in whatever scheme the endpoint expects (`Authorization: Bearer …`, `api-key`, `x-api-key`…), and request fields in `body`. `domyn setup` asks for an API key as for any provider and writes it there, as `Authorization: Bearer ${LLM_API_KEY}`.
 
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `url` | `str` | required | The full chat completions URL (`domyn setup` completes a base URL for you; the provider posts to this one as written). |
-| `api_key` | `str` | none | Sent as `Authorization: Bearer <key>` unless `headers` sets `Authorization`. |
-| `headers` | `dict[str, str]` | `{}` | HTTP headers sent with every request, for example `Authorization`. |
+| `headers` | `dict[str, str]` | `{}` | HTTP headers sent with every request, credentials included, for example `Authorization: Bearer ${GATEWAY_API_KEY}`. |
 | `body` | `dict` | `{}` | Fields added to every request body, for example `temperature` or `max_tokens`. |
 
 ```yaml
@@ -151,7 +150,8 @@ llm_providers:
     type: custom
     model_name: Qwen/Qwen3-32B
     url: https://llm.example.com/v1/chat/completions
-    api_key: ${GATEWAY_API_KEY}
+    headers:
+      Authorization: Bearer ${GATEWAY_API_KEY}
     body:
       temperature: 0.7
       max_tokens: 512

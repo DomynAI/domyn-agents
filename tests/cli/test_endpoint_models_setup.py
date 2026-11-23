@@ -68,7 +68,8 @@ class TestTheModelsAreListed:
         provider = result["llm_providers"][0]
         assert provider["model_name"] == "gpt-oss-120b"
         assert provider["url"] == "https://gw.example.com/v1/chat/completions"
-        assert provider["api_key"] == "${LLM_API_KEY}"
+        assert provider["headers"] == {"Authorization": "Bearer ${LLM_API_KEY}"}
+        assert "api_key" not in provider
         assert route.calls.last.request.headers["authorization"] == "Bearer sk-test"
         assert "32,768 tokens" in shown
 

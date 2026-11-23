@@ -958,7 +958,7 @@ Built-in provider types (registered in `LLMProviderFactory`, `domyn/agents/llm/_
 - `AnthropicProvider` - Anthropic API. The text that follows the results of one tool-use turn (a sub-agent's outcome, a message that arrived meanwhile) goes into the user message holding them, after them (`_convert_messages`): Anthropic wants the results first in the user message right after the turn, and does not promise to merge two user messages in a row.
 - `CerebrasProvider` - Cerebras API
 - `OpenRouterProvider` - OpenRouter API
-- `CustomLLMProvider` - generic OpenAI-compatible endpoint. `api_key` is sent as `Authorization: Bearer` unless `headers` sets `Authorization` itself, which wins (the field was missing, so the `api_key: ${LLM_API_KEY}` the CLI writes was silently dropped and every request was a 401)
+- `CustomLLMProvider` - generic OpenAI-compatible endpoint. Its credentials go in `headers`, any scheme; it has no `api_key`. `domyn setup` still asks for an API key, as for every provider, and writes it as `headers: {Authorization: Bearer ${LLM_API_KEY}}` (`configuration_v1_dict_from`, `interfaces/cli/config.py`; `/config` reads the variable back from that header, `_bearer_reference`). It used to write `api_key`, which the provider never read, so every request was a 401. An export scrubs a literal secret header on an `llm_providers` entry like an MCP server's, an `Authorization` keeping its scheme (`Bearer ${LLM_API_KEY}`)
 - `DelegateLLMProvider` - marker for runner-to-runner delegation (not called directly)
 
 All providers talk raw HTTP via `httpx` — no vendor SDKs are declared as dependencies.

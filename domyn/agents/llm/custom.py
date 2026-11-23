@@ -33,13 +33,6 @@ class CustomLLMProvider(BaseLLMProvider):
         default_factory=dict,
         description="Custom HTTP headers sent with every request (e.g. Authorization)",
     )
-    api_key: str | None = Field(
-        default=None,
-        description=(
-            "API key sent as `Authorization: Bearer <key>`, unless `headers` sets "
-            "`Authorization` itself"
-        ),
-    )
     body: dict[str, Any] = Field(
         default_factory=dict,
         description="Extra key-value pairs merged into the request body",
@@ -54,19 +47,12 @@ class CustomLLMProvider(BaseLLMProvider):
         if not self.name:
             self.name = self.model_name
 
-    def _auth_headers(self) -> dict[str, str]:
-        """The bearer key, then the endpoint's own headers, which win: a config that puts
-        its token in ``headers`` keeps sending exactly that."""
-        has_own = any(name.lower() == "authorization" for name in self.headers)
-        bearer = {"Authorization": f"Bearer {self.api_key}"} if self.api_key and not has_own else {}
-        return {**bearer, **self.headers}
-
     def _request_headers(self) -> dict[str, str]:
-        return {"Content-Type": "application/json", **self._auth_headers()}
+        return {"Content-Type": "application/json", **self.headers}
 
     def _context_window_headers(self) -> dict[str, str]:
-        """The same credentials as a request, for the ``/models`` lookup."""
-        return self._auth_headers()
+        """The endpoint's own headers: its credentials live there, not in an api key."""
+        return dict(self.headers)
 
     async def generate(
         self,
