@@ -14,7 +14,7 @@ The setup wizard saves the session's configuration to `~/.domyn/config.yaml`. `d
 
 | Part | What it asks |
 |---|---|
-| Model | The provider, the model, the URL, the API key, the maximum tokens of a reply and the context window. For `domyn`, also the space id and the configuration id, and the model is picked from the models of the space. See the [CLI quickstart](../getting-started/quickstart-cli.md). |
+| Model | The provider, the model, the URL, the API key, the maximum tokens of a reply and the context window. For `domyn`, also the space id and the configuration id, and the model is picked from the models of the space. Then, without asking, it sends the model a small image to find out whether it reads images (see below). See the [CLI quickstart](../getting-started/quickstart-cli.md). |
 | Instructions | The agent's name (empty: `Assistant`, at most 30 characters), then a folder or file holding your `SOUL.md` / `AGENTS.md`, then whether to also load them from `./.domyn` and `./.agents` in the folder the session starts in, then extra instructions for the agent, the start of its system prompt (empty: none). See [Standing instructions](../guides/standing-instructions.md). |
 | Tools | A checklist of the [built-in tools](tools-and-approvals.md): `files`, `shell` and `browser`, all ticked the first time. Untick them all for an agent that only talks. |
 | Skills | A checklist of the built-in skills, by group, all ticked the first time; then a folder of your own skills; then whether to load skills from `./.domyn/skills` and `./.agents/skills` in the folder the session starts in. See [Skills](../guides/skills.md). |
@@ -22,6 +22,8 @@ The setup wizard saves the session's configuration to `~/.domyn/config.yaml`. `d
 Run again over an existing configuration, the wizard first shows each part as it is and asks whether to keep it; Enter keeps it and skips its questions. In a part you do not keep, each field opens with its saved value: Enter keeps it, and erasing it gives back the default the question names, such as the provider's own URL or the last released configuration. Keeping the skills does not reinstall the built-in ones, so a built-in skill changed by an upgrade arrives only when you do not keep them.
 
 On a terminal, Ctrl-B goes back to the previous question, which opens on the answer you gave it. Ctrl-C stops the wizard and saves nothing.
+
+The image check runs on every `domyn setup` and every `/model`, even when you keep the model, and its line is printed under the model's settings: `Vision: enabled` when the model took the image, `Vision: not supported for this model (if not expected doublecheck the parameters)` otherwise. Enabled, the agent gets [`read_image`](tools-and-approvals.md) and you can [attach images](sessions.md#attaching-images) to a message. The answer is saved as `vision` on the provider, and it **replaces whatever the file said**: a `vision: true` written by hand is removed if the check fails. Any failure counts as no, a wrong API key or an endpoint that is down included, so if a model that reads images comes out as not supported, check the URL and the key and run `/model` again.
 
 Renaming the agent changes which past messages it recognizes as its own: in a conversation started under the old name, resumed with `--resume` or still open, the model no longer sees its earlier replies and tool results, only your messages.
 
@@ -86,6 +88,7 @@ The settings you are most likely to change:
 |---|---|
 | `context_window` | The model's context window, in tokens. Left out (`auto` in the wizard), the session asks the provider at start and assumes 150,000 when it cannot answer; `/context` shows the window it got. Set it when the provider reports none, or a wrong one: the session compacts the conversation based on it. |
 | `send_reasoning` | On the provider, `true` unless written. `false` stops the model's reasoning being sent back to it, for a model that ignores it (a vLLM chat template that does not read `reasoning_content`): it then gets the short thoughts instead. Kept when `domyn setup` or `/model` rewrites the file. |
+| `vision` | On the provider, `true` when the model reads images, which gives the agent `read_image` with the `files` tools. Written by `domyn setup` and `/model` from the image they send the model, and replaced by that check every time they run: set it by hand only for a model you changed by hand, and expect the next `domyn setup` or `/model` to decide it again. |
 | `stream` | `true` prints the answer as it is generated, `false` when it is complete. |
 | `bundles` | The [built-in tools](tools-and-approvals.md): `files`, `shell` and `browser`. Remove one to take those tools away, or leave the list empty for an agent that only talks. |
 | `skills` | The [skills](../guides/skills.md) the agent loads. Only what is listed here is loaded. |

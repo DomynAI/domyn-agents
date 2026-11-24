@@ -353,7 +353,10 @@ says which variable is missing.
 **Two things that can surprise the user, so mention them when relevant:**
 
 - `domyn setup` and `/model` **rewrite the whole file** from the fields they know
-  about: the provider's type, model, url, `max_tokens` and `context_window`; the
+  about: the provider's type, model, url, `max_tokens`, `context_window`,
+  `send_reasoning` and `vision` (`vision` is not kept but decided again: they send
+  the model a small image, and a failed check removes a `vision: true` written by
+  hand); the
   agent's name, description, instruction, stream, skills and
   `standing_instructions`; the tool bundle's bundles, workspace, backend (and its `docker` options), isolation,
   `allowed_env` and `browser` options; and the compaction settings. Anything else is
@@ -377,6 +380,7 @@ To start over: `domyn setup` (it pre-fills the current values; Enter keeps them)
 | a `config.yaml` edit "did nothing" | not reloaded. Restart (`/exit`, `domyn run`) |
 | a SOUL.md / AGENTS.md edit "did nothing" | it applies from the next message, so check that the edited file is the one being read: `/config` lists the paths in use. A sub-agent reads only the `standing_instructions` its own YAML entry declares |
 | a new skill does not appear | it must be in `./.domyn/skills` or `./.agents/skills` with autodiscovery on, or listed in `config.yaml`; either way it is loaded from the next message (the config's skill paths and the skill files are read before every message). Otherwise a skill earlier in the precedence list has the same name, the listed path is wrong (`/config` shows the paths), or a "Skill not found" line at startup says so |
+| the agent has no `read_image`, or Ctrl-V / a dropped image says "This agent cannot look at images" | the agent's provider has no `vision: true`, or its tool bundle does not list `files`. `/config` shows `images: read` or `not read` for the provider. `vision` is set by the image check `domyn setup` and `/model` run: if the model reads images but the check said "not supported", the URL or the key was probably wrong, so fix them and run `/model` again. A model changed by editing `config.yaml` keeps the old answer until then |
 | "Tool-call arguments still malformed after 3 retries" | the answer hit `max_tokens`. Raise it through `/model` |
 | the conversation hits the model's limit and is never compacted | no `context_window` in the provider block (or it is spelled `max_model_len`). Add `context_window`; it applies from the next message |
 | `/model` says it only applies to the default configuration | the session was started from a file. Edit that file; it applies from the next message |
