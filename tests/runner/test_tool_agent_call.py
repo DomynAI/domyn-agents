@@ -25,8 +25,11 @@ from domyn.agents.runner import Runner
 from domyn.agents.tools import FunctionTool
 from domyn.agents.tools.builtin import BuiltinTools
 from tests.runner.test_parallel_handoffs import (
+    APP,
     PLANNERS,
+    USER,
     _approve,
+    _ask,
     _planner,
     _run,
     _Script,
@@ -109,6 +112,22 @@ def _starts(events: list[BaseEvent]) -> dict[str, list[str]]:
         if e.event_type == ExecutionEventType.AGENT_START and e.author != "MainAgent":
             found.setdefault(e.author, []).append(str(e.interaction_id))
     return found
+
+
+def _delegating(planner: str, subs: list[Agent], replies: list[Any]) -> Agent:
+    """The agent the conversation is addressed to: it calls ``subs`` all at once,
+    then answers with ``replies``."""
+    return Agent(
+        name="MainAgent",
+        description="the agent",
+        instruction="delegate",
+        llm_provider=_Script(
+            label="main",
+            replies=[[(sub.name, f'{{"task": "{sub.name}"}}') for sub in subs], *replies],
+        ),
+        planner=_planner(planner, parallel_handoffs=True),
+        sub_agents=subs,
+    )
 
 
 class TestTheAgentCallId:
@@ -263,6 +282,118 @@ class TestTheEndOfACall:
         # Each bundle hears of every call that ends (both are told of both): a
         # bundle that kept nothing for a call ignores it.
         assert calls <= set(ended)
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_an_agent_handed_off_to_inside_a_failed_branch_is_ended(
+        self, planner: str
+    ) -> None:
+        # Alpha, in a branch, hands off to Inner, whose model fails. The branch ends
+        # as failed; Inner, on that branch's stack, used to get no AGENT_END, and
+        # its browser stayed open until the idle timeout.
+        class _Down(_Script):
+            async def generate(self, messages: list[LLMMessage], **kwargs: Any) -> LLMResponse:
+                raise RuntimeError("the model is down")
+
+        seen: list[tuple[str, str]] = []
+        ended: list[str] = []
+        inner = Agent(
+            name="Inner",
+            description="does the inner part",
+            instruction="do the task",
+            llm_provider=_Down(label="Inner"),
+            planner=_planner(planner),
+            builtin_tools=[_Ends(ended)],
+        )
+        alpha = _sub(
+            "Alpha",
+            planner,
+            seen,
+            [[("Inner", '{"task": "i"}')], "Alpha done"],
+            sub_agents=[inner],
+            builtin_tools=[_Ends(ended)],
+        )
+        beta = _sub("Beta", planner, seen, ["Beta done"], builtin_tools=[_Ends(ended)])
+        root = _delegating(planner, [alpha, beta], replies=["Done."])
+
+        events = await _run(Runner(), root, f"c_nested_fail_{planner}")
+
+        inner_call = _starts(events)["Inner"][0]
+        assert inner_call in ended
+        inner_end = [
+            e
+            for e in events
+            if e.event_type == ExecutionEventType.AGENT_END and e.interaction_id == inner_call
+        ]
+        assert [e.error_code for e in inner_end] == ["SubAgentFailed"]
+        # Top first: Inner's end before the end of the branch it was in.
+        authors = [
+            e.author
+            for e in events
+            if e.event_type == ExecutionEventType.AGENT_END and e.author in ("Inner", "Alpha")
+        ]
+        assert authors == ["Inner", "Alpha"]
+
+    @pytest.mark.parametrize("planner", PLANNERS)
+    @pytest.mark.asyncio
+    async def test_an_agent_handed_off_to_inside_an_interrupted_branch_is_ended(
+        self, planner: str
+    ) -> None:
+        seen: list[tuple[str, str]] = []
+        ended: list[str] = []
+        inner = Agent(
+            name="Inner",
+            description="does the inner part",
+            instruction="do the task",
+            llm_provider=_Script(label="Inner", replies=["Inner done"], delay=5.0),
+            planner=_planner(planner),
+            builtin_tools=[_Ends(ended)],
+        )
+        alpha = _sub(
+            "Alpha",
+            planner,
+            seen,
+            [[("Inner", '{"task": "i"}')], "Alpha done"],
+            sub_agents=[inner],
+            builtin_tools=[_Ends(ended)],
+        )
+        beta = Agent(
+            name="Beta",
+            description="looks at beta",
+            instruction="do the task",
+            llm_provider=_Script(label="Beta", replies=["Beta done"], delay=5.0),
+            planner=_planner(planner),
+            builtin_tools=[_Ends(ended)],
+        )
+        root = _delegating(planner, [alpha, beta], replies=["Done."])
+        runner = Runner()
+        conversation = f"c_nested_stop_{planner}"
+
+        run = runner.run(
+            application_name=APP,
+            user_id=USER,
+            conversation_id=conversation,
+            root=root,
+            user_input=_ask(),
+        )
+        inner_call = ""
+        async for event in run:
+            if event.event_type == ExecutionEventType.AGENT_START and event.author == "Inner":
+                inner_call = str(event.interaction_id)
+                break
+        await run.aclose()
+
+        assert inner_call
+        assert inner_call in ended
+        info = await runner.conversation_manager.get_conversation(APP, USER, conversation)
+        assert info is not None
+        interrupted = {
+            e.author
+            for e in info.events_history
+            if e.event_type == ExecutionEventType.AGENT_END
+            and e.error_code == "SubAgentInterrupted"
+        }
+        assert interrupted == {"Inner", "Alpha", "Beta"}
 
     @pytest.mark.asyncio
     async def test_a_bundle_that_fails_to_release_does_not_fail_the_turn(self) -> None:

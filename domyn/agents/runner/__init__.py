@@ -3370,8 +3370,8 @@ class Runner:
         except Exception as exc:
             logger.warning(f"sub-agent {record['agent']!r} failed: {type(exc).__name__}")
             logger.debug(f"sub-agent {record['agent']!r} failed, detail: {exc}", exc_info=True)
-            failure = await self._branch_failure(state, record, first, type(exc).__name__)
-            yield "event", failure
+            for failure in await self._branch_failure(state, record, first, type(exc).__name__):
+                yield "event", failure
             return
         if question is not None:
             record["status"] = PAUSED
@@ -3391,7 +3391,8 @@ class Runner:
                 if error is not None
                 else "it stopped without an answer"
             )
-            yield "event", await self._branch_failure(state, record, first, reason)
+            for failure in await self._branch_failure(state, record, first, reason):
+                yield "event", failure
             return
         record["status"] = DONE
         if not ended:
@@ -3399,15 +3400,10 @@ class Runner:
 
     async def _branch_failure(
         self, state: RunnerState, record: dict[str, Any], first: str | None, reason: str
-    ) -> BaseEvent:
-        """The AGENT_END of a branch that did not end, stored, for its caller."""
+    ) -> list[BaseEvent]:
+        """The AGENT_ENDs of a branch that did not end, stored, for its caller."""
         return await self._end_branch(
-            state,
-            record,
-            first,
-            text=f"The agent failed: {reason}",
-            code="SubAgentFailed",
-            message=f"The agent {record['agent']} failed",
+            state, record, first, text=f"The agent failed: {reason}", code="SubAgentFailed"
         )
 
     async def _end_branch(
@@ -3418,11 +3414,32 @@ class Runner:
         *,
         text: str,
         code: str,
-        message: str,
         conversation_state: dict[str, Any] | None = None,
-    ) -> BaseEvent:
-        """An AGENT_END for a branch that will not end on its own, stored: the
-        result its caller reads for the call. A copy's compaction keys go with it."""
+    ) -> list[BaseEvent]:
+        """AGENT_ENDs for a branch that will not end on its own, stored: one for each
+        agent still on its stack above its first, top first, then the first's, the
+        result its caller reads for the call. Every agent handed off to inside the
+        branch is on that stack until it ends, and an agent call that never gets an
+        AGENT_END keeps what its tools hold for it (its browser, `_end_agent_call`).
+        A copy's compaction keys go with it."""
+        shared = conversation_state if conversation_state is not None else state.shared_state
+        outcome = "was interrupted" if code == "SubAgentInterrupted" else "failed"
+        ends: list[BaseEvent] = []
+        for entry in reversed(BranchStack(record).entries):
+            if entry.interaction_id == first:
+                continue
+            end = BaseEvent(
+                event_type=ExecutionEventType.AGENT_END,
+                author=entry.agent_name,
+                interaction_id=entry.interaction_id,
+                turn_id=entry.turn_id or state.turn_id,
+                content=[Part(text=text)],
+                error_code=code,
+                error_message=f"The agent {entry.agent_name} {outcome}",
+            )
+            await self._add_event(state, end, context=None)
+            forget_copy(shared, entry.agent_name, entry.interaction_id)
+            ends.append(end)
         end = BaseEvent(
             event_type=ExecutionEventType.AGENT_END,
             author=record["agent"],
@@ -3430,17 +3447,14 @@ class Runner:
             turn_id=state.turn_id,
             content=[Part(text=text)],
             error_code=code,
-            error_message=message,
+            error_message=f"The agent {record['agent']} {outcome}",
         )
         await self._add_event(state, end, context=None)
         record["stack"].clear()
         record["status"] = DONE
-        forget_copy(
-            conversation_state if conversation_state is not None else state.shared_state,
-            record["agent"],
-            first,
-        )
-        return end
+        forget_copy(shared, record["agent"], first)
+        ends.append(end)
+        return ends
 
     async def _end_batch(
         self,
@@ -3884,7 +3898,6 @@ class Runner:
                     record["interactions"][0],
                     text=f"The agent was interrupted before it finished: {_STOPPED_RUNNING}",
                     code="SubAgentInterrupted",
-                    message=f"The agent {record['agent']} was interrupted",
                     conversation_state=context.state,
                 )
             else:
