@@ -49,6 +49,8 @@ from domyn.agents.tools.builtin.backends import (
     DockerBackendOptions,
     GitBashBackend,
     LocalBackend,
+    SshBackend,
+    SshBackendOptions,
     build_backend,
 )
 from domyn.agents.tools.builtin.browser import browser_tools
@@ -201,7 +203,9 @@ def bundle(
             # The same backend as the shell, so the browser is wherever the commands are:
             # in a container image, agent-browser and Chrome are there too.
             resolved = resolved or build_backend("local", space, allowed_env=allowed_env)
-            browser_list, sessions = browser_tools(backend=resolved, options=browser)
+            # Over ssh, on this machine unless the bundle asks for the server's.
+            where = resolved.browser_backend if isinstance(resolved, SshBackend) else resolved
+            browser_list, sessions = browser_tools(backend=where, options=browser)
             tools.extend(browser_list)
         else:
             get_logger().warning(
@@ -233,7 +237,7 @@ class BuiltinBundleConfig(BaseModel):
     backend: str = "auto"
     """Where ``run_command`` runs: ``auto`` (a Docker container when Docker can be
     used, else this machine, with a warning), ``docker`` (a container, or refuse to
-    start) or ``local`` (this machine)."""
+    start), ``local`` (this machine) or ``ssh`` (a server, see ``ssh``)."""
     isolate_environment: bool = True
     allowed_env: list[str] = PydanticField(default_factory=list)
     """Extra environment variable names ``run_command``'s subprocess may see,
@@ -245,6 +249,9 @@ class BuiltinBundleConfig(BaseModel):
     """Options for the ``browser`` bundle; ignored unless it is listed."""
     docker: DockerBackendOptions = PydanticField(default_factory=DockerBackendOptions)
     """Options for the Docker backend; ignored when ``backend`` is ``local``."""
+    ssh: SshBackendOptions = PydanticField(default_factory=SshBackendOptions)
+    """Options for the SSH backend (the server and the folder on it); read only when
+    ``backend`` is ``ssh``."""
 
     def build(
         self,
@@ -277,6 +284,7 @@ class BuiltinBundleConfig(BaseModel):
             isolate_environment=self.isolate_environment,
             allowed_env=self.allowed_env,
             docker=self.docker,
+            ssh=self.ssh,
         )
         return bundle(
             *self.bundles,
@@ -304,6 +312,8 @@ __all__ = [
     "DockerBackendOptions",
     "GitBashBackend",
     "LocalBackend",
+    "SshBackend",
+    "SshBackendOptions",
     "Workspace",
     "WorkspaceError",
     "browser_tools",

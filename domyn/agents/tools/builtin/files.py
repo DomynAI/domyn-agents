@@ -52,6 +52,7 @@ from typing import TYPE_CHECKING, Any
 import anydoc
 
 from domyn.agents.core import ApprovalType, documents
+from domyn.agents.tools.builtin.disk import LOCAL_DISK, Disk
 from domyn.agents.tools.builtin.workspace import Workspace, WorkspaceError, is_ignored
 
 if TYPE_CHECKING:
@@ -97,36 +98,35 @@ def _positive_int(value: object, fallback: int) -> int:
     return number if number > 0 else fallback
 
 
-def _read_text(path: str, workspace: Workspace) -> str:
+def _read_text(path: str, resolved: Path, disk: Disk) -> str:
     """The whole file, for callers that need it — ``edit_file`` matching.
 
     Not what the model gets: see ``read_file``, which reads a window.
     """
-    resolved = workspace.resolve(path, must_exist=True)
-    if resolved.is_dir():
+    if disk.is_dir(resolved):
         raise WorkspaceError(f"'{path}' is a directory. Use list_dir for that.")
     try:
-        return resolved.read_text(encoding="utf-8")
+        return disk.read_text(resolved)
     except UnicodeDecodeError:
         raise WorkspaceError(
             f"'{path}' is not UTF-8 text. Binary files cannot be read here."
         ) from None
 
 
-def _contained(workspace: Workspace, found: Path) -> bool:
+def _contained(workspace: Workspace, found: Path, disk: Disk) -> bool:
     """Whether a file a glob found is inside the workspace once resolved.
 
     Checked as every path a tool is given is checked: a glob can climb out with
     ``..``, and a symlink in the workspace can point anywhere.
     """
     try:
-        workspace.resolve(found)
+        disk.resolve(workspace, found)
     except WorkspaceError:
         return False
     return True
 
 
-def _files_to_search(workspace: Workspace, scope: Path, glob: str) -> list[Path]:
+def _files_to_search(workspace: Workspace, scope: Path, glob: str, disk: Disk) -> list[Path]:
     """The files under the directory ``scope`` that ``glob`` names.
 
     Read as ripgrep reads a glob, which is what models write: without a ``/`` it
@@ -136,11 +136,11 @@ def _files_to_search(workspace: Workspace, scope: Path, glob: str) -> list[Path]
     ``src/src/*.py``, and the search found nothing without saying why.
     """
     if "/" not in glob:
-        found = scope.rglob(glob)
+        found = disk.glob(scope, f"**/{glob}")
     elif glob.startswith("**/") and "/" not in glob[3:]:
         # A name at any depth: what it names under ``scope`` is the same from
         # either place, and reading it from ``scope`` walks ``scope`` only.
-        found = scope.glob(glob)
+        found = disk.glob(scope, glob)
     else:
         # From the root that holds ``scope``, but only what is under ``scope``:
         # ``path`` still bounds the search. A directory the glob names may be
@@ -151,15 +151,17 @@ def _files_to_search(workspace: Workspace, scope: Path, glob: str) -> list[Path]
             (root for root in workspace.roots if root == scope or root in scope.parents),
             workspace.root,
         )
-        found = (p for p in base.glob(glob) if p == scope or scope in p.parents)
+        found = [p for p in disk.glob(base, glob) if p == scope or scope in p.parents]
     return sorted(
         p
         for p in found
-        if p.is_file() and not is_ignored(p, workspace.root) and _contained(workspace, p)
+        if disk.is_file(p) and not is_ignored(p, workspace.root) and _contained(workspace, p, disk)
     )
 
 
-def _matches(workspace: Workspace, base: Path, pattern: str, argument: str) -> list[Path]:
+def _matches(
+    workspace: Workspace, base: Path, pattern: str, argument: str, disk: Disk
+) -> list[Path]:
     """The files under ``base`` that a glob pattern names, never one outside the workspace.
 
     ``Path.glob`` does not know about the workspace. A pattern with ``..`` climbs out
@@ -185,14 +187,14 @@ def _matches(workspace: Workspace, base: Path, pattern: str, argument: str) -> l
             "and keep the pattern relative to it, e.g. path='/abs/folder', pattern='*.py'."
         )
     try:
-        candidates = sorted(base.glob(pattern))
+        candidates = sorted(disk.glob(base, pattern))
     except (ValueError, NotImplementedError) as exc:
         raise WorkspaceError(f"{argument} {pattern!r} is not a usable pattern: {exc}") from None
 
     inside: list[Path] = []
     for candidate in candidates:
         try:
-            resolved = candidate.resolve()
+            resolved = disk.real(candidate)
         except OSError:
             continue
         if workspace.contains(resolved) and not is_ignored(
@@ -219,7 +221,7 @@ class _Window:
     """What a document's conversion left out, said on its first window."""
 
 
-def _read_window(resolved: Path, start: int, count: int, start_char: int = 0) -> _Window:
+def _read_window(resolved: Path, start: int, count: int, start_char: int, disk: Disk) -> _Window:
     """Lines ``start..start+count-1`` of a text file, and what is around them.
 
     Iterated rather than read whole and sliced. Slicing would still pull the
@@ -227,7 +229,7 @@ def _read_window(resolved: Path, start: int, count: int, start_char: int = 0) ->
     model and not for the process doing the reading — and a large enough file
     would take the session down before the window was ever computed.
     """
-    with resolved.open(encoding="utf-8") as handle:
+    with disk.lines(resolved) as handle:
         return _window(handle, start, count, start_char)
 
 
@@ -275,7 +277,9 @@ def _window(source: Iterable[str], start: int, count: int, start_char: int = 0) 
     return _Window(lines, more=False, last_seen=last)
 
 
-def _read_file(path: str, resolved: Path, start: int, count: int, start_char: int = 0) -> _Window:
+def _read_file(
+    path: str, resolved: Path, start: int, count: int, start_char: int, disk: Disk
+) -> _Window:
     """A window of a file, read the way ``domyn.agents.core.documents`` reads files.
 
     A text file is read a window at a time, never whole. What has to be read
@@ -288,18 +292,18 @@ def _read_file(path: str, resolved: Path, start: int, count: int, start_char: in
     is a document is refused unless it reads as text; any other file is read
     as text or refused as binary.
     """
-    size = resolved.stat().st_size
+    size = disk.size(resolved)
     named = anydoc.format_from_path(resolved)
     if size > MAX_DOCUMENT_BYTES or named is None:
         try:
-            return _read_window(resolved, start, count, start_char)
+            return _read_window(resolved, start, count, start_char, disk)
         except UnicodeDecodeError:
             if size > MAX_DOCUMENT_BYTES:
                 if named not in (None, "csv"):
                     raise _too_large(path, size) from None
                 raise _binary(path) from None
     try:
-        extracted = documents.extract_text(resolved)
+        extracted = disk.extract_text(resolved)
     except documents.NotTextError:
         raise _binary(path) from None
     except documents.DocumentError as error:
@@ -323,7 +327,7 @@ def _too_large(path: str, size: int) -> WorkspaceError:
     )
 
 
-def _refuse_hard_link(path: str, resolved: Path) -> None:
+def _refuse_hard_link(path: str, resolved: Path, disk: Disk) -> None:
     """Refuse to write a file that has another name on disk.
 
     ``Workspace.resolve`` follows symlinks and ``..``, but a hard link has
@@ -333,7 +337,7 @@ def _refuse_hard_link(path: str, resolved: Path) -> None:
     that does not exist yet has no other name, and a directory always has more
     than one, so only existing files are checked.
     """
-    if resolved.is_file() and resolved.stat().st_nlink > 1:
+    if disk.is_file(resolved) and disk.links(resolved) > 1:
         raise WorkspaceError(
             f"'{path}' is a hard link: the same file also has another name, possibly "
             "outside the workspace, and writing here would change it there too. "
@@ -341,7 +345,7 @@ def _refuse_hard_link(path: str, resolved: Path) -> None:
         )
 
 
-def _refuse_text_over_document(path: str, resolved: Path) -> None:
+def _refuse_text_over_document(path: str, resolved: Path, disk: Disk) -> None:
     """Refuse to write text over a document, which ``read_file`` shows converted.
 
     What the model read of a document is a markdown conversion, not the file,
@@ -354,9 +358,9 @@ def _refuse_text_over_document(path: str, resolved: Path) -> None:
     reads converted. A file over ``MAX_DOCUMENT_BYTES`` is never converted, so
     it is left to the approval gate.
     """
-    if not resolved.is_file() or resolved.stat().st_size > MAX_DOCUMENT_BYTES:
+    if not disk.is_file(resolved) or disk.size(resolved) > MAX_DOCUMENT_BYTES:
         return
-    kind = documents.document_format(resolved.read_bytes(), resolved)
+    kind = documents.document_format(disk.read_bytes(resolved), resolved)
     if kind is not None:
         raise WorkspaceError(
             f"'{path}' is a document ({kind}): what read_file shows of it is a markdown "
@@ -478,8 +482,8 @@ def _megabytes(size: int) -> str:
     return f"{size / (1024 * 1024):.1f} MB"
 
 
-def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
-    """Build every file callable bound to one workspace."""
+def build_tools(workspace: Workspace, disk: Disk = LOCAL_DISK) -> dict[str, Callable[..., str]]:
+    """Build every file callable bound to one workspace, on the disk that holds it."""
 
     def read_file(path: str, start_line: int = 1, max_lines: int = 0, start_char: int = 0) -> str:
         """Read a text file or a document, or a range of lines from it.
@@ -507,15 +511,15 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
                 start. Only for a line cut because it was too long for one read:
                 the note after it gives the value.
         """
-        resolved = workspace.resolve(path, must_exist=True)
-        if resolved.is_dir():
+        resolved = disk.resolve(workspace, path, must_exist=True)
+        if disk.is_dir(resolved):
             raise WorkspaceError(f"'{path}' is a directory. Use list_dir for that.")
 
         start = _positive_int(start_line, 1)
         count = _positive_int(max_lines, DEFAULT_READ_LINES)
         offset = _positive_int(start_char, 0)
 
-        window = _read_file(path, resolved, start, count, offset)
+        window = _read_file(path, resolved, start, count, offset, disk)
 
         if window.line_length is not None:
             raise WorkspaceError(
@@ -561,12 +565,12 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
         Args:
             path: Directory to list, relative to the workspace root.
         """
-        resolved = workspace.resolve(path, must_exist=True)
-        if not resolved.is_dir():
+        resolved = disk.resolve(workspace, path, must_exist=True)
+        if not disk.is_dir(resolved):
             raise WorkspaceError(f"'{path}' is not a directory.")
         # One entry the system will not describe (macOS refuses `.Trash`, `Library`… in a
         # home folder a container was not allowed into) must not fail the whole listing.
-        kinds = {entry: _kind(entry) for entry in resolved.iterdir()}
+        kinds = {entry: _kind(entry, disk) for entry in disk.iterdir(resolved)}
         entries = sorted(kinds, key=lambda p: (kinds[p] != "dir ", p.name.lower()))
         lines = [
             f"{kinds[entry]}  {workspace.display(entry)}"
@@ -585,13 +589,13 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
             path: Folder to search in, relative to the workspace root or an absolute
                 path inside one of the allowed folders.
         """
-        base = workspace.resolve(path, must_exist=True)
-        if not base.is_dir():
+        base = disk.resolve(workspace, path, must_exist=True)
+        if not disk.is_dir(base):
             raise WorkspaceError(f"'{path}' is not a directory.")
         found = [
             workspace.display(p)
-            for p in _matches(workspace, base, pattern, "pattern")
-            if _is_file(p)
+            for p in _matches(workspace, base, pattern, "pattern", disk)
+            if _is_file(p, disk)
         ]
         if not found:
             return f"No files match {pattern!r}."
@@ -618,32 +622,26 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
         except re.error as exc:
             raise WorkspaceError(f"{pattern!r} is not a valid regular expression: {exc}") from None
 
-        scope = workspace.resolve(path, must_exist=True)
-        candidates = [scope] if scope.is_file() else _files_to_search(workspace, scope, glob)
-        hits: list[str] = []
-        searched = 0
-        for candidate in candidates:
-            try:
-                text = candidate.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, OSError):
-                # Binary files and unreadable ones are skipped rather than
-                # reported: a search that lists every image it could not read is
-                # a search whose output nobody reads.
-                continue
-            searched += 1
-            for number, line in enumerate(text.splitlines(), start=1):
-                if regex.search(line):
-                    hits.append(f"{workspace.display(candidate)}:{number}: {line.strip()[:200]}")
-                    if len(hits) >= MAX_MATCHES:
-                        hits.append(f"... stopped at {MAX_MATCHES} matches; narrow the search")
-                        return "\n".join(hits)
+        scope = disk.resolve(workspace, path, must_exist=True)
+        is_file = disk.is_file(scope)
+        candidates = [scope] if is_file else _files_to_search(workspace, scope, glob, disk)
+        # Binary files and unreadable ones are skipped rather than reported: a
+        # search that lists every image it could not read is a search whose
+        # output nobody reads.
+        found, searched = disk.search(candidates, regex, MAX_MATCHES)
+        hits = [
+            f"{workspace.display(candidate)}:{number}: {line.strip()[:200]}"
+            for candidate, number, line in found
+        ]
+        if len(hits) >= MAX_MATCHES:
+            hits.append(f"... stopped at {MAX_MATCHES} matches; narrow the search")
         if hits:
             return "\n".join(hits)
         # Two different answers. "No matches" read after a search that read no
         # file is taken for "the text is not there", when the arguments were wrong.
         where = workspace.display(scope)
         if not searched:
-            if scope.is_file():
+            if is_file:
                 return f"Nothing was searched: {where!r} is not a text file."
             return f"Nothing was searched: no text file under {where!r} matches the glob {glob!r}."
         files = "1 file" if searched == 1 else f"{searched} files"
@@ -656,12 +654,11 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
             path: Path to write, relative to the workspace root.
             content: The full new contents of the file.
         """
-        resolved = workspace.resolve(path)
-        _refuse_hard_link(path, resolved)
-        _refuse_text_over_document(path, resolved)
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        existed = resolved.exists()
-        resolved.write_text(content, encoding="utf-8")
+        resolved = disk.resolve(workspace, path)
+        _refuse_hard_link(path, resolved, disk)
+        _refuse_text_over_document(path, resolved, disk)
+        existed = disk.exists(resolved)
+        disk.write_text(resolved, content)
         verb = "Overwrote" if existed else "Created"
         return f"{verb} {workspace.display(resolved)} ({len(content)} characters)."
 
@@ -675,12 +672,10 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
             path: Path to append to, relative to the workspace root.
             content: Text to add at the end.
         """
-        resolved = workspace.resolve(path)
-        _refuse_hard_link(path, resolved)
-        _refuse_text_over_document(path, resolved)
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        with resolved.open("a", encoding="utf-8") as handle:
-            handle.write(content)
+        resolved = disk.resolve(workspace, path)
+        _refuse_hard_link(path, resolved, disk)
+        _refuse_text_over_document(path, resolved, disk)
+        disk.append_text(resolved, content)
         return f"Appended {len(content)} characters to {workspace.display(resolved)}."
 
     def edit_file(path: str, old: str, new: str) -> str:
@@ -694,10 +689,10 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
             old: Exact text to replace.
             new: Text to put in its place.
         """
-        resolved = workspace.resolve(path, must_exist=True)
-        _refuse_hard_link(path, resolved)
-        _refuse_text_over_document(path, resolved)
-        content = _read_text(path, workspace)
+        resolved = disk.resolve(workspace, path, must_exist=True)
+        _refuse_hard_link(path, resolved, disk)
+        _refuse_text_over_document(path, resolved, disk)
+        content = _read_text(path, resolved, disk)
         occurrences = content.count(old)
         if occurrences == 0:
             raise WorkspaceError(
@@ -709,7 +704,7 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
                 f"That text appears {occurrences} times in {workspace.display(resolved)}. "
                 "Include more surrounding context so the match is unique."
             )
-        resolved.write_text(content.replace(old, new, 1), encoding="utf-8")
+        disk.write_text(resolved, content.replace(old, new, 1))
         return f"Edited {workspace.display(resolved)}."
 
     return {
@@ -747,6 +742,23 @@ def host_path(path: object, workspace: Workspace) -> object:
     return str(expanded) if path.startswith("~") else path
 
 
+def on_this_machine(path: object, workspace: Workspace) -> bool:
+    """Whether a path the model gave names a file of this machine when the workspace is on
+    another (``CommandBackend.file_disk``): one in the extra roots of this machine's
+    ``workspace``, the skill folders, which are read here whatever the backend. Only an
+    absolute path, or one from ``~``, can name one: a relative path is the workspace's."""
+    if not isinstance(path, str) or not (path.startswith("~") or os.path.isabs(path)):
+        return False
+    try:
+        resolved = Path(path).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return any(
+        resolved == root or root in resolved.parents
+        for root in (*workspace.extra_roots, *workspace.covered_roots)
+    )
+
+
 def _hosted(
     name: str, func: Callable[..., str], workspace: Workspace, host: "CommandBackend"
 ) -> Callable[..., Awaitable[str]]:
@@ -761,6 +773,10 @@ def _hosted(
         # Idempotent, and where an `auto` backend decides: what it decides is what it
         # says to do next.
         await host.start()
+        remote = host.file_disk()
+        if remote is not None and not on_this_machine(arguments.get("path"), workspace):
+            space, disk = remote
+            return await asyncio.to_thread(lambda: build_tools(space, disk)[name](**arguments))
         where = host.tool_host
         if where is not None and "path" in arguments:
             arguments["path"] = host_path(arguments["path"], workspace)
@@ -798,17 +814,17 @@ def _hosted(
     return hosted
 
 
-def _kind(entry: Path) -> str:
+def _kind(entry: Path, disk: Disk) -> str:
     """``dir ``, ``file`` or ``?   `` for an entry the system will not describe."""
     try:
-        return "dir " if entry.is_dir() else "file"
+        return "dir " if disk.is_dir(entry) else "file"
     except OSError:
         return "?   "
 
 
-def _is_file(entry: Path) -> bool:
+def _is_file(entry: Path, disk: Disk) -> bool:
     try:
-        return entry.is_file()
+        return disk.is_file(entry)
     except OSError:
         return False
 

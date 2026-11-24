@@ -11,9 +11,10 @@ from domyn.agents.tools.builtin.backends.auto import AutoBackend
 from domyn.agents.tools.builtin.backends.base import BackendUnavailableError, CommandBackend
 from domyn.agents.tools.builtin.backends.docker import DockerBackend, DockerBackendOptions
 from domyn.agents.tools.builtin.backends.local import this_machine
+from domyn.agents.tools.builtin.backends.ssh import SshBackend, SshBackendOptions
 from domyn.agents.tools.builtin.workspace import Workspace
 
-BACKEND_NAMES: tuple[str, ...] = ("auto", "local", "docker")
+BACKEND_NAMES: tuple[str, ...] = ("auto", "local", "docker", "ssh")
 
 
 def build_backend(
@@ -24,6 +25,7 @@ def build_backend(
     allowed_env: Iterable[str] = (),
     state_dir: str | os.PathLike[str] | None = None,
     docker: DockerBackendOptions | None = None,
+    ssh: SshBackendOptions | None = None,
 ) -> CommandBackend:
     """Resolve a backend by name.
 
@@ -67,6 +69,8 @@ def build_backend(
         return DockerBackend(
             workspace, options=docker, allowed_env=allowed_env, state_dir=state_dir
         )
+    if name == "ssh":
+        return SshBackend(workspace, options=ssh, allowed_env=allowed_env)
     raise BackendUnavailableError(
         f"unknown command backend '{name}' (available: {', '.join(BACKEND_NAMES)}, git_bash on Windows). "
         "Refusing to fall back to running on this machine."

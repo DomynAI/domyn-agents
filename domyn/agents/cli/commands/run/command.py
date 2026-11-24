@@ -52,6 +52,7 @@ from domyn.agents.skills.layout import listed_path_is_linked
 from domyn.agents.tools.builtin.backends import BackendUnavailableError, CommandBackend
 from domyn.agents.tools.builtin.backends.auto import AutoBackend
 from domyn.agents.tools.builtin.backends.docker import DockerBackend
+from domyn.agents.tools.builtin.backends.ssh import SshBackend, SshUnavailableError
 
 # markup=False for the whole session: nothing here writes rich's square-bracket
 # tags, and everything here prints text from somewhere else — tool arguments, a
@@ -392,6 +393,14 @@ async def _unusable_backend(agent: Any) -> BackendUnavailableError | None:
             await backend.check()
         except BackendUnavailableError as exc:
             return exc
+    # A server is connected to now, so a wrong host or a refused key is said before
+    # the first request rather than at the first command.
+    for server in _command_backends(agent):
+        if isinstance(server, SshBackend):
+            try:
+                await server.start()
+            except BackendUnavailableError as exc:
+                return exc
     return None
 
 
@@ -402,6 +411,18 @@ def _where(config_file: Path | None) -> str:
 def _refusal_text(problem: BackendUnavailableError, config_file: Path | None) -> str:
     """What to tell someone whose Docker backend cannot start: both ways out are named, start
     Docker or run commands locally, and `domyn run` is run again."""
+    if isinstance(problem, SshUnavailableError):
+        lines = [
+            f"\n  {problem.problem}",
+            "  The tools in this configuration run on a server over ssh, so it cannot start.",
+        ]
+        if problem.fix:
+            lines.append(f"\n  {problem.fix} Then run `domyn run` again.")
+        lines.append(
+            "\n  To run them on this machine instead, set `backend: local` in the cli tools "
+            f"bundle{_where(config_file)}.\n"
+        )
+        return "\n".join(lines)
     lines = [
         f"\n  {problem.problem}",
         "  Shell commands in this configuration run in a Docker container, so it cannot start.",
@@ -423,6 +444,9 @@ def _tools_status(agent: Any) -> str | None:
     backends = _command_backends(agent)
     if not backends:
         return None
+    servers = [b.host for b in backends if isinstance(b, SshBackend)]
+    if servers:
+        return f"tools: ssh {', '.join(dict.fromkeys(servers))}"
     return "tools: docker" if any(b.is_isolated for b in backends) else "tools: this machine"
 
 

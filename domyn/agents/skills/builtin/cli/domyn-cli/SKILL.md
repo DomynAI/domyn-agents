@@ -358,7 +358,7 @@ says which variable is missing.
   the model a small image, and a failed check removes a `vision: true` written by
   hand); the
   agent's name, description, instruction, stream, skills and
-  `standing_instructions`; the tool bundle's bundles, workspace, backend (and its `docker` options), isolation,
+  `standing_instructions`; the tool bundle's bundles, workspace, backend (and its `docker` and `ssh` options), isolation,
   `allowed_env` and `browser` options; and the compaction settings. Anything else is
   dropped, e.g. `mcp_servers`, `hooks`, `tools`, extra agents, other
   `generation_params` (temperature, …) and provider `headers`. A custom `${MY_VAR}`
@@ -387,4 +387,5 @@ To start over: `domyn setup` (it pre-fills the current values; Enter keeps them)
 | a file outside the project is refused | workspace containment. Start the CLI in that directory or set `workspace` |
 | tools do not run in the Docker container | `backend` in the tool bundle (the `tool_bundles` entry that lists `shell`) is `local`, or it is `auto` and Docker was not running, or its image could not be pulled, when the session started (it warns and the line under the banner says `tools: this machine`). Check the value, start Docker and restart; the check from inside is `test -f /.dockerenv && echo container \|\| echo host`. `backend: docker` refuses to start without Docker instead |
 | a command fails with `[docker] blocked connection(s) to <host>` | the container's `docker.allowed_network` is a list that does not have the host. Add it to the list in the tool bundle (applies from the next message), or set `allowed_network: public` (any public site over HTTPS, the default). Plain `http://`, other ports and private addresses are refused in every mode |
+| `backend: ssh` and the session does not start, or says `could not connect to <host>` | `ssh <host> true` must work in the user's terminal with no question asked: a key or an agent, and a host key already accepted. The message names the cause (unknown host key, refused connection, a `workspace` that is not a folder there, a login shell that prints text, a missing `bash` or `timeout`). Over ssh, commands and files are on the server, skills and the browser on this machine (`tools-and-approvals` page) |
 | "The container was lost; starting a new one" | Docker restarted or the container was removed during the session. The next command made a new one: workspace files and installed packages come back, anything else written inside the container is gone. If it keeps happening, check that Docker Desktop is not stopping or running out of memory |

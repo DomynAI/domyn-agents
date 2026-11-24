@@ -38,8 +38,13 @@ parameter is safe, a required one is a breaking change.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import PurePath
+from typing import TYPE_CHECKING
 
 from domyn.agents.tools.builtin.session import HOME_DIRNAME, StateFolders
+
+if TYPE_CHECKING:
+    from domyn.agents.tools.builtin.disk import Disk
+    from domyn.agents.tools.builtin.workspace import Workspace
 
 
 class BackendUnavailableError(RuntimeError):
@@ -143,6 +148,13 @@ class CommandBackend(ABC):
         through ``run``: the command named here is run with one JSON request on stdin.
         ``None``, the default, is right for a backend that runs commands on this machine,
         and for any written outside the package: it needs nothing more than ``run``."""
+        return None
+
+    def file_disk(self) -> "tuple[Workspace, Disk] | None":
+        """Where the file tools find the files when they are on another machine but the
+        bodies run in this process: that machine's workspace and the disk that reads it.
+        Asked after ``start``. ``None``, the default, for the files of this machine, or
+        of a ``tool_host``, where the bodies run beside the files."""
         return None
 
     # Not abstract, and empty on purpose: a backend with nothing to set up —

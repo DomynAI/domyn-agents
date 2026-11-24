@@ -371,3 +371,90 @@ class TestStartingWithAutoBackend:
         line = buffer.getvalue()
         assert "tools: docker" in line
         assert "browser: this machine" not in line  # it runs in the container too
+
+
+class TestStartingOverSsh:
+    """`backend: ssh` connects before the first prompt, and says where the tools run."""
+
+    def _backend(self, tmp_path: Path, refusal: BackendUnavailableError | None) -> Any:
+        from domyn.agents.tools.builtin import SshBackend, SshBackendOptions, Workspace
+
+        class _Server(SshBackend):
+            async def start(self) -> None:
+                if refusal is not None:
+                    raise refusal
+
+        return _Server(
+            Workspace.at(tmp_path), options=SshBackendOptions(host="box", workspace="/srv/w")
+        )
+
+    async def _start(self, backend: CommandBackend) -> tuple[int, str]:
+        from domyn.agents.cli.commands.run import command as run_command
+
+        buffer = io.StringIO()
+        agent = _agent()
+        agent.builtin_tools.append(BuiltinTools(backend=backend))
+        with patch.object(run_command, "console", Console(file=buffer, width=200)):
+            code = await run_command.start_session(
+                agent,
+                Theme.build(allow_animation=False),
+                initial_prompt=None,
+                verbose=False,
+                show_status=True,
+                config_file=Path("/x/config.yaml"),
+            )
+        return code, buffer.getvalue()
+
+    @pytest.mark.asyncio
+    async def test_a_server_that_cannot_be_reached_stops_the_session(self, tmp_path: Path) -> None:
+        from domyn.agents.tools.builtin.backends.ssh import SshUnavailableError
+
+        refusal = SshUnavailableError(
+            "could not connect to box: Connection refused", fix="Check that `ssh box true` works."
+        )
+        code, text = await self._start(self._backend(tmp_path, refusal))
+
+        assert code == 1
+        assert "could not connect to box" in text and "ssh box true" in text
+        assert "on a server over ssh" in text and "`backend: local`" in text
+        assert "Docker" not in text
+
+    @pytest.mark.asyncio
+    async def test_a_reachable_server_is_named_under_the_banner(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from domyn.agents.cli.commands.run import command as run_command
+
+        class _Repl:
+            def __init__(self, *a: Any, **k: Any) -> None: ...
+
+            async def run(self, prompt: Any) -> int:
+                return 0
+
+        monkeypatch.setattr(run_command, "Repl", _Repl)
+        code, text = await self._start(self._backend(tmp_path, None))
+
+        assert code == 0
+        assert "tools: ssh box" in text
+
+
+def test_the_ssh_block_survives_a_rewrite_of_the_config() -> None:
+    from domyn.agents.interfaces.cli.config import (
+        AgentConfig,
+        CompactionConfig,
+        ProviderConfig,
+        configuration_v1_dict_from,
+        current_settings_from,
+    )
+    from domyn.agents.tools.builtin import SshBackendOptions
+
+    agent = AgentConfig(
+        tools=["files", "shell"],
+        backend="ssh",
+        ssh=SshBackendOptions(host="box", workspace="/srv/w", port=2222),
+    )
+    written = configuration_v1_dict_from(ProviderConfig(), agent, CompactionConfig())
+
+    assert written["tool_bundles"][0]["ssh"] == {"host": "box", "workspace": "/srv/w", "port": 2222}
+    _, read, _ = current_settings_from(written)
+    assert read.backend == "ssh" and read.ssh == agent.ssh
