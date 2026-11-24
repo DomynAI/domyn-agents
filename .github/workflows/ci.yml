@@ -300,10 +300,10 @@ jobs:
       # Coverage measured through sys.monitoring (COVERAGE_CORE=sysmon, Python
       # 3.12+), which costs a fifth of the default tracer: on the tests that time
       # themselves, +12% against +57% (measured on Windows on ARM, x64 emulated).
-      # Eight workers on the runner's four cores: the slowest tests (background
-      # commands under Git Bash) mostly wait, so twice as many overlap their
-      # waits. worksteal hands a free worker the tests still queued on a busy one,
-      # so a 15 s test drawn last does not hold the job on one worker.
+      # worksteal hands a free worker the tests still queued on a busy one, so a
+      # 15 s test drawn last does not hold the job on one worker. One worker per
+      # core: eight on ARM's four slowed a turn that starts Git Bash from under a
+      # second to past its 15 s limit.
       - name: Run tests
         shell: bash
         env:
@@ -314,7 +314,7 @@ jobs:
             && '--cov=domyn --cov-report=xml:coverage-windows.xml' || '--no-cov' }}
         run: >-
           uv run --with pytest-timeout pytest tests/ examples/ -q $COVERAGE
-          -p no:cacheprovider --timeout=120 -rfE -n 8 --dist worksteal
+          -p no:cacheprovider --timeout=120 -rfE --dist worksteal
 
       # Written even when a test failed, so the coverage check still has it.
       - name: Upload coverage
