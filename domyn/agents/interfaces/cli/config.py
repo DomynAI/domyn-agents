@@ -53,6 +53,7 @@ from domyn.agents.skills.layout import listed_path_is_linked
 from domyn.agents.tools.builtin import (
     BUNDLE_TOOL_NAMES,
     DEFAULT_BUNDLES,
+    VISION_TOOL_NAMES,
     BrowserOptions,
     DockerBackendOptions,
 )
@@ -203,6 +204,10 @@ class ProviderConfig(BaseModel):
     configuration_id: str | None = None
     """Configuration to take the model from; the space's last released one when empty. ``domyn`` only."""
     api_key_env: str | None = None
+    vision: bool = False
+    """Whether the model reads images, which is what mounts ``read_image`` with the
+    ``files`` bundle. Found by setup, which sends the provider a small image
+    (`_image_rejection`, ``setup.py``); not a question it asks."""
 
     context_window: int | None = Field(
         default=None,
@@ -1204,6 +1209,8 @@ def configuration_v1_dict_from(
         provider_dict["context_window"] = provider.context_window
     if not provider.send_reasoning:
         provider_dict["send_reasoning"] = False
+    if provider.vision:
+        provider_dict["vision"] = True
     # Only set when a key actually resolves right now (env, or the credentials
     # file — injected into the environment at CLI startup by
     # `_load_credentials` in `cli/main.py`). Omitting it otherwise matters:
@@ -1481,6 +1488,7 @@ def current_settings_from(
         max_tokens=max_tokens,
         context_window=provider_dict.get("context_window"),
         send_reasoning=provider_dict.get("send_reasoning", True),
+        vision=provider_dict.get("vision", False),
     )
 
     bundles = {b.get("name"): b for b in raw.get("tool_bundles", []) if isinstance(b, dict)}
@@ -1640,6 +1648,7 @@ def _provider_items(raw: dict[str, Any]) -> list[ConfigItem]:
                 str(window) if (window := p.get("context_window")) else AUTO_CONTEXT_WINDOW,
             ),
             ("max tokens", str(max_tokens) if max_tokens is not None else "(default)"),
+            ("images", "read" if p.get("vision") is True else "not read"),
             ("api key", _secret_field_state(p.get("api_key"))),
         ]
         if "headers" in p:
@@ -1686,10 +1695,13 @@ def _mcp_server_names(agent: dict[str, Any]) -> list[str]:
 
 
 def _agent_tool_names(
-    agent: dict[str, Any], bundle_entries: dict[Any, dict[str, Any]]
+    agent: dict[str, Any], bundle_entries: dict[Any, dict[str, Any]], *, vision: bool
 ) -> list[str]:
     """The agent's own tools by name, then what its bundles mount, each tagged
     with the built-in bundle it comes from (``read_file(files)``).
+
+    ``vision`` is whether the agent's provider reads images: ``files`` then
+    mounts ``read_image`` too, as `bundle()` does.
 
     Tolerant like `current_settings_from`: a bundle entry that does not exist,
     has no ``bundles`` key, or names a bundle that is not built in contributes
@@ -1700,6 +1712,8 @@ def _agent_tool_names(
         entry = bundle_entries.get(entry_name) or {}
         for builtin in entry.get("bundles") or []:
             names.extend(f"{tool}({builtin})" for tool in BUNDLE_TOOL_NAMES.get(builtin, ()))
+            if builtin == "files" and vision:
+                names.extend(f"{tool}({builtin})" for tool in VISION_TOOL_NAMES)
     return list(dict.fromkeys(names))
 
 
@@ -1741,12 +1755,19 @@ def _agent_items(raw: dict[str, Any]) -> list[ConfigItem]:
     — so it is summarized here, as `_skills_summary` describes.
     """
     bundle_entries = _bundle_entries(raw)
+    vision_providers = {
+        p.get("name")
+        for p in raw.get("llm_providers") or []
+        if isinstance(p, dict) and p.get("vision") is True
+    }
     items: list[ConfigItem] = []
     for a in raw.get("agents") or []:
         if not isinstance(a, dict):
             continue
         mcp_names = ", ".join(_mcp_server_names(a))
-        tool_names = _agent_tool_names(a, bundle_entries)
+        tool_names = _agent_tool_names(
+            a, bundle_entries, vision=a.get("llm_provider") in vision_providers
+        )
         bundle_names = _agent_bundle_names(a, bundle_entries)
         fields = [
             ("description", a.get("description") or "(none)"),

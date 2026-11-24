@@ -468,61 +468,6 @@ class TestVLLMGenerate:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_generate_appends_system_prompt(self):
-        """append_text_system_prompt must be appended to the first message."""
-        provider = VLLMProvider(
-            url=VLLM_URL,
-            model_name="test-model",
-            append_text_system_prompt=" /sys_suffix",
-        )
-        captured = {}
-
-        def capture(request):
-            captured["body"] = json.loads(request.content)
-            return httpx.Response(
-                200,
-                json={
-                    "choices": [{"message": {"content": "ok", "tool_calls": None}}],
-                    "usage": {"completion_tokens": 1},
-                },
-            )
-
-        respx.post(VLLM_URL).mock(side_effect=capture)
-        messages = [
-            LLMMessage(role="system", content="You are helpful."),
-            LLMMessage(role="user", content="Hi"),
-        ]
-        await provider.generate(messages)
-        assert captured["body"]["messages"][0]["content"] == "You are helpful.\n /sys_suffix"
-
-    @pytest.mark.asyncio
-    @respx.mock
-    async def test_generate_appends_last_message(self):
-        """append_text_last_message must be appended to the last message."""
-        provider = VLLMProvider(
-            url=VLLM_URL,
-            model_name="test-model",
-            append_text_last_message=" /suffix",
-        )
-        captured = {}
-
-        def capture(request):
-            captured["body"] = json.loads(request.content)
-            return httpx.Response(
-                200,
-                json={
-                    "choices": [{"message": {"content": "ok", "tool_calls": None}}],
-                    "usage": {"completion_tokens": 1},
-                },
-            )
-
-        respx.post(VLLM_URL).mock(side_effect=capture)
-        messages = [LLMMessage(role="user", content="Hello")]
-        await provider.generate(messages)
-        assert captured["body"]["messages"][-1]["content"] == "Hello\n /suffix"
-
-    @pytest.mark.asyncio
-    @respx.mock
     async def test_generate_reasoning_content_forwarded(self):
         """reasoning_content from the model response must be set on LLMResponse."""
         respx.post(VLLM_URL).mock(

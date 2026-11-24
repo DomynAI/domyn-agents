@@ -37,6 +37,7 @@ be windows away.
 # tools are defined in this module, so the import has to stay off.
 
 import asyncio
+import base64
 import inspect
 import io
 import json
@@ -852,6 +853,8 @@ def file_tools(workspace: Workspace, host: "CommandBackend | None" = None) -> li
 
 TOOL_BODY_SECONDS = 120.0
 """How long a tool body may run in a container before the backend gives up on it."""
+IMAGE_OPERATION = "load_image"
+"""Not a tool: used by read image to read the image from the container."""
 
 
 class OperationError(RuntimeError):
@@ -866,7 +869,15 @@ def run_file_operation(
     extra_roots: Sequence[str | Path] = (),
 ) -> str:
     """Run one file tool against a workspace, in this process."""
-    tools = build_tools(Workspace.at(root, also=extra_roots))
+    workspace = Workspace.at(root, also=extra_roots)
+    if operation == IMAGE_OPERATION:
+        from domyn.agents.tools.builtin.images import (
+            load_image,  # Pillow is loaded only when reading an image
+        )
+
+        image, media_type = load_image(workspace=workspace, **arguments)
+        return f"data:{media_type};base64,{base64.b64encode(image).decode()}"
+    tools = build_tools(workspace)
     if operation not in tools:
         raise OperationError(f"unknown file operation: {operation}")
     return tools[operation](**arguments)

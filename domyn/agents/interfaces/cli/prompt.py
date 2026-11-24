@@ -9,7 +9,8 @@ editor to drive, so it is read with :func:`input`.
 
 Enter submits; Alt/Option+Enter and Ctrl+J insert a newline. Ctrl-C clears what
 is typed, and a second one right after quits, like Ctrl-D; while a turn runs it
-stops the turn instead.
+stops the turn instead. Ctrl-V attaches the image in the clipboard, and pasting
+(or dragging in) the path of an image attaches it too: see `attachments.py`.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from domyn.agents.interfaces.cli.commands import completion_names
 if TYPE_CHECKING:
     from rich.console import Console
 
+    from domyn.agents.interfaces.cli.attachments import Attachments
     from domyn.agents.interfaces.cli.theme import Theme
     from domyn.agents.interfaces.cli.voice import VoiceInput
 
@@ -40,6 +42,13 @@ _STATUS_REFRESH_S = 0.1
 
 # How close two Ctrl-C have to be to count as one "quit".
 _DOUBLE_PRESS_S = 0.8
+
+# How long a line saying why an image was not attached stays above the prompt.
+_NOTICE_S = 4.0
+
+# Fewest characters arriving in one batch of keys to be looked at as a dropped
+# path: typing sends one or two, and no image's path is shorter.
+_BURST_CHARS = 4
 
 
 class GoBack(Exception):  # noqa: N818 — a request, like KeyboardInterrupt, not an error
@@ -304,6 +313,15 @@ class InputSession:
         # Push-to-talk, when voice is on: see `voice.py`. Held here because the
         # editor owns the keys and the rows above the prompt.
         self.voice = voice
+        # The images attached to the conversation (Ctrl-V, a pasted path), set by
+        # the REPL; None leaves both keys as they were.
+        self.attachments: Attachments | None = None
+        # Why the last image was not attached, and when: drawn above the prompt.
+        self._notice: tuple[str, float] | None = None
+        # Clipboard reads in flight, held so they are not collected half way.
+        self._pastes: set[asyncio.Future[None]] = set()
+        # Where the batch of keys being processed began inserting: `_on_text_insert`.
+        self._burst_start: int | None = None
         self._session: Any = None
         self._bindings: Any = None
         # Borrowed by the first mid-turn read, so it has something to give back.
@@ -588,6 +606,43 @@ class InputSession:
                 # the read that follows the interrupted turn.
                 event.app.exit(exception=KeyboardInterrupt(), style="class:aborting")
 
+        # Images. A terminal never hands over pixels, so Ctrl-V reads the clipboard
+        # itself (Cmd+V is the terminal's, and pastes text only), in a thread: on
+        # macOS and Linux that is a command, too slow for a key handler. Alongside
+        # a turn too: it only edits the line being typed.
+        has_attachments = Condition(lambda: self.attachments is not None)
+
+        @bindings.add("c-v", filter=has_attachments)
+        def _paste_image(event: Any) -> None:
+            attachments = self.attachments
+            if attachments is None:
+                return
+            task = asyncio.ensure_future(self._paste_from_clipboard(attachments, event.app))
+            self._pastes.add(task)
+            task.add_done_callback(self._pastes.discard)
+
+        # What a terminal pastes for a dragged file, or a file copied in a file
+        # manager, is its path: a paste naming nothing but images attaches them.
+        # Anything else is pasted as prompt_toolkit's own binding pastes it.
+        @bindings.add(Keys.BracketedPaste)
+        def _paste(event: Any) -> None:
+            data = event.data.replace("\r\n", "\n").replace("\r", "\n")
+            attachments = self.attachments
+            if attachments is not None:
+                from domyn.agents.interfaces.cli.attachments import AttachmentError, image_paths
+
+                paths = image_paths(data)
+                if paths is not None:
+                    try:
+                        chips = [attachments.add_file(path) for path in paths]
+                    except AttachmentError as e:
+                        # The path stays as text: it may still be what was meant.
+                        self._show_notice(str(e))
+                    else:
+                        event.current_buffer.insert_text(" ".join(chips) + " ")
+                        return
+            event.current_buffer.insert_text(data)
+
         self._bindings = bindings
         self._session = PromptSession(
             completer=WordCompleter(completion_names(), sentence=True),
@@ -596,6 +651,50 @@ class InputSession:
             style=self._prompt_style(),
             color_depth=self._color_depth(),
         )
+        # A dropped file that does not arrive as a paste: see `_on_text_insert`.
+        self._session.default_buffer.on_text_insert += self._on_text_insert
+
+    def _on_text_insert(self, buffer: Any) -> None:
+        """Note where the first character of a batch of keys went, and look at the
+        whole batch once it has been processed (`_settle_burst`).
+
+        Some terminals send a dropped file's path as if it were typed, without the
+        bracketed paste around it: VS Code's (``sendPath``) does. It still arrives
+        in one read, which prompt_toolkit processes as one batch of keys, while
+        typing comes a character or two at a time. So a batch of several characters
+        that names nothing but images was dropped, not typed; a path typed by hand
+        stays text."""
+        if self.attachments is None or self._burst_start is not None:
+            return
+        # The first insert of a batch is a typed character, or a paste or chip
+        # inserted whole: then the span is one character, and too short to look at.
+        self._burst_start = buffer.cursor_position - 1
+        asyncio.get_running_loop().call_soon(self._settle_burst, buffer)
+
+    def _settle_burst(self, buffer: Any) -> None:
+        """Replace the batch of characters just inserted with the chips of the images
+        it names, if it names nothing else (`_on_text_insert`)."""
+        from prompt_toolkit.document import Document
+
+        from domyn.agents.interfaces.cli.attachments import AttachmentError, image_paths
+
+        start, self._burst_start = self._burst_start, None
+        attachments = self.attachments
+        end = buffer.cursor_position
+        # Shorter than any path, or gone: Enter in the same batch sent the line.
+        if attachments is None or start is None or start < 0 or end - start < _BURST_CHARS:
+            return
+        text = buffer.text
+        paths = image_paths(text[start:end])
+        if paths is None:
+            return
+        try:
+            chips = [attachments.add_file(path) for path in paths]
+        except AttachmentError as e:
+            self._show_notice(str(e))
+            return
+        joined = " ".join(chips) + " "
+        buffer.document = Document(text[:start] + joined + text[end:], start + len(joined))
 
     def _move_choice(self, step: int, buffer: Any) -> None:
         choice = self._choice
@@ -646,6 +745,43 @@ class InputSession:
         if self._hint_repaint is not None:
             self._hint_repaint.cancel()
             self._hint_repaint = None
+
+    async def _paste_from_clipboard(self, attachments: Attachments, app: Any) -> None:
+        """What Ctrl-V does: attach the clipboard's image and put its chip at the
+        cursor. Into whichever read is on screen when the clipboard has answered:
+        the application is the session's, shared by every read."""
+        from domyn.agents.interfaces.cli.attachments import AttachmentError
+
+        try:
+            chips = await asyncio.to_thread(attachments.from_clipboard)
+        except AttachmentError as e:
+            self._show_notice(str(e))
+            return
+        if getattr(app, "is_running", False) and not app.is_done:
+            app.current_buffer.insert_text(" ".join(chips) + " ")
+
+    def _show_notice(self, text: str) -> None:
+        """Say above the prompt, for a few seconds, why an image was not attached."""
+        self._notice = (text, monotonic())
+        self._redraw()
+        app = getattr(self._session, "app", None)
+        if app is not None:
+            # A little late, like the exit hint's repaint, so it lands after the
+            # notice has expired.
+            asyncio.get_running_loop().call_later(_NOTICE_S + 0.05, app.invalidate)
+
+    def _notice_rows(self) -> list[tuple[str, str]]:
+        """The notice, while it lasts; never on a finished read's last frame."""
+        from prompt_toolkit.application.current import get_app
+
+        notice = self._notice
+        if notice is None or get_app().is_done:
+            return []
+        text, at = notice
+        if monotonic() - at > _NOTICE_S:
+            self._notice = None
+            return []
+        return [("class:attach-notice", f"  {text}\n")]
 
     def _exit_hint(self) -> list[tuple[str, str]]:
         """``press Ctrl-C again to quit`` on a row of its own while that is true.
@@ -701,6 +837,8 @@ class InputSession:
                 "voice-recording": "bold fg:ansired",
                 "voice-hint": "fg:ansibrightblack",
                 "voice-notice": "fg:ansiyellow",
+                # Why an image was not attached: yellow like the voice notices.
+                "attach-notice": "fg:ansiyellow nobold",
                 # The picker's own look, so a question reads the same whether
                 # it is drawn here or on its own (setup, /model).
                 **CHOICE_STYLES,
@@ -763,6 +901,10 @@ class InputSession:
 
         All five are ignored on the fallback path, which must keep calling
         :func:`input` exactly as before.
+
+        A chip of an image attached in this conversation (``[Image #1]``) is
+        replaced in the text returned by what the model needs to look at it
+        (`Attachments.expand`).
         """
         symbol = self._theme.symbols.prompt
 
@@ -816,10 +958,14 @@ class InputSession:
         prompt = self._live_prompt(label, symbol, pending, status, preview)
         if not concurrent:
             text: str = await self._session.prompt_async(prompt, **kwargs)
-            return text.strip()
-
-        with shared_stdout(self.output), self._transient():
-            text = await self._session.prompt_async(prompt, **kwargs)
+        else:
+            with shared_stdout(self.output), self._transient():
+                text = await self._session.prompt_async(prompt, **kwargs)
+        # The chips stay in the scrollback as typed; the message names the files.
+        # Here, so that a line sent while a turn runs (the steering reader reads
+        # through `ask` too) is expanded like one sent between turns.
+        if self.attachments is not None:
+            text = self.attachments.expand(text)
         return text.strip()
 
     def _live_prompt(
@@ -880,6 +1026,7 @@ class InputSession:
             # ever drawn between turns, where nothing above it is, so it is the
             # first row: right under the last line printed.
             fragments.extend(self._exit_hint())
+            fragments.extend(self._notice_rows())
             fragments.extend(self._voice_rows())
             fragments.extend(self._auto_rows())
             fragments.append(("class:prompt", f"{label} {symbol} "))

@@ -414,6 +414,7 @@ class TestSlashCommandsTypedMidTurn:
             "/memory": False,
             "/verbose": False,
             "/voice": False,
+            # Puts its chip in the next read's field, not the one on screen.
             "/model": False,
             "/config": True,
             # Writes a folder, and reloads a changed config first.
