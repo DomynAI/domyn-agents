@@ -106,8 +106,9 @@ def bundled_binary(name: str = "agent-browser") -> str | None:
             if candidate.is_file():
                 return candidate.as_posix()
         return None
-    candidate = folder / name
-    return str(candidate) if candidate.is_file() and os.access(candidate, os.X_OK) else None
+    else:
+        candidate = folder / name
+        return str(candidate) if candidate.is_file() and os.access(candidate, os.X_OK) else None
 
 
 def resolve_binary(name: str) -> str:
@@ -148,13 +149,13 @@ def system_chrome() -> str | None:
         # Per machine or per user: Program Files, or the user's AppData.
         for base in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
             folder = os.environ.get(base)
-            path = (
+            chrome = (
                 Path(folder) / "Google" / "Chrome" / "Application" / "chrome.exe"
                 if folder
                 else None
             )
-            if path is not None and path.is_file():
-                return str(path)
+            if chrome is not None and chrome.is_file():
+                return str(chrome)
     for path in _SYSTEM_CHROME.get("darwin" if sys.platform == "darwin" else "linux", ()):
         if os.access(path, os.X_OK):
             return path

@@ -36,7 +36,6 @@ four rows it reads as a reveal, not as scrolling.
 from __future__ import annotations
 
 import gzip
-import os
 import sys
 import time
 from collections.abc import Callable
@@ -156,23 +155,21 @@ def _skip_key_pressed() -> bool:
             return False
         msvcrt.getwch()
         return True
-    if os.name != "posix":
-        return False
+    else:
+        import select
 
-    import select
+        readable, _, _ = select.select([sys.stdin], [], [], 0)
+        if not readable:
+            return False
 
-    readable, _, _ = select.select([sys.stdin], [], [], 0)
-    if not readable:
-        return False
-
-    # One byte is enough to know a key was pressed; the rest stays buffered for
-    # the REPL that starts right after the banner. ``.buffer`` when present (a
-    # text stream), the stream itself otherwise (a binary stream).
-    try:
-        ch = getattr(sys.stdin, "buffer", sys.stdin).read(1)
-    except (OSError, ValueError, AttributeError):
-        return False
-    return bool(ch)
+        # One byte is enough to know a key was pressed; the rest stays buffered for
+        # the REPL that starts right after the banner. ``.buffer`` when present (a
+        # text stream), the stream itself otherwise (a binary stream).
+        try:
+            ch = getattr(sys.stdin, "buffer", sys.stdin).read(1)
+        except (OSError, ValueError, AttributeError):
+            return False
+        return bool(ch)
 
 
 def _wait_for_skip(stop: Callable[[], bool]) -> bool:

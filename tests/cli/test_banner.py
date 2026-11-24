@@ -318,12 +318,6 @@ class TestSkipKey:
         monkeypatch.setattr(banner_mod.sys, "stdin", io.StringIO(""))
         assert banner_mod._skip_key_pressed() is False
 
-    def test_skips_never_happen_on_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The POSIX ``select`` path is not exercised on Windows."""
-        monkeypatch.setattr(banner_mod.sys, "stdin", io.StringIO(""))
-        monkeypatch.setattr(banner_mod.os, "name", "nt")
-        assert banner_mod._skip_key_pressed() is False
-
     @pytest.mark.skipif(os.name == "nt", reason="select takes sockets only on Windows")
     def test_a_ready_tty_key_is_detected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A key already buffered on a TTY counts as a skip."""
@@ -333,7 +327,7 @@ class TestSkipKey:
             with os.fdopen(read_fd, "rb", buffering=0) as stdin:
                 stdin.isatty = lambda: True  # type: ignore[attr-defined]
                 monkeypatch.setattr(banner_mod.sys, "stdin", stdin)
-                monkeypatch.setattr(banner_mod.os, "name", "posix")
+                monkeypatch.setattr(banner_mod.sys, "platform", "linux")
                 assert banner_mod._skip_key_pressed() is True
         finally:
             os.close(write_fd)
@@ -346,7 +340,7 @@ class TestSkipKey:
             with os.fdopen(read_fd, "rb", buffering=0) as stdin:
                 stdin.isatty = lambda: True  # type: ignore[attr-defined]
                 monkeypatch.setattr(banner_mod.sys, "stdin", stdin)
-                monkeypatch.setattr(banner_mod.os, "name", "posix")
+                monkeypatch.setattr(banner_mod.sys, "platform", "linux")
                 assert banner_mod._skip_key_pressed() is False
         finally:
             os.close(write_fd)
