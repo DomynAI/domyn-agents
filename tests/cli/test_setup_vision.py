@@ -25,8 +25,8 @@ from domyn.agents.interfaces.cli.prompt import GoBack
 
 URL = "http://vllm.test:8000/v1/chat/completions"
 ANSWER = {"choices": [{"message": {"content": "Red."}}], "usage": {"completion_tokens": 1}}
-VLLM = ["vllm", "m", URL, "", "", ""]
-"""Provider, model, URL, key, max tokens, context window; the built-in skills follow."""
+VLLM = ["vllm", URL, "", "m", "", ""]
+"""Provider, URL, key, model, max tokens, context window; the built-in skills follow."""
 NOT_SUPPORTED = "not supported for this model (if not expected doublecheck the parameters)"
 """What setup says for any failed probe: a refusal, an error, no answer at all."""
 
@@ -206,7 +206,7 @@ class TestWhatSetupSaves:
         second = _run(
             console,
             theme,
-            ["vllm", "text-only", URL, "", "", ""],
+            ["vllm", URL, "", "text-only", "", ""],
             first,
             path=tmp_path / "config.yaml",
             provider_only=True,
@@ -271,15 +271,18 @@ class TestWhatSetupSaves:
             console,
             theme,
             [
-                *VLLM[:3],
+                *VLLM[:2],
                 "bad-key",
+                "m",
                 "",
                 "",
-                # The question after the check, then the context window and max tokens.
+                # The question after the check, then the context window, max tokens and model.
+                GoBack(),
                 GoBack(),
                 GoBack(),
                 GoBack(),
                 "good-key",
+                "",
                 "",
                 "",
                 "",
@@ -304,7 +307,7 @@ class TestWhatSetupSaves:
             setup, "_image_rejection", lambda provider: pytest.fail("there is no model to ask")
         )
 
-        result = _run(console, theme, ["vllm", "", URL, "", "", "", ""], path=tmp_path / "c.yaml")
+        result = _run(console, theme, ["vllm", URL, "", "", "", "", ""], path=tmp_path / "c.yaml")
 
         assert "vision" not in result["llm_providers"][0]
         assert "Vision:" not in _printed(console)

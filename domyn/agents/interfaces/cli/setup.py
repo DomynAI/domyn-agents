@@ -89,9 +89,9 @@ from domyn.agents.interfaces.cli.config import (
 )
 from domyn.agents.interfaces.cli.prompt import GoBack, back_key, interactive_terminal, read_line
 from domyn.agents.interfaces.cli.select import multiselect, select
-from domyn.agents.llm.context_window import get_json, models_url, window_from_model_entry
 from domyn.agents.llm import LLMProviderFactory
 from domyn.agents.llm.base import image_message
+from domyn.agents.llm.context_window import get_json, models_url, window_from_model_entry
 from domyn.agents.planner_strategy.context_management.compaction import CompactionConfig
 from domyn.agents.skills.catalog import (
     BuiltinSkill,
