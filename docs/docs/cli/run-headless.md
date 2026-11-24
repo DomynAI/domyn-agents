@@ -13,8 +13,8 @@ It needs no `domyn setup` and reads nothing of one. The endpoint, the model and 
 ```bash
 export MY_ENDPOINT_KEY=...
 domyn run-headless \
-  --base-url http://localhost:8000/v1 \
-  --model Qwen/Qwen3-32B \
+  --model_url http://localhost:8000/v1 \
+  --model_name Qwen/Qwen3-32B \
   --api-key-env MY_ENDPOINT_KEY \
   "The tests in tests/test_parser.py fail since the last commit: find out why and fix it"
 ```
@@ -22,7 +22,7 @@ domyn run-headless \
 For a long task, or one you do not want on the command line, put it in a file:
 
 ```bash
-domyn run-headless --base-url http://localhost:8000/v1 --model Qwen/Qwen3-32B --prompt-file task.md
+domyn run-headless --model_url http://localhost:8000/v1 --model_name Qwen/Qwen3-32B --prompt-file task.md
 ```
 
 ## How it differs from `domyn run`
@@ -44,8 +44,8 @@ Auto-approve is turned on for this session only: it is not remembered, so an int
 
 `domyn run-headless` talks to any OpenAI-compatible endpoint (vLLM, a gateway, a hosted API).
 
-- `--base-url` is the endpoint: `http://host:8000`, `http://host:8000/v1` or the full `…/v1/chat/completions` all work.
-- `--model` is the model's name as the endpoint serves it.
+- `--model_url` is the endpoint: `http://host:8000`, `http://host:8000/v1` or the full `…/v1/chat/completions` all work.
+- `--model_name` is the model's name as the endpoint serves it.
 - `--api-key-env` names the environment variable holding the key. Without it no key is sent; naming a variable that is not set is an error. Nothing else is read for the endpoint: `OPENAI_BASE_URL`, `OPENAI_API_KEY` and the keys `domyn setup` saved are ignored, so a variable set for another tool cannot send the task elsewhere.
 
 The model's limits are left to the endpoint unless you give them:
@@ -75,7 +75,7 @@ domyn run-headless --config my-agent.yaml --prompt-file task.md
 ```
 
 - The session is still unattended: every tool call approved, one turn, no follow-up. The standing instructions are the file's own, so the text above is not added: declare it in the file if you want it (a session without it tends to stop at a plan).
-- The options that build the configuration (`--base-url`, `--model`, `--api-key-env`, `--context-window`, `--max-tokens`, `--temperature`, `--reasoning-effort`, `--max-iterations`, `--instructions`, `--no-instructions`, `--workspace`) cannot be given with it: set them in the file. `--prompt-file`, `--state-dir` and `--verbose` work as without it.
+- The options that build the configuration (`--model_url`, `--model_name`, `--api-key-env`, `--context-window`, `--max-tokens`, `--temperature`, `--reasoning-effort`, `--max-iterations`, `--instructions`, `--no-instructions`, `--workspace`) cannot be given with it: set them in the file. `--prompt-file`, `--state-dir` and `--verbose` work as without it.
 - The file's `${VAR}` references are read from the environment, a `.env` and `~/.domyn/credentials`, so a configuration `domyn setup` wrote finds the key it saved.
 - The file is copied unchanged into the state folder as its `config.yaml`, and the session runs that copy. `${DOMYN_PROJECT_DIR}` in it means the state folder; relative paths mean the folder you run `domyn run-headless` from, as everywhere.
 
@@ -87,7 +87,7 @@ A good starting point is the configuration `domyn run-headless` builds: run it o
 
 The answer, the tool calls and the agent's summary are printed as the session goes; redirected to a file or a pipe, the output is plain text. At the end the session prints the command that reopens the conversation, `domyn run --project <state-dir> --resume <conversation_id>`, if you want to look at it or continue it yourself.
 
-The exit code is `0` once the turn has ended, whatever its outcome: an error from the model ends the turn too, and is printed. It is `130` when the turn is interrupted with Ctrl+C, `2` for a mistake on the command line (no task, no `--base-url`, an unset key variable), and `1` when the agent cannot be built.
+The exit code is `0` once the turn has ended, whatever its outcome: an error from the model ends the turn too, and is printed. It is `130` when the turn is interrupted with Ctrl+C, `2` for a mistake on the command line (no task, no `--model_url`, an unset key variable), and `1` when the agent cannot be built.
 
 ## In a container or a benchmark
 

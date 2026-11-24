@@ -9,7 +9,7 @@ built from the command line into a folder of its own
 (`use_project`), so every file the session reads or writes is there.
 
 The endpoint is named on the command line, never guessed from the environment: an
-OpenAI-compatible ``--base-url``, the ``--model`` it serves, and ``--api-key-env``, the
+OpenAI-compatible ``--model_url``, the ``--model_name`` it serves, and ``--api-key-env``, the
 variable holding its key (none is sent without it). No ``OPENAI_*`` variable is read, so
 one left in the environment for some other tool cannot point the session elsewhere. The
 model's limits are options of their own (``--context-window``, ``--max-tokens``), and so
@@ -97,8 +97,8 @@ carry them out, and the session ends on the offer."""
 
 DEFAULT_MAX_ITERATIONS = 1000
 BUILD_OPTIONS = {
-    "base_url": "--base-url",
-    "model": "--model",
+    "base_url": "--model_url",
+    "model": "--model_name",
     "api_key_env": "--api-key-env",
     "context_window": "--context-window",
     "max_tokens": "--max-tokens",
@@ -273,11 +273,14 @@ def run_headless_command(
         ),
     ),
     model: str | None = typer.Option(
-        None, "--model", "-m", help="The model's name on the endpoint (needed without --config)"
+        None,
+        "--model_name",
+        "-m",
+        help="The model's name on the endpoint (needed without --config)",
     ),
     base_url: str | None = typer.Option(
         None,
-        "--base-url",
+        "--model_url",
         help="The OpenAI-compatible endpoint, e.g. http://host:8000/v1 (needed without --config)",
     ),
     api_key_env: str | None = typer.Option(
@@ -338,7 +341,7 @@ def run_headless_command(
 ) -> None:
     """Carry out one task on your own: no questions, no follow-up, then exit.
 
-    Needs no `domyn setup` and ignores any: the endpoint is --base-url, the model --model
+    Needs no `domyn setup` and ignores any: the endpoint is --model_url, the model --model_name
     and the key the variable --api-key-env names, or --config names a configuration file
     to run. Every tool call is approved automatically.
     """
@@ -357,7 +360,9 @@ def run_headless_command(
             raise _fail(f"Cannot read the configuration in {config}: {exc}") from exc
     else:
         if model is None or base_url is None:
-            raise _fail("Give --base-url and --model, or --config to run a configuration file.")
+            raise _fail(
+                "Give --model_url and --model_name, or --config to run a configuration file."
+            )
         standing = _read_instructions(instructions, no_instructions)
         if api_key_env is not None and not os.environ.get(api_key_env):
             raise _fail(f"--api-key-env names {api_key_env}, which is not set.")

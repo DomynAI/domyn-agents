@@ -107,7 +107,7 @@ def started(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
 
 def _invoke(*args: str, endpoint: bool = True) -> Any:
-    given = ["--base-url", ENDPOINT, "--api-key-env", "RUN_HEADLESS_TEST_KEY"] if endpoint else []
+    given = ["--model_url", ENDPOINT, "--api-key-env", "RUN_HEADLESS_TEST_KEY"] if endpoint else []
     return CliRunner().invoke(app, ["run-headless", *given, *args], catch_exceptions=False)
 
 
@@ -116,7 +116,7 @@ class TestTheCommand:
         self, tmp_path: Path, started: dict[str, Any]
     ) -> None:
         state = tmp_path / "state"
-        result = _invoke("--model", "m", "--state-dir", str(state), "do it")
+        result = _invoke("--model_name", "m", "--state-dir", str(state), "do it")
 
         assert result.exit_code == 0, result.output
         assert started["initial_prompt"] == "do it"
@@ -133,7 +133,7 @@ class TestTheCommand:
         self, tmp_path: Path, started: dict[str, Any]
     ) -> None:
         state = tmp_path / "state"
-        assert _invoke("--model", "m", "--state-dir", str(state), "x").exit_code == 0
+        assert _invoke("--model_name", "m", "--state-dir", str(state), "x").exit_code == 0
         params = yaml.safe_load((state / "config.yaml").read_text())["llm_providers"][0][
             "generation_params"
         ]
@@ -145,7 +145,7 @@ class TestTheCommand:
     ) -> None:
         state = tmp_path / "state"
         result = _invoke(
-            "--model",
+            "--model_name",
             "m",
             "--state-dir",
             str(state),
@@ -164,20 +164,20 @@ class TestTheCommand:
         task = tmp_path / "task.md"
         task.write_text("from the file")
         state = str(tmp_path / "state")
-        result = _invoke("--model", "m", "--state-dir", state, "--prompt-file", str(task))
+        result = _invoke("--model_name", "m", "--state-dir", state, "--prompt-file", str(task))
         assert result.exit_code == 0, result.output
         assert started["initial_prompt"] == "from the file"
 
     def test_no_skill_is_installed_or_loaded(self, tmp_path: Path, started: dict[str, Any]) -> None:
         state = tmp_path / "state"
-        assert _invoke("--model", "m", "--state-dir", str(state), "x").exit_code == 0
+        assert _invoke("--model_name", "m", "--state-dir", str(state), "x").exit_code == 0
         assert "skills" not in yaml.safe_load((state / "config.yaml").read_text())["agents"][0]
         assert not (state / "builtin-skills").exists()
 
     def test_there_is_no_option_to_install_the_built_in_skills(
         self, tmp_path: Path, started: dict[str, Any]
     ) -> None:
-        result = _invoke("--model", "m", "--skills", "--state-dir", str(tmp_path / "s"), "x")
+        result = _invoke("--model_name", "m", "--skills", "--state-dir", str(tmp_path / "s"), "x")
         assert result.exit_code == 2
         assert not started
 
@@ -185,7 +185,9 @@ class TestTheCommand:
         self, tmp_path: Path, started: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("OPENAI_BASE_URL", ENDPOINT)
-        result = _invoke("--model", "m", "--state-dir", str(tmp_path / "s"), "x", endpoint=False)
+        result = _invoke(
+            "--model_name", "m", "--state-dir", str(tmp_path / "s"), "x", endpoint=False
+        )
         assert result.exit_code == 2
         assert not started
 
@@ -195,9 +197,9 @@ class TestTheCommand:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-not-ours")
         state = tmp_path / "state"
         result = _invoke(
-            "--base-url",
+            "--model_url",
             ENDPOINT,
-            "--model",
+            "--model_name",
             "m",
             "--state-dir",
             str(state),
@@ -213,7 +215,7 @@ class TestTheCommand:
         self, tmp_path: Path, started: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("RUN_HEADLESS_TEST_KEY")
-        result = _invoke("--model", "m", "--state-dir", str(tmp_path / "s"), "x")
+        result = _invoke("--model_name", "m", "--state-dir", str(tmp_path / "s"), "x")
         assert result.exit_code == 2
         assert not started
 
@@ -225,7 +227,7 @@ class TestTheCommand:
         monkeypatch.setattr(
             cli_config, "_credentials_in_environment", {"SETUP_ONLY_KEY": "from-credentials"}
         )
-        result = _invoke("--model", "m", "--state-dir", str(tmp_path / "s"), "x")
+        result = _invoke("--model_name", "m", "--state-dir", str(tmp_path / "s"), "x")
         assert result.exit_code == 0, result.output
         assert "SETUP_ONLY_KEY" not in os.environ
         # A key the environment itself holds stays.
@@ -262,8 +264,8 @@ class TestAConfigFile:
     @pytest.mark.parametrize(
         "option",
         [
-            ["--model", "m"],
-            ["--base-url", ENDPOINT],
+            ["--model_name", "m"],
+            ["--model_url", ENDPOINT],
             ["--workspace", "/tmp"],
             # An option's default given explicitly is still an option given.
             ["--reasoning-effort", "default"],
@@ -309,7 +311,9 @@ class TestAConfigFile:
     def test_without_it_the_endpoint_and_model_are_needed(
         self, tmp_path: Path, started: dict[str, Any]
     ) -> None:
-        result = _invoke("--model", "m", "--state-dir", str(tmp_path / "s"), "x", endpoint=False)
+        result = _invoke(
+            "--model_name", "m", "--state-dir", str(tmp_path / "s"), "x", endpoint=False
+        )
         assert result.exit_code == 2
         assert "--config" in result.output
         assert not started
