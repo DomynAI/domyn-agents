@@ -47,9 +47,6 @@ class CustomLLMProvider(BaseLLMProvider):
         if not self.name:
             self.name = self.model_name
 
-    def _request_headers(self) -> dict[str, str]:
-        return {"Content-Type": "application/json", **self.headers}
-
     def _context_window_headers(self) -> dict[str, str]:
         """The endpoint's own headers: its credentials live there, not in an api key."""
         return dict(self.headers)
@@ -66,7 +63,7 @@ class CustomLLMProvider(BaseLLMProvider):
         logger = get_logger()
 
         start = time.time()
-        request_headers = self._request_headers()
+        request_headers = {"Content-Type": "application/json", **self.headers}
 
         serialized_messages = [m.to_dict(reasoning_key=self.reasoning_key_in_use) for m in messages]
         # Sanitize tool names at the boundary; name_map restores originals in the response.
@@ -143,7 +140,7 @@ class CustomLLMProvider(BaseLLMProvider):
         logger = get_logger()
 
         start = time.time()
-        request_headers = self._request_headers()
+        request_headers = {"Content-Type": "application/json", **self.headers}
 
         serialized_messages = [m.to_dict(reasoning_key=self.reasoning_key_in_use) for m in messages]
         # Sanitize tool names at the boundary; name_map restores originals in the response.

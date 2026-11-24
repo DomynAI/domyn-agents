@@ -1,4 +1,4 @@
-"""`domyn setup` for a vLLM or custom endpoint: URL, then key, then the models it lists."""
+"""`domyn setup` for a vLLM endpoint: URL, then key, then the models it lists."""
 
 import io
 from pathlib import Path
@@ -29,7 +29,7 @@ LISTING = {
 @pytest.fixture(autouse=True)
 def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cfg, "GLOBAL_DIR", tmp_path / "home" / ".domyn")
-    for name in ("LLM_API_KEY", "VLLM_API_KEY"):
+    for name in ("VLLM_API_KEY",):
         monkeypatch.setenv(name, "")
         monkeypatch.delenv(name)
     monkeypatch.setattr(select_mod, "_interactive", lambda theme: False)
@@ -61,20 +61,19 @@ class TestTheModelsAreListed:
         result, shown = _run(
             theme,
             tmp_path,
-            ["custom", "https://gw.example.com/v1", "sk-test", "2", "", "", "", ""],
+            ["vllm", "https://gw.example.com/v1", "sk-test", "2", "", "", "", ""],
         )
 
         assert result is not None
         provider = result["llm_providers"][0]
         assert provider["model_name"] == "gpt-oss-120b"
         assert provider["url"] == "https://gw.example.com/v1/chat/completions"
-        assert provider["headers"] == {"Authorization": "Bearer ${LLM_API_KEY}"}
-        assert "api_key" not in provider
+        assert provider["api_key"] == "${VLLM_API_KEY}"
         assert route.calls.last.request.headers["authorization"] == "Bearer sk-test"
         assert "32,768 tokens" in shown
 
     @respx.mock
-    def test_vllm_lists_them_too(self, theme: Theme, tmp_path: Path) -> None:
+    def test_a_bare_host_is_listed_from_its_v1(self, theme: Theme, tmp_path: Path) -> None:
         respx.get(MODELS_URL).mock(return_value=httpx.Response(200, json=LISTING))
 
         result, _ = _run(
@@ -98,7 +97,7 @@ class TestAFailedListingFallsBackToTyping:
         result, shown = _run(
             theme,
             tmp_path,
-            ["custom", "https://gw.example.com/v1", "sk-bad", "typed-model", "", "", "", ""],
+            ["vllm", "https://gw.example.com/v1", "sk-bad", "typed-model", "", "", "", ""],
         )
 
         assert result is not None
@@ -113,7 +112,7 @@ class TestAFailedListingFallsBackToTyping:
         result, shown = _run(
             theme,
             tmp_path,
-            ["custom", "https://gw.example.com/v1", "", "typed-model", "", "", "", ""],
+            ["vllm", "https://gw.example.com/v1", "", "typed-model", "", "", "", ""],
         )
 
         assert result is not None

@@ -110,50 +110,6 @@ class TestSecrets:
         )
         assert config_dict["llm_providers"][0]["api_key"] == "${OPENAI_API_KEY}"
 
-    def test_a_custom_providers_key_is_written_as_a_bearer_header(self) -> None:
-        """The custom provider takes its credentials in `headers`: an `api_key` there was
-        never read, and every request was a 401."""
-        cfg.write_credential("LLM_API_KEY", "sk-x")
-        provider = cfg.ProviderConfig(type="custom", model_name="m", url="https://gw/v1")
-        config_dict = cfg.configuration_v1_dict_from(
-            provider, cfg.AgentConfig(), cfg.CompactionConfig()
-        )
-
-        written = config_dict["llm_providers"][0]
-        assert written["headers"] == {"Authorization": "Bearer ${LLM_API_KEY}"}
-        assert "api_key" not in written
-        fields = dict(cfg.describe_configuration_v1(config_dict).sections[0].items[0].fields)
-        assert fields["api key"] == "LLM_API_KEY (set)"
-
-    @pytest.mark.asyncio
-    async def test_the_custom_provider_written_by_setup_sends_its_key(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        import respx
-        import yaml
-
-        from domyn.agents.llm import LLMMessage
-        from domyn.agents.loader import load_from_file
-
-        monkeypatch.setenv("LLM_API_KEY", "sk-x")
-        endpoint = "https://gw/v1/chat/completions"
-        provider = cfg.ProviderConfig(type="custom", model_name="m", url=endpoint)
-        path = tmp_path / "config.yaml"
-        path.write_text(
-            yaml.safe_dump(
-                cfg.configuration_v1_dict_from(provider, cfg.AgentConfig(), cfg.CompactionConfig())
-            )
-        )
-        llm = LLMProviderFactory.from_config(load_from_file(str(path))["llm_providers"][0])
-
-        with respx.mock:
-            route = respx.post(endpoint).mock(
-                return_value=httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
-            )
-            await llm.generate([LLMMessage(role="user", content="hi")])
-
-        assert route.calls.last.request.headers["authorization"] == "Bearer sk-x"
-
     def test_no_key_omits_the_field_entirely(self) -> None:
         """Referencing an unresolvable ${VAR} would make the file fail to load
         outright (env-var interpolation raises on a missing variable) — a
@@ -246,7 +202,6 @@ class TestSecrets:
             ("open_router", "OPENROUTER_API_KEY"),
             ("cerebras", "CEREBRAS_API_KEY"),
             ("vllm", "VLLM_API_KEY"),
-            ("custom", "LLM_API_KEY"),
         ],
     )
     def test_each_provider_uses_its_conventional_env_var(

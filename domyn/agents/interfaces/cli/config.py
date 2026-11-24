@@ -119,34 +119,29 @@ PROVIDER_HINTS: dict[str, dict[str, str]] = {
     "open_router": {"env": "OPENROUTER_API_KEY", "models": "https://openrouter.ai/models"},
     "cerebras": {"env": "CEREBRAS_API_KEY", "models": "https://inference-docs.cerebras.ai/models"},
     "vllm": {"env": "VLLM_API_KEY", "models": "your vLLM deployment"},
-    "custom": {"env": "LLM_API_KEY", "models": "your endpoint"},
 }
 
 # Providers whose endpoint we cannot guess.
-REQUIRES_URL = ("domyn", "vllm", "custom")
+REQUIRES_URL = ("domyn", "vllm")
 
 _CHAT_COMPLETIONS = "/chat/completions"
 
 
 _VERSION_SEGMENT = re.compile(r"v\d+")
 
-# Providers whose URL setup completes to the chat completions endpoint, and whose
-# models it lists from the `/models` beside it: both speak OpenAI's API.
-OPENAI_COMPATIBLE = ("vllm", "custom")
-
 
 def chat_completions_url(url: str) -> str:
-    """The chat completions endpoint for a server URL typed into ``domyn setup``.
+    """The chat completions endpoint for a vLLM server URL typed into ``domyn setup``.
 
-    ``VLLMProvider`` and ``CustomLLMProvider`` post to their ``url`` as given, so a
-    server's base URL would be a 404 on the first message. ``http://host:8000`` becomes
+    ``VLLMProvider`` posts to its ``url`` as given, so a server's base URL would be a
+    404 on the first message. ``http://host:8000`` becomes
     ``http://host:8000/v1/chat/completions``; a URL ending in a version (``…/v1``,
     ``…/api/v2``) gets ``/chat/completions`` after it; one already ending in
     ``/chat/completions`` is kept as written, so a gateway serving it under another
     prefix still works. Query and fragment are kept.
 
-    The CLI's only: the providers themselves take their ``url`` verbatim, for the
-    services that build them in code.
+    The CLI's only: the provider itself takes its ``url`` verbatim, for the services
+    that build it in code.
     """
     parts = urlsplit(url.strip())
     path = parts.path.rstrip("/")
@@ -1246,13 +1241,7 @@ def configuration_v1_dict_from(
     # `/model` to be picked up, unlike `resolve_api_key`, which re-checks
     # fresh every time it's called — an accepted, smaller trade-off.
     if resolve_api_key(provider):
-        reference = f"${{{provider.default_key_env()}}}"
-        if provider.type == "custom":
-            # The custom provider takes its credentials in `headers`, for any scheme:
-            # the key the wizard asks for is a Bearer there.
-            provider_dict["headers"] = {"Authorization": f"Bearer {reference}"}
-        else:
-            provider_dict["api_key"] = reference
+        provider_dict["api_key"] = f"${{{provider.default_key_env()}}}"
     provider_dict["generation_params"] = {"max_tokens": provider.max_tokens}
     provider_dict["body"] = {"max_tokens": provider.max_tokens}
 
@@ -1582,17 +1571,6 @@ def _header_names(headers: Any) -> str:
     return ", ".join(sorted(str(k) for k in headers))
 
 
-def _bearer_reference(provider: dict[str, Any]) -> str | None:
-    """The ``${NAME}`` of an ``Authorization: Bearer ${NAME}`` header, the way setup writes
-    a custom provider's key; ``None`` for any other header or none."""
-    headers = provider.get("headers")
-    if not isinstance(headers, dict):
-        return None
-    value = next((v for k, v in headers.items() if str(k).lower() == "authorization"), None)
-    match = re.fullmatch(r"Bearer (\$\{\w+\})", value.strip()) if isinstance(value, str) else None
-    return match.group(1) if match else None
-
-
 def _secret_field_state(raw_value: Any) -> str:
     """Describe a secret-typed field's *state* without ever showing its value.
 
@@ -1690,7 +1668,7 @@ def _provider_items(raw: dict[str, Any]) -> list[ConfigItem]:
             ),
             ("max tokens", str(max_tokens) if max_tokens is not None else "(default)"),
             ("images", "read" if p.get("vision") is True else "not read"),
-            ("api key", _secret_field_state(p.get("api_key") or _bearer_reference(p))),
+            ("api key", _secret_field_state(p.get("api_key"))),
         ]
         if "headers" in p:
             fields.append(("headers", _header_names(p.get("headers"))))

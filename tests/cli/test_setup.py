@@ -138,6 +138,20 @@ def _domyn_answers(
     return ["domyn", url, space, configuration, *asked_key, model, "", "", "A", "i", ""]
 
 
+class TestTheCustomProviderIsNotOffered:
+    """`custom` differs from `vllm` only by headers the wizard cannot set, so it is not
+    offered until it can; a config holding it still runs, it is just not picked again."""
+
+    def test_it_is_not_among_the_providers(self) -> None:
+        assert "custom" not in cfg.PROVIDER_HINTS
+
+    def test_a_config_holding_it_opens_the_picker_on_the_first_provider(
+        self, console: MagicMock, theme: Theme
+    ) -> None:
+        with patch("builtins.input", side_effect=[""]):
+            assert setup._choose_provider(console, theme, "custom") == "domyn"
+
+
 class TestTheDomynProvider:
     """Domyn is the first choice, and the one a fresh setup starts on."""
 
@@ -783,7 +797,7 @@ class TestTextFields:
         hidden = [label for label, password in asked if password]
         assert hidden == ["Paste key (empty = skip)"]
 
-    @pytest.mark.parametrize("provider", ["domyn", "openai", "anthropic", "vllm", "custom"])
+    @pytest.mark.parametrize("provider", ["domyn", "openai", "anthropic", "vllm"])
     def test_the_connection_is_asked_before_the_model(
         self,
         console: MagicMock,
@@ -793,7 +807,7 @@ class TestTextFields:
         provider: str,
     ) -> None:
         # Every provider: URL, then key, then model. The connection decides which models
-        # there are, and Domyn's and an OpenAI-compatible endpoint's are listed with it.
+        # there are, and Domyn's and vLLM's are listed with it.
         for name in ("VLLM_API_KEY", "DOMYN_API_KEY", "DOMYN_BASE_URL", "DOMYN_SPACE_ID"):
             monkeypatch.delenv(name, raising=False)  # so every connection question is asked
         asked: list[str] = []
@@ -1553,23 +1567,6 @@ class TestAVLLMUrlIsCompleted:
         self, console: MagicMock, theme: Theme, tmp_path: Path, typed: str, saved: str
     ) -> None:
         with patch("builtins.input", side_effect=["vllm", typed, "", "m", "", "", ""]):
-            result = setup.run_setup(console, theme, path=tmp_path / "config.yaml")
-
-        assert result is not None
-        assert result["llm_providers"][0]["url"] == saved
-
-    @pytest.mark.parametrize(
-        ("typed", "saved"),
-        [
-            ("https://gw/v1", "https://gw/v1/chat/completions"),
-            ("http://host:8000", "http://host:8000/v1/chat/completions"),
-            ("https://gw/serve/chat/completions", "https://gw/serve/chat/completions"),
-        ],
-    )
-    def test_a_custom_url_is_completed_too(
-        self, console: MagicMock, theme: Theme, tmp_path: Path, typed: str, saved: str
-    ) -> None:
-        with patch("builtins.input", side_effect=["custom", typed, "", "m", "", "", ""]):
             result = setup.run_setup(console, theme, path=tmp_path / "config.yaml")
 
         assert result is not None

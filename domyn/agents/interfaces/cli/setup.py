@@ -50,7 +50,6 @@ from domyn.agents.interfaces.cli.config import (
     DEFAULT_DECISION_KEY_ENV,
     LOCAL_SKILLS_DIRS,
     MEMORY_DECIDER_BLURB,
-    OPENAI_COMPATIBLE,
     PROVIDER_HINTS,
     REQUIRES_URL,
     AgentConfig,
@@ -684,7 +683,6 @@ _PROVIDER_BLURB = {
     "open_router": "many models behind one key",
     "cerebras": "Cerebras inference",
     "vllm": "your own vLLM deployment",
-    "custom": "any OpenAI-compatible endpoint",
 }
 
 
@@ -1859,11 +1857,7 @@ def run_setup(
             else "URL (empty = provider default)"
         )
         url = _ask(console, theme, label, d.url)
-        if (
-            d.provider_type in OPENAI_COMPATIBLE
-            and url
-            and (completed := chat_completions_url(url)) != url
-        ):
+        if d.provider_type == "vllm" and url and (completed := chat_completions_url(url)) != url:
             url = completed
             console.print(f"  URL: {_scrub_url(url)}", style=theme.style("meta"), highlight=False)
         d.url = url
@@ -1876,12 +1870,12 @@ def run_setup(
 
     def choose_model(d: _Draft) -> None:
         """Picked from the models the connection just given lists: the space's for Domyn,
-        the endpoint's `/models` for an OpenAI-compatible one, which also checks the URL
-        and the key. Typed for a hosted API, and wherever the listing comes back empty."""
+        the server's `/models` for vLLM, which also checks the URL and the key. Typed for a
+        hosted API, and wherever the listing comes back empty."""
         if d.provider_type == "domyn":
             choose_domyn_model(d)
             return
-        if d.provider_type not in OPENAI_COMPATIBLE:
+        if d.provider_type != "vllm":
             ask_model(d)
             return
         api_key = resolve_api_key(endpoint_key(d)) or ""
