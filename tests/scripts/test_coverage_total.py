@@ -12,7 +12,10 @@ spec.loader.exec_module(coverage_total)
 
 def report(tmp_path: Path, rate: str) -> Path:
     path = tmp_path / "coverage.xml"
-    path.write_text(f'<?xml version="1.0" ?><coverage line-rate="{rate}" version="7"></coverage>')
+    path.write_text(
+        f'<?xml version="1.0" ?><coverage line-rate="{rate}" version="7"></coverage>',
+        encoding="utf-8",
+    )
     return path
 
 
@@ -22,7 +25,7 @@ class TestTheTotal:
 
     def test_a_report_without_one_is_refused(self, tmp_path: Path) -> None:
         path = tmp_path / "other.xml"
-        path.write_text("<coverage/>")
+        path.write_text("<coverage/>", encoding="utf-8")
         with pytest.raises(ValueError, match="no line-rate"):
             coverage_total.total(path)
 

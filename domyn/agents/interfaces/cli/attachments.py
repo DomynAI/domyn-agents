@@ -34,10 +34,12 @@ import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 from PIL import Image, ImageGrab
 
+from domyn.agents.core.links import is_link
 from domyn.agents.interfaces.cli import config as cli_config
 from domyn.agents.logger import get_logger
 from domyn.agents.tools.builtin.session import linked_below
@@ -124,7 +126,10 @@ def image_paths(pasted: str) -> list[Path] | None:
         return None
     try:
         if os.name == "nt":
-            entries = [entry.strip('"') for entry in shlex.split(text, posix=False)]
+            # Not POSIX: a backslash there is the separator, not an escape. The
+            # quotes are kept on each entry, double ones (what Windows Terminal puts
+            # around a dragged path with a space) or single ones, and taken off here.
+            entries = [_unquoted(entry) for entry in shlex.split(text, posix=False)]
         else:
             entries = shlex.split(text)
     except ValueError:
@@ -135,12 +140,20 @@ def image_paths(pasted: str) -> list[Path] | None:
     paths = []
     for entry in entries:
         if entry.startswith("file://"):
-            entry = unquote(urlsplit(entry).path)
+            # url2pathname, not the URL's path as it is: on Windows that is
+            # `/C:/Users/…`, which names no file.
+            entry = url2pathname(urlsplit(entry).path)
         path = Path(entry).expanduser()
         if _image_format(path) is None:
             return None
         paths.append(path.absolute())
     return paths
+
+
+def _unquoted(entry: str) -> str:
+    if len(entry) >= 2 and entry[0] == entry[-1] and entry[0] in "'\"":
+        return entry[1:-1]
+    return entry
 
 
 def _clipboard_file() -> Path | None:
@@ -221,7 +234,7 @@ class Attachments:
         while True:
             name = f"{stem}{suffix}" if number is None else f"{stem}-{number}{suffix}"
             target = context.folder / name
-            if not target.exists() and not target.is_symlink():
+            if not target.exists() and not is_link(target):
                 return target
             number = 2 if number is None else number + 1
 

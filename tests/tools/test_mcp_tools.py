@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from typing import Any
 from unittest.mock import ANY, AsyncMock, Mock, patch
 
@@ -1368,11 +1369,14 @@ async def test_mcp_tool_healthcheck_calls_ping_after_each_interval(
 
     ping_count = 0
     call_started = asyncio.Event()
+    two_pings = asyncio.Event()
 
     async def _slow_call_tool(*args, **kwargs):
         call_started.set()
-        # Stay alive long enough for 2 ping intervals, then return.
-        await asyncio.sleep(0.15)
+        # In flight until the second ping, not for a fixed 0.15s: on a loaded
+        # Windows runner that fitted only one. Bounded, so one ping still fails.
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(two_pings.wait(), timeout=5)
         return make_mock_response("Slow but OK")
 
     main_client = make_mock_client()
@@ -1386,6 +1390,8 @@ async def test_mcp_tool_healthcheck_calls_ping_after_each_interval(
     async def _count_pings():
         nonlocal ping_count
         ping_count += 1
+        if ping_count >= 2:
+            two_pings.set()
 
     probe_client.ping = AsyncMock(side_effect=_count_pings)
     tool._build_client = AsyncMock(return_value=probe_client)

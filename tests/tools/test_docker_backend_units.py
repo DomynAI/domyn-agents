@@ -49,6 +49,10 @@ from domyn.agents.tools.builtin.files import (
 )
 from tests.tools.test_docker_backend import _failed, _ok, _ScriptedCli
 
+# The Docker backend is refused on Windows until its mounts translate Windows paths
+# (`backends/docker/backend.py`, `_ON_WINDOWS`): what these check does not run there.
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="no Docker backend on Windows yet")
+
 
 @pytest.fixture
 def no_waiting(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -55,7 +55,7 @@ The options:
 | `language` | detected | an ISO 639-1 code such as `it`. Parakeet detects the language itself and ignores it; Whisper and Canary models use it |
 | `models_dir` | `~/.domyn/models` | where models are downloaded |
 
-WAV files are read as they are. Any other format (mp3, m4a, Ogg/Opus voice notes, webm…) is converted first with [ffmpeg](https://ffmpeg.org/), which has to be installed (`brew install ffmpeg`, `apt install ffmpeg`); without it, those formats fail with an error that says so.
+WAV files are read as they are. Any other format (mp3, m4a, Ogg/Opus voice notes, webm…) is converted first with [ffmpeg](https://ffmpeg.org/), which has to be installed (`brew install ffmpeg`, `apt install ffmpeg`, `winget install Gyan.FFmpeg`); without it, those formats fail with an error that says so.
 
 ## Through an endpoint
 

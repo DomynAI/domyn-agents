@@ -34,7 +34,7 @@ import json
 import os
 import shlex
 from collections.abc import Callable, Iterable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
 from domyn.agents.logger import get_logger
@@ -77,10 +77,16 @@ from domyn.agents.tools.builtin.session import safe_id
 from domyn.agents.tools.builtin.workspace import Workspace
 
 DEFAULT_CONVERSATION = "default"
+
+# Mounts give a folder the same path inside the Linux container as outside it, which
+# a Windows path (`C:\Users\…`) cannot be there. Until they are translated, Docker
+# is refused on Windows: `auto` then runs commands in Git Bash, as `local` does.
+# A module constant, so a test can play Windows without changing `os.name`.
+_ON_WINDOWS = os.name == "nt"
 OPERATIONS_COMMAND = "/opt/domyn/bin/python -P /opt/domyn/tool_host.py"
 """How a tool's body is run in the image: its own ``domyn``, apart from the Python the
 agent's commands use."""
-CONTAINER_ROOTS = (Path("/"),)
+CONTAINER_ROOTS = (PurePosixPath("/"),)
 """What the file tools may reach in the container: all of it. On this machine the
 workspace is the boundary because everything else is the user's; here everything else
 is the container's own, which a command can break as it likes, and what of the host is
@@ -168,6 +174,11 @@ class DockerBackend(CommandBackend):
 
     async def check(self) -> None:
         """Docker is installed and its daemon answers. The fast part of ``prepare``."""
+        if _ON_WINDOWS:
+            raise BackendUnavailableError(
+                "The Docker backend does not run on Windows yet.",
+                fix="Use the 'local' backend, which runs commands in Git Bash.",
+            )
         refuse_unsafe_workspace(self._workspace.root)
         await self._cli.check_daemon()
 

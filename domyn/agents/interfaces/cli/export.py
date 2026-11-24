@@ -95,6 +95,7 @@ import yaml
 from rich.console import Console
 
 import domyn.agents
+from domyn.agents.core.links import is_link
 from domyn.agents.instructions import LocalDirInstructionsSource
 from domyn.agents.instructions.discovery import (
     AUTODISCOVERY_DIRS,
@@ -310,7 +311,7 @@ class _Exporter:
         listed = self._listed_path(written, "skills")
         if listed is None:
             return None
-        if listed.is_symlink():
+        if is_link(listed):
             self.report.dropped.append(f"{written} (a symbolic link, which export does not follow)")
             return None
         if not listed.is_dir():
@@ -477,7 +478,7 @@ class _Exporter:
         listed = self._listed_path(written, "skills")
         if listed is None:
             return None
-        if listed.is_symlink():
+        if is_link(listed):
             self.report.dropped.append(f"{written} (a symbolic link, which export does not follow)")
             return None
         if not listed.exists():
@@ -690,7 +691,7 @@ class _Exporter:
                     # Most folders have neither: normal, left out quietly. Exported from
                     # `$HOME`, `./.domyn` is `~/.domyn`, which is not an instructions
                     # folder (`resolve_instruction_dirs`).
-                    if listed.is_symlink() or not listed.is_dir() or listed.resolve() == home:
+                    if is_link(listed) or not listed.is_dir() or listed.resolve() == home:
                         continue
                     found = find_instruction_files(listed.resolve())
                     for file in found.paths:
@@ -783,7 +784,7 @@ class _Exporter:
                 if isinstance(written, str) and _inside_project(written):
                     continue  # a project's own file, already named in its terms
                 path = self._listed_path(written, f"{section[:-1]} code")
-                if path is None or path.is_symlink() or not path.is_file():
+                if path is None or is_link(path) or not path.is_file():
                     continue
                 path = path.resolve()
                 if path not in places:
@@ -1034,7 +1035,7 @@ def _copy_into(
         raise ExportError(f"{relative} would be written outside the exported folder")
     if source not in chosen:
         raise ExportError(f"{source} was not chosen for the export")
-    if source.is_symlink() or not source.is_file() or is_private(source, places):
+    if is_link(source) or not source.is_file() or is_private(source, places):
         raise ExportError(f"{source} is not a file export may copy")
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target, follow_symlinks=False)

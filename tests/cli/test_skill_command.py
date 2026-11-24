@@ -201,7 +201,7 @@ class TestRemove:
         assert _paths(config) == [str(other)]
         assert (essay / "SKILL.md").is_file()
         # The rest of the config is untouched.
-        assert yaml.safe_load(config.read_text())["agents"][0]["name"] == "A"
+        assert yaml.safe_load(config.read_text(encoding="utf-8"))["agents"][0]["name"] == "A"
 
     def test_it_unlists_a_loose_skill_file(self, home: Path, tmp_path: Path) -> None:
         loose = tmp_path / "mine" / "notes.md"

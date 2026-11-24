@@ -18,12 +18,12 @@ import pytest
 from domyn.agents.tools.builtin import (
     BrowserOptions,
     BuiltinBundleConfig,
-    LocalBackend,
     Workspace,
     browser_tools,
     processes,
     shell,
 )
+from domyn.agents.tools.builtin.backends.local import this_machine
 
 
 def _data(result: Any) -> tuple[str, dict[str, Any]]:
@@ -39,7 +39,7 @@ def workspace(tmp_path: Path) -> Path:
 
 class TestWithoutAStateFolder:
     def test_it_is_dot_domyn_in_the_workspace(self, workspace: Path) -> None:
-        backend = LocalBackend(Workspace.at(workspace))
+        backend = this_machine(Workspace.at(workspace))
 
         assert backend.state_dir == ".domyn"
         assert backend.sessions is not None
@@ -52,9 +52,9 @@ class TestFromTheEnvironment:
     ) -> None:
         monkeypatch.setenv("DOMYN_PROJECT_DIR", str(tmp_path / "home"))
 
-        backend = LocalBackend(Workspace.at(workspace))
+        backend = this_machine(Workspace.at(workspace))
 
-        assert backend.state_dir == str(tmp_path / "home")
+        assert backend.state_dir == (tmp_path / "home").as_posix()
         assert backend.sessions is not None
         assert backend.sessions.paths("c1").home == tmp_path / "home" / "conversations" / "c1"
 
@@ -63,26 +63,26 @@ class TestFromTheEnvironment:
     ) -> None:
         monkeypatch.setenv("DOMYN_PROJECT_DIR", str(tmp_path / "home"))
 
-        backend = LocalBackend(Workspace.at(workspace), state_dir=tmp_path / "mine")
+        backend = this_machine(Workspace.at(workspace), state_dir=tmp_path / "mine")
 
-        assert backend.state_dir == str(tmp_path / "mine")
+        assert backend.state_dir == (tmp_path / "mine").as_posix()
 
     def test_it_is_read_when_the_backend_is_built(
         self, workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A session keeps the folder it started with."""
         monkeypatch.setenv("DOMYN_PROJECT_DIR", str(tmp_path / "first"))
-        backend = LocalBackend(Workspace.at(workspace))
+        backend = this_machine(Workspace.at(workspace))
         monkeypatch.setenv("DOMYN_PROJECT_DIR", str(tmp_path / "second"))
 
-        assert backend.state_dir == str(tmp_path / "first")
+        assert backend.state_dir == (tmp_path / "first").as_posix()
 
     def test_an_empty_variable_is_none(
         self, workspace: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("DOMYN_PROJECT_DIR", "")
 
-        assert LocalBackend(Workspace.at(workspace)).state_dir == ".domyn"
+        assert this_machine(Workspace.at(workspace)).state_dir == ".domyn"
 
 
 class TestWithAStateFolder:
@@ -91,7 +91,7 @@ class TestWithAStateFolder:
         self, workspace: Path, tmp_path: Path
     ) -> None:
         state_dir = tmp_path / "home"
-        backend = LocalBackend(
+        backend = this_machine(
             Workspace.at(workspace), isolate_environment=False, state_dir=state_dir
         )
         run = shell.build_run_command(backend)
@@ -104,7 +104,8 @@ class TestWithAStateFolder:
         (handle,) = processes.registry(state)
 
         assert (state_dir / "processes" / "c1" / handle / "run.pid").is_file()
-        assert str(state_dir / "processes" / "c1" / handle / "out.log") in text
+        # As bash reads it: forward slashes on Windows too (the same as str elsewhere).
+        assert (state_dir / "processes" / "c1" / handle / "out.log").as_posix() in text
         assert not (workspace / ".domyn").exists()
         # The folder is the backend's, not the record's: nothing of it is stored.
         assert "home" not in state["background_processes"][handle]
@@ -116,13 +117,14 @@ class TestWithAStateFolder:
         assert "Stopped" in stopped
 
     @pytest.mark.asyncio
+    @pytest.mark.skipif(os.name == "nt", reason='Windows allows no " in a file name')
     async def test_a_folder_with_shell_characters_in_its_name(
         self, workspace: Path, tmp_path: Path
     ) -> None:
         # The wrapper reads its folder from a quoted variable: in double quotes, `$`,
         # `"` and a backtick in a project's path would be shell.
         state_dir = tmp_path / 'we"ird $(touch pwned) `x`'
-        backend = LocalBackend(
+        backend = this_machine(
             Workspace.at(workspace), isolate_environment=False, state_dir=state_dir
         )
         run = shell.build_run_command(backend)
@@ -134,7 +136,7 @@ class TestWithAStateFolder:
         assert any((state_dir / "processes" / "c1").iterdir())
 
     def test_conversation_environments_are_there(self, workspace: Path, tmp_path: Path) -> None:
-        backend = LocalBackend(Workspace.at(workspace), state_dir=tmp_path / "home")
+        backend = this_machine(Workspace.at(workspace), state_dir=tmp_path / "home")
 
         assert backend.sessions is not None
         paths = backend.sessions.paths("c1")
@@ -149,7 +151,7 @@ class TestWithAStateFolder:
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
         (state_dir / "conversations").symlink_to(elsewhere)
-        backend = LocalBackend(Workspace.at(workspace), state_dir=state_dir)
+        backend = this_machine(Workspace.at(workspace), state_dir=state_dir)
 
         assert backend.sessions is not None
         assert backend.sessions.prepare("c1") is None
@@ -160,7 +162,7 @@ class TestWithAStateFolder:
         real.mkdir(parents=True)
         linked = tmp_path / "linked"
         linked.symlink_to(real)
-        backend = LocalBackend(Workspace.at(workspace), state_dir=linked)
+        backend = this_machine(Workspace.at(workspace), state_dir=linked)
         assert backend.sessions is not None
         # Only the walk is checked here, not the venv: building one takes seconds.
         paths = backend.sessions.paths("c1")
@@ -170,11 +172,11 @@ class TestWithAStateFolder:
             assert not here.is_symlink()
 
     def test_the_browser_keeps_its_files_there(self, workspace: Path, tmp_path: Path) -> None:
-        backend = LocalBackend(Workspace.at(workspace), state_dir=tmp_path / "home")
+        backend = this_machine(Workspace.at(workspace), state_dir=tmp_path / "home")
 
         _, sessions = browser_tools(backend=backend, options=BrowserOptions())
 
-        assert sessions.browser_dir == f"{tmp_path / 'home'}/browser"
+        assert sessions.browser_dir == f"{(tmp_path / 'home').as_posix()}/browser"
 
 
 class TestLinksAreNotFollowed:
@@ -192,7 +194,7 @@ class TestLinksAreNotFollowed:
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
         (state_dir / name).symlink_to(elsewhere)
-        backend = LocalBackend(
+        backend = this_machine(
             Workspace.at(workspace), isolate_environment=False, state_dir=state_dir
         )
 
@@ -214,7 +216,7 @@ class TestLinksAreNotFollowed:
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
         (workspace / ".domyn").symlink_to(elsewhere)
-        backend = LocalBackend(Workspace.at(workspace), isolate_environment=False)
+        backend = this_machine(Workspace.at(workspace), isolate_environment=False)
 
         result = await backend.run("echo hi", timeout=10)
 
@@ -229,7 +231,7 @@ class TestLinksAreNotFollowed:
         (real / "processes").mkdir(parents=True)
         linked = tmp_path / "linked"
         linked.symlink_to(real)
-        backend = LocalBackend(Workspace.at(workspace), isolate_environment=False, state_dir=linked)
+        backend = this_machine(Workspace.at(workspace), isolate_environment=False, state_dir=linked)
 
         result = await backend.run("echo hi", timeout=10)
 

@@ -242,7 +242,9 @@ def main() -> None:
         "Drafted by profile_data.py. Review every entry, move what you decide from "
         "_to_decide to its key, add types / drop / exclude, and save as cleaning.json."
     )
-    (out / "cleaning_suggested.json").write_text(json.dumps(spec, indent=2, default=str))
+    (out / "cleaning_suggested.json").write_text(
+        json.dumps(spec, indent=2, default=str), encoding="utf-8"
+    )
 
     sample = df.head(10).map(lambda v: str(v)[:30])
     md = [
@@ -263,7 +265,7 @@ def main() -> None:
         "\n## First rows\n",
         common.markdown_table(sample.set_index(sample.columns[0])),
     ]
-    (out / "profile.md").write_text("\n".join(md) + "\n")
+    (out / "profile.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     (out / "profile.json").write_text(
         json.dumps(
             {
@@ -280,10 +282,11 @@ def main() -> None:
             },
             indent=2,
             default=lambda v: v.item() if isinstance(v, np.generic) else str(v),
-        )
+        ),
+        encoding="utf-8",
     )
     common.record_run(out, Path(__file__))
-    print((out / "profile.md").read_text())
+    print((out / "profile.md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

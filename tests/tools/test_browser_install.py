@@ -79,7 +79,9 @@ class TestThePlatform:
             ("linux", "x86_64", "linux64"),
             ("linux", "aarch64", "linux-arm64"),
             ("linux", "riscv64", None),
-            ("win32", "AMD64", None),
+            ("win32", "AMD64", "win64"),
+            # No Windows on ARM build: the x64 one, emulated.
+            ("win32", "ARM64", "win64"),
         ],
     )
     def test_it_names_the_build_to_download(self, monkeypatch, system, machine, expected):
@@ -107,11 +109,38 @@ class TestFindingPrograms:
     def test_the_bundled_copy_is_used_when_nothing_is_on_path(self, monkeypatch, tmp_path):
         (tmp_path / "bin").mkdir()
         binary = tmp_path / "bin" / "agent-browser"
-        binary.write_text("#!/bin/sh\n")
+        binary.write_text("#!/bin/sh\n", encoding="utf-8")
         binary.chmod(0o755)
         monkeypatch.setattr(bi.shutil, "which", lambda name: None)
         monkeypatch.setattr(bi.sys, "prefix", str(tmp_path))
+        monkeypatch.setattr(bi.sys, "platform", "linux")
         assert bi.resolve_binary("agent-browser") == str(binary)
+
+    def test_on_windows_the_bundled_copy_is_the_exe_in_bash_spelling(self, monkeypatch, tmp_path):
+        """Run from a Git Bash line, where a backslash is an escape."""
+        (tmp_path / "bin").mkdir()
+        binary = tmp_path / "bin" / "agent-browser.exe"
+        binary.write_bytes(b"MZ")
+        monkeypatch.setattr(bi.shutil, "which", lambda name: None)
+        monkeypatch.setattr(bi.sys, "prefix", str(tmp_path))
+        monkeypatch.setattr(bi.sys, "platform", "win32")
+        assert bi.resolve_binary("agent-browser") == binary.as_posix()
+
+    def test_on_windows_nothing_bundled_is_none(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(bi.sys, "prefix", str(tmp_path))
+        monkeypatch.setattr(bi.sys, "platform", "win32")
+        assert bi.bundled_binary("agent-browser") is None
+
+    def test_on_windows_chrome_is_found_where_it_installs(self, monkeypatch, tmp_path):
+        """Per machine or per user: Program Files, or the user's AppData."""
+        chrome = tmp_path / "Local" / "Google" / "Chrome" / "Application" / "chrome.exe"
+        chrome.parent.mkdir(parents=True)
+        chrome.write_bytes(b"MZ")
+        monkeypatch.setattr(bi.sys, "platform", "win32")
+        monkeypatch.setenv("ProgramFiles", str(tmp_path / "missing"))
+        monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+        assert bi.system_chrome() == str(chrome)
 
     def test_a_missing_binary_keeps_its_name_so_the_usual_error_follows(
         self, monkeypatch, tmp_path
@@ -127,7 +156,7 @@ class TestFindingPrograms:
         for version in ("9.0.0.1", "10.0.0.1"):
             path = tmp_path / f"chrome-{version}-{KEY}" / EXE
             path.parent.mkdir(parents=True)
-            path.write_text("")
+            path.write_text("", encoding="utf-8")
         assert bi.downloaded_chrome(tmp_path) == str(tmp_path / f"chrome-10.0.0.1-{KEY}" / EXE)
 
     def test_nothing_downloaded_is_none(self, tmp_path):
@@ -140,6 +169,7 @@ class TestFindingPrograms:
 
 
 class TestUnpacking:
+    @pytest.mark.skipif(os.name == "nt", reason="the Linux build's mode bits and links")
     def test_permissions_and_links_are_kept(self, tmp_path):
         archive = tmp_path / "a.zip"
         archive.write_bytes(
@@ -193,7 +223,7 @@ class TestDownloading:
         respx.get(bi.CHROME_VERSIONS_URL).mock(return_value=httpx.Response(200, json=listing()))
         existing = tmp_path / f"chrome-156.0.1.2-{KEY}" / EXE
         existing.parent.mkdir(parents=True)
-        existing.write_text("")
+        existing.write_text("", encoding="utf-8")
         archive = respx.get(url__regex=r"https://storage\.googleapis\.com/.*")
         said: list[str] = []
         assert bi.download_chrome(tmp_path, said.append) == str(existing)
@@ -381,7 +411,7 @@ class TestThePinnedBinary:
         lock = Path(__file__).parents[2] / "scripts" / "agent_browser.lock"
         values = dict(
             line.split("=", 1)
-            for line in lock.read_text().splitlines()
+            for line in lock.read_text(encoding="utf-8").splitlines()
             if line and not line.startswith("#")
         )
         assert values["AGENT_BROWSER_VERSION"].count(".") == 2
@@ -391,6 +421,7 @@ class TestThePinnedBinary:
             "aarch64_unknown_linux_gnu",
             "x86_64_unknown_linux_musl",
             "aarch64_unknown_linux_musl",
+            "x86_64_pc_windows_msvc",
         ):
             digest = values[f"AGENT_BROWSER_SHA256_{target}"]
             assert len(digest) == 64 and set(digest) <= set("0123456789abcdef")

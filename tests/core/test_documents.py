@@ -445,7 +445,7 @@ class TestWhenThePdfReaderFails:
     def reader(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Reader:
         def install(code: str) -> None:
             script = tmp_path / "reader.py"
-            script.write_text(code)
+            script.write_text(code, encoding="utf-8")
             monkeypatch.setattr(documents, "_READER", script)
 
         return install
@@ -551,7 +551,7 @@ class TestWithoutAPythonToStartTheReader:
         """An executable file that is no program: starting it fails, so the PDF
         is read here rather than reported as an error that is not the file's."""
         fake = tmp_path / "python"
-        fake.write_text("no program here\n")
+        fake.write_text("no program here\n", encoding="utf-8")
         fake.chmod(0o755)
         monkeypatch.setattr(sys, "executable", str(fake))
         read = extract(_pdf(_TEXT_PAGE, _SCAN), "report.pdf")

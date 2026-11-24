@@ -15,6 +15,8 @@ something, the exit code coming back — only exist in the real thing.
 # No `from __future__ import annotations`: this imports the tool modules, which
 # rely on real annotations at construction time.
 import asyncio
+import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -24,11 +26,14 @@ from domyn.agents.tools.builtin import (
     BuiltinTools,
     CommandBackend,
     CommandResult,
+    GitBashBackend,
     LocalBackend,
     Workspace,
     build_backend,
     bundle,
 )
+from domyn.agents.tools.builtin.backends import local as local_backend
+from domyn.agents.tools.builtin.git_bash import GitBashNotFoundError
 from domyn.agents.tools.builtin.shell import render
 
 
@@ -40,25 +45,28 @@ def workspace(tmp_path: Path) -> Workspace:
 class TestLocalBackend:
     @pytest.mark.asyncio
     async def test_it_returns_the_exit_code(self, workspace: Workspace) -> None:
-        result = await LocalBackend(workspace).run("exit 7", timeout=10)
+        result = await build_backend("local", workspace).run("exit 7", timeout=10)
         assert result.exit_code == 7
         assert not result.timed_out
         assert result.backend_error is None
 
     @pytest.mark.asyncio
     async def test_it_separates_the_streams(self, workspace: Workspace) -> None:
-        result = await LocalBackend(workspace).run("echo out; echo err >&2", timeout=10)
+        result = await build_backend("local", workspace).run("echo out; echo err >&2", timeout=10)
         assert "out" in result.stdout
         assert "err" in result.stderr
 
     @pytest.mark.asyncio
     async def test_it_runs_in_the_workspace(self, workspace: Workspace) -> None:
-        result = await LocalBackend(workspace).run("pwd", timeout=10)
-        assert str(workspace.root) in result.stdout
+        # Git Bash prints /c/Users/…; its -W gives C:/Users/…. Elsewhere -W fails.
+        result = await build_backend("local", workspace).run(
+            "pwd -W 2>/dev/null || pwd", timeout=10
+        )
+        assert workspace.root.as_posix() in result.stdout
 
     @pytest.mark.asyncio
     async def test_a_timeout_is_reported_not_raised(self, workspace: Workspace) -> None:
-        result = await LocalBackend(workspace).run("sleep 30", timeout=0.5)
+        result = await build_backend("local", workspace).run("sleep 30", timeout=0.5)
         assert result.timed_out
         assert result.exit_code is None
 
@@ -66,7 +74,7 @@ class TestLocalBackend:
     async def test_a_timed_out_process_is_killed(self, workspace: Workspace) -> None:
         """Abandoning it would leave something holding the port or the lock."""
         started = asyncio.get_running_loop().time()
-        await LocalBackend(workspace).run("sleep 40", timeout=0.5)
+        await build_backend("local", workspace).run("sleep 40", timeout=0.5)
         assert asyncio.get_running_loop().time() - started < 20
 
     @pytest.mark.asyncio
@@ -76,11 +84,12 @@ class TestLocalBackend:
         forty-seven seconds. Whether the shell forks decides whether it
         happens, which is why this only showed up in CI."""
         started = asyncio.get_running_loop().time()
-        result = await LocalBackend(workspace).run("sleep 40 & wait", timeout=1.0)
+        result = await build_backend("local", workspace).run("sleep 40 & wait", timeout=1.0)
         elapsed = asyncio.get_running_loop().time() - started
         assert result.timed_out
         assert elapsed < 20, f"waited {elapsed:.0f}s for the tree to die"
 
+    @pytest.mark.skipif(os.name == "nt", reason="pgrep reads a POSIX process table")
     @pytest.mark.asyncio
     async def test_nothing_is_left_running(self, workspace: Workspace) -> None:
         """The promise the old code made in a comment and did not keep.
@@ -97,7 +106,9 @@ class TestLocalBackend:
         # can collide with another test's sleep and fail for a reason that has
         # nothing to do with this one.
         marker = f"domyn-orphan-{uuid.uuid4().hex[:8]}"
-        await LocalBackend(workspace).run(f"sh -c 'sleep 41 # {marker}' & wait", timeout=1.0)
+        await build_backend("local", workspace).run(
+            f"sh -c 'sleep 41 # {marker}' & wait", timeout=1.0
+        )
 
         survivors = "still here"
         for _ in range(30):
@@ -116,7 +127,7 @@ class TestLocalBackend:
     async def test_the_lifecycle_is_a_no_op(self, workspace: Workspace) -> None:
         """The local backend has nothing to set up, and must survive being told
         to anyway — including being closed without ever being started."""
-        backend = LocalBackend(workspace)
+        backend = build_backend("local", workspace)
         await backend.close()
         await backend.start()
         await backend.start()
@@ -124,12 +135,206 @@ class TestLocalBackend:
         await backend.close()
 
     def test_it_does_not_claim_isolation(self, workspace: Workspace) -> None:
-        assert LocalBackend(workspace).is_isolated is False
+        assert build_backend("local", workspace).is_isolated is False
 
 
 class TestResolvingABackend:
     def test_local_resolves(self, workspace: Workspace) -> None:
         assert isinstance(build_backend("local", workspace), LocalBackend)
+
+    @pytest.mark.skipif(os.name != "nt", reason="what local means on Windows")
+    def test_local_is_git_bash_on_windows(self, workspace: Workspace) -> None:
+        """Never cmd.exe: the approval gate judged the line as POSIX shell."""
+        assert isinstance(build_backend("local", workspace), GitBashBackend)
+
+    @pytest.mark.skipif(os.name == "nt", reason="off Windows only")
+    def test_local_is_not_git_bash_elsewhere(self, workspace: Workspace) -> None:
+        assert not isinstance(build_backend("local", workspace), GitBashBackend)
+
+    @pytest.mark.skipif(os.name == "nt", reason="off Windows only")
+    def test_git_bash_refuses_off_windows(self, workspace: Workspace) -> None:
+        """Running /bin/sh instead would run something else than configured."""
+        with pytest.raises(BackendUnavailableError, match="Windows only"):
+            build_backend("git_bash", workspace)
+
+    @pytest.mark.skipif(os.name != "nt", reason="Windows only")
+    def test_git_bash_by_name(self, workspace: Workspace) -> None:
+        assert isinstance(build_backend("git_bash", workspace), GitBashBackend)
+
+    def test_the_fallbacks_resolve_local_too(self, tmp_path: Path) -> None:
+        """The bundle builds its backend by name, so on Windows it is Git Bash
+        and never a LocalBackend running cmd.exe."""
+        tools = bundle("shell", root=tmp_path)
+        assert type(tools.backend) is type(build_backend("local", Workspace.at(tmp_path)))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows only")
+@pytest.mark.asyncio
+async def test_local_backend_never_runs_cmd_exe(workspace: Workspace) -> None:
+    """Built directly on Windows, it refuses rather than hand a line the POSIX
+    parser approved to cmd.exe, which would read it differently."""
+    result = await LocalBackend(workspace, isolate_environment=False).run("echo hi", timeout=5)
+
+    assert result.exit_code is None
+    assert result.backend_error is not None
+    assert "Git Bash" in result.backend_error
+
+
+class TestTheLineArrivesAsWritten:
+    """Git Bash started from a Windows program re-reads its command line with
+    rules of its own (single quotes as quotes, globbing), so the line travels in
+    the environment. Run here with this machine's bash, so it is checked
+    everywhere; the Windows-only process flags are off where they do not exist."""
+
+    @pytest.fixture
+    def backend(self, workspace: Workspace, monkeypatch: pytest.MonkeyPatch) -> GitBashBackend:
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("no bash on this machine")
+        if os.name != "nt":
+            monkeypatch.setattr(local_backend, "_WINDOWS_CREATION_FLAGS", 0)
+        return GitBashBackend(workspace, isolate_environment=False, bash=Path(bash))
+
+    @pytest.mark.asyncio
+    async def test_quotes_and_globs_are_untouched(self, backend: GitBashBackend) -> None:
+        result = await backend.run("""printf '%s|' 'a b' "c'd" '*' 'x"y'; echo""", timeout=10)
+
+        assert result.exit_code == 0, result.stderr
+        assert result.stdout.strip() == """a b|c'd|*|x"y|"""
+
+    @pytest.mark.asyncio
+    async def test_the_command_does_not_see_its_own_carrier(self, backend: GitBashBackend) -> None:
+        result = await backend.run('echo "[${DOMYN_COMMAND-unset}]"', timeout=10)
+
+        assert result.stdout.strip() == "[unset]"
+
+    @pytest.mark.asyncio
+    async def test_exit_code_stdin_and_streams_are_the_commands(
+        self, backend: GitBashBackend
+    ) -> None:
+        result = await backend.run("cat; echo err >&2; exit 3", timeout=10, stdin="in\n")
+
+        assert (result.exit_code, result.stdout, result.stderr) == (3, "in\n", "err\n")
+
+    @pytest.mark.asyncio
+    async def test_a_timeout_ends_the_command_and_keeps_no_job(
+        self, backend: GitBashBackend
+    ) -> None:
+        """The whole way a timeout goes: the job (Windows), taskkill (Windows; a
+        missing one is passed over), the kill, the pipes read to their end."""
+        started = asyncio.get_running_loop().time()
+        result = await backend.run("exec sleep 30", timeout=0.5)
+        elapsed = asyncio.get_running_loop().time() - started
+
+        assert result.timed_out and result.exit_code is None
+        assert elapsed < 10, f"took {elapsed:.1f}s to end"
+        assert backend._jobs == {}
+
+
+def _windows_sleeps(seconds: int) -> list[str]:
+    r"""The pids of Git Bash's ``sleep <seconds>``, whose command line reads
+    ``"C:\…\sleep.exe" <seconds>``: a unique duration is the marker."""
+    import subprocess
+
+    query = (
+        "Get-CimInstance Win32_Process -Filter \"Name='sleep.exe'\" | Where-Object "
+        f"{{ $_.CommandLine -like '* {seconds}' }} | ForEach-Object {{ $_.ProcessId }}"
+    )
+    out = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", query], capture_output=True, text=True
+    ).stdout
+    return out.split()
+
+
+def _end_windows_processes(pids: list[str]) -> None:
+    import subprocess
+
+    for pid in pids:
+        subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True, check=False)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows job objects")
+class TestATimeoutOnWindows:
+    """Git Bash starts a command bash forks for from a process outside bash's
+    tree, so ``taskkill /T`` missed it: ``sleep 40; true`` outlived its timeout,
+    held the pipes, and Python printed "Event loop is closed" on exit. The
+    command's job reaches it. Durations are unique, as the markers looked for."""
+
+    @pytest.mark.asyncio
+    async def test_a_forking_command_is_ended(self, workspace: Workspace) -> None:
+        backend = build_backend("git_bash", workspace)
+        started = asyncio.get_running_loop().time()
+        result = await backend.run("sleep 4711; true", timeout=1.0)
+        elapsed = asyncio.get_running_loop().time() - started
+
+        survivors = _windows_sleeps(4711)
+        _end_windows_processes(survivors)
+        assert result.timed_out
+        assert not survivors, f"still running after the timeout: {survivors}"
+        # Without the job the pipes stayed open until the reaping gave up (5s).
+        assert elapsed < 4, f"took {elapsed:.1f}s to end"
+
+    @pytest.mark.asyncio
+    async def test_what_a_finished_command_started_keeps_running(
+        self, workspace: Workspace
+    ) -> None:
+        """The job is ended on a timeout only: a server started with ``&`` by a
+        command that returned is meant to run on."""
+        backend = build_backend("git_bash", workspace)
+        result = await backend.run("sleep 4712 >/dev/null 2>&1 &", timeout=10)
+        await asyncio.sleep(0.5)
+
+        running = _windows_sleeps(4712)
+        _end_windows_processes(running)
+        assert result.exit_code == 0
+        assert running, "the background command was ended with the one that started it"
+
+    @pytest.mark.asyncio
+    async def test_no_job_is_kept_after_a_command(self, workspace: Workspace) -> None:
+        backend = build_backend("git_bash", workspace)
+        assert isinstance(backend, GitBashBackend)
+        await backend.run("true", timeout=10)
+        await backend.run("sleep 4713", timeout=0.5)
+        _end_windows_processes(_windows_sleeps(4713))
+        assert backend._jobs == {}
+
+
+class TestWithoutGitBash:
+    """On Windows with no Git for Windows: the agent still works, and a
+    command says what to install instead of failing obscurely."""
+
+    @pytest.mark.asyncio
+    async def test_a_command_reports_what_to_install(
+        self, workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def missing() -> Path:
+            raise GitBashNotFoundError("Git Bash was not found. Install Git for Windows")
+
+        monkeypatch.setattr(local_backend, "find_git_bash", missing)
+        backend = GitBashBackend(workspace, isolate_environment=False)
+
+        result = await backend.run("echo hi", timeout=5)
+
+        assert result.exit_code is None
+        assert result.backend_error is not None
+        assert "Git for Windows" in result.backend_error
+
+    @pytest.mark.asyncio
+    async def test_it_is_looked_for_again_after_installing(
+        self, workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Not cached when missing: installing Git mid-session needs no restart."""
+        calls = []
+
+        def missing() -> Path:
+            calls.append(1)
+            raise GitBashNotFoundError("Git Bash was not found.")
+
+        monkeypatch.setattr(local_backend, "find_git_bash", missing)
+        backend = GitBashBackend(workspace, isolate_environment=False)
+        await backend.run("true", timeout=5)
+        await backend.run("true", timeout=5)
+        assert len(calls) == 2
 
     def test_an_unknown_name_refuses(self, workspace: Workspace) -> None:
         """Unlike an unknown tool bundle, which degrades with a warning. Handing
@@ -354,9 +559,9 @@ class TestStdinIsNotInherited:
         script = (
             "import asyncio, sys\n"
             f"sys.path.insert(0, {str(Path.cwd())!r})\n"
-            "from domyn.agents.tools.builtin.backends import LocalBackend\n"
+            "from domyn.agents.tools.builtin.backends import build_backend\n"
             "from domyn.agents.tools.builtin.workspace import Workspace\n"
-            f"b = LocalBackend(Workspace.at({str(tmp_path)!r}), isolate_environment=False)\n"
+            f"b = build_backend('local', Workspace.at({str(tmp_path)!r}), isolate_environment=False)\n"
             "r = asyncio.run(b.run('cat', timeout=10))\n"
             "print('CHILD_SAW:' + r.stdout.strip())\n"
         )
@@ -377,7 +582,7 @@ class TestStdinIsNotInherited:
     ) -> None:
         # Without DEVNULL this is the case that blocks until the timeout kills
         # it; with it, `cat` sees EOF at once and exits cleanly.
-        result = await LocalBackend(workspace).run("cat", timeout=10)
+        result = await build_backend("local", workspace).run("cat", timeout=10)
         assert result.exit_code == 0
         assert not result.timed_out
         assert result.stdout == ""
@@ -389,12 +594,12 @@ class TestSuppliedStdin:
 
     @pytest.mark.asyncio
     async def test_it_reaches_the_command(self, workspace: Workspace) -> None:
-        result = await LocalBackend(workspace).run("cat", timeout=10, stdin="hello\n")
+        result = await build_backend("local", workspace).run("cat", timeout=10, stdin="hello\n")
         assert result.stdout.strip() == "hello"
 
     @pytest.mark.asyncio
     async def test_several_answers_arrive_in_order(self, workspace: Workspace) -> None:
-        result = await LocalBackend(workspace).run(
+        result = await build_backend("local", workspace).run(
             'read -r a; read -r b; echo "$b then $a"', timeout=10, stdin="first\nsecond\n"
         )
         assert result.stdout.strip() == "second then first"
@@ -403,7 +608,7 @@ class TestSuppliedStdin:
     async def test_it_answers_a_yes_no_prompt(self, workspace: Workspace) -> None:
         # The shape of the case this exists for: a command with no --yes flag.
         script = 'printf "continue? [y/N] "; read -r answer; test "$answer" = y && echo proceeding'
-        result = await LocalBackend(workspace).run(script, timeout=10, stdin="y\n")
+        result = await build_backend("local", workspace).run(script, timeout=10, stdin="y\n")
         assert "proceeding" in result.stdout
 
     @pytest.mark.asyncio
@@ -444,3 +649,24 @@ class TestTheTimeoutMessageSaysWhatToDo:
         # this retries in a way that works.
         assert "stdin" in text
         assert "yes |" in text
+
+
+class TestOffWindows:
+    """What the Windows-only parts of the Git Bash backend do anywhere else."""
+
+    # On Windows it would put this very process in a job.
+    @pytest.mark.skipif(os.name == "nt", reason="off Windows only")
+    def test_there_is_no_job(self) -> None:
+        assert local_backend._Job.around(os.getpid()) is None
+
+    def test_a_job_handle_is_inert_once_closed(self) -> None:
+        job = local_backend._Job(0)
+        job.close()
+        job.terminate()
+        job.close()
+
+    def test_the_state_folder_is_given_for_bash(self, workspace: Workspace, tmp_path: Path) -> None:
+        r"""Every path built on it goes into a bash line, where `\` is an escape."""
+        backend = GitBashBackend(workspace, state_dir=tmp_path / "home", bash=Path("bash"))
+        assert backend.state_dir == (tmp_path / "home").as_posix()
+        assert "\\" not in backend.state_dir

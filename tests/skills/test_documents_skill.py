@@ -25,13 +25,13 @@ from domyn.agents.skills import LocalDirSkillSource, SkillQuery
 
 BUILTIN = Path(domyn.agents.__file__).parent / "skills" / "builtin"
 SKILL = BUILTIN / "productivity" / "documents"
-SKILL_MD = (SKILL / "SKILL.md").read_text()
+SKILL_MD = (SKILL / "SKILL.md").read_text(encoding="utf-8")
 MODULE = SKILL / "scripts" / "pdf_layout.py"
 LAYOUT_FILE = SKILL / "scripts" / "pdf_layout.json"
-LAYOUT = json.loads(LAYOUT_FILE.read_text())
+LAYOUT = json.loads(LAYOUT_FILE.read_text(encoding="utf-8"))
 RESOURCES = BUILTIN / "resources"
-PALETTE = json.loads((RESOURCES / "palette.json").read_text())
-TYPOGRAPHY = json.loads((RESOURCES / "typography.json").read_text())
+PALETTE = json.loads((RESOURCES / "palette.json").read_text(encoding="utf-8"))
+TYPOGRAPHY = json.loads((RESOURCES / "typography.json").read_text(encoding="utf-8"))
 BACKGROUNDS = PALETTE["backgrounds"]
 
 
@@ -43,22 +43,24 @@ class TestTheSkill:
         assert skill.path is not None and Path(skill.path).resolve() == SKILL / "SKILL.md"
 
     def test_the_module_finds_the_shared_resources_from_its_place(self) -> None:
-        text = MODULE.read_text()
+        text = MODULE.read_text(encoding="utf-8")
         assert 'Path(__file__).resolve().parents[3] / "resources"' in text
         assert MODULE.resolve().parents[3] / "resources" == BUILTIN / "resources"
 
     def test_the_module_has_no_colour_of_its_own(self) -> None:
         """Every colour is read from the palette by key, as seaborn_style does."""
-        assert not re.findall(r"#[0-9A-Fa-f]{6}\b", MODULE.read_text())
+        assert not re.findall(r"#[0-9A-Fa-f]{6}\b", MODULE.read_text(encoding="utf-8"))
 
     def test_it_names_no_picture_of_its_own(self) -> None:
-        names = set(re.findall(r"[\w-]+\.(?:jpg|png)", MODULE.read_text() + SKILL_MD))
+        names = set(
+            re.findall(r"[\w-]+\.(?:jpg|png)", MODULE.read_text(encoding="utf-8") + SKILL_MD)
+        )
         assert names <= {"onboarding.png"}
-        assert "logo" not in MODULE.read_text().lower()
+        assert "logo" not in MODULE.read_text(encoding="utf-8").lower()
 
     def test_the_layout_names_only_palette_keys_never_hex(self) -> None:
         """Colours in the layout are dotted palette keys: every one resolves, and none is hex."""
-        assert not re.findall(r"#[0-9A-Fa-f]{6}\b", LAYOUT_FILE.read_text())
+        assert not re.findall(r"#[0-9A-Fa-f]{6}\b", LAYOUT_FILE.read_text(encoding="utf-8"))
 
         def keys(node: object, field: str = "") -> list[str]:
             if isinstance(node, dict):
@@ -103,7 +105,7 @@ class TestTheSkill:
             assert spec.get("leading", size) >= size, name
 
     def test_every_block_the_spec_names_is_exported(self) -> None:
-        exported = re.search(r"__all__ = \[(.*?)\]", MODULE.read_text(), re.S)
+        exported = re.search(r"__all__ = \[(.*?)\]", MODULE.read_text(encoding="utf-8"), re.S)
         assert exported
         names = set(re.findall(r'"(\w+)"', exported.group(1)))
         named = set(re.findall(r"\| `(\w+)\(", SKILL_MD))

@@ -31,31 +31,31 @@ def named_paths(text: str) -> set[str]:
 
 
 def ids(path: Path) -> str:
-    return str(path.parent.relative_to(BUILTIN))
+    return path.parent.relative_to(BUILTIN).as_posix()
 
 
 @pytest.mark.parametrize("skill_md", SKILLS, ids=ids)
 def test_every_relative_path_exists(skill_md: Path) -> None:
-    for rel in named_paths(skill_md.read_text()):
+    for rel in named_paths(skill_md.read_text(encoding="utf-8")):
         assert (skill_md.parent / rel).exists(), rel
 
 
 @pytest.mark.parametrize("skill_md", SKILLS, ids=ids)
 def test_a_skill_naming_files_says_what_they_are_relative_to(skill_md: Path) -> None:
-    text = skill_md.read_text()
+    text = skill_md.read_text(encoding="utf-8")
     if named_paths(text):
         assert NOTICE in " ".join(text.split()), "the paths notice is missing"
 
 
 @pytest.mark.parametrize("skill_md", SKILLS, ids=ids)
 def test_no_directory_is_left_to_guess(skill_md: Path) -> None:
-    text = skill_md.read_text()
+    text = skill_md.read_text(encoding="utf-8")
     for placeholder in ("<this skill's directory>", "<skill-dir>", "builtin/resources/"):
         assert placeholder not in text
 
 
 def test_the_skills_that_use_resources_are_covered() -> None:
-    covered = {ids(p) for p in SKILLS if named_paths(p.read_text())}
+    covered = {ids(p) for p in SKILLS if named_paths(p.read_text(encoding="utf-8"))}
     assert {
         "productivity/presentations",
         "productivity/documents",

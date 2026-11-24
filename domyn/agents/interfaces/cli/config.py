@@ -39,6 +39,7 @@ from domyn.agents.approvals import (
     ConversationApprovalStore,
     FileApprovalStore,
 )
+from domyn.agents.core.links import is_link_stat
 from domyn.agents.instructions.discovery import AUTODISCOVERY_DIRS
 from domyn.agents.interfaces.cli.theme import Theme
 from domyn.agents.llm import BaseLLMProvider
@@ -479,7 +480,7 @@ def project_location(folder: Path) -> str:
     try:
         return f"~/{folder.relative_to(Path.home()).as_posix()}"
     except ValueError:
-        return str(folder)
+        return folder.as_posix()
 
 
 def home_dir() -> Path:
@@ -548,7 +549,13 @@ def expand_project_dir(raw: dict[str, Any], folder: Path | None) -> dict[str, An
         for i, entry in enumerate(paths):
             reference = f"${{{PROJECT_DIR_VAR}}}"
             if isinstance(entry, str) and entry.startswith(reference):
-                paths[i] = str(folder) + entry[len(reference) :]
+                rest = entry[len(reference) :]
+                if rest.startswith("/"):
+                    # Joined as a path, not as text: `C:\p` + `/skills/a` would be
+                    # a mixed spelling that no folder setup builds compares equal to.
+                    paths[i] = str(folder / rest.lstrip("/"))
+                else:
+                    paths[i] = str(folder) + rest
     return expanded
 
 
@@ -670,11 +677,11 @@ def read_credentials(path: Path | None = None) -> dict[str, str]:
     would put another file's secrets in the environment."""
     path = path or credentials_path()
     try:
-        mode = path.lstat().st_mode
+        status = path.lstat()
     except OSError:
         return {}
-    if not stat.S_ISREG(mode):
-        kind = "a link" if stat.S_ISLNK(mode) else "not a regular file"
+    if not stat.S_ISREG(status.st_mode):
+        kind = "a link" if is_link_stat(status) else "not a regular file"
         _warn_once(f"{path} was not read: it is {kind}. Keep the keys in the file itself.")
         return {}
     values: dict[str, str] = {}

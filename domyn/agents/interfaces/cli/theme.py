@@ -47,7 +47,15 @@ class Capabilities:
 
         is_tty = bool(getattr(out, "isatty", lambda: False)())
         term = os.environ.get("TERM", "")
-        dumb = term in ("", "dumb")
+        if sys.platform == "win32":
+            # Windows consoles set no TERM at all (PowerShell, cmd, Windows
+            # Terminal), so an empty one is the norm there, not a dumb terminal:
+            # read that way, every Windows session had no colour, no markdown and
+            # no animated banner. What decides is whether the console takes escape
+            # sequences, which it can be asked to.
+            dumb = term == "dumb" or (is_tty and not _windows_vt(out))
+        else:
+            dumb = term in ("", "dumb")
 
         # NO_COLOR is honoured whenever it is set to anything at all, per the
         # no-color.org convention.
@@ -63,6 +71,48 @@ class Capabilities:
             unicode=unicode_ok,
             animation=allow_animation and color,
         )
+
+
+def enable_escape_sequences() -> None:
+    """Have the Windows console behind standard output take escape sequences, if
+    it is one. Called as the CLI starts, before anything makes a rich Console;
+    `Capabilities.detect` asks again, which changes nothing once it is on."""
+    if sys.platform == "win32" and bool(getattr(sys.stdout, "isatty", lambda: False)()):
+        _windows_vt(sys.stdout)
+
+
+def _windows_vt(stream: object) -> bool:
+    """Whether the Windows console behind ``stream`` reads escape sequences, turning
+    that on when it is off.
+
+    Windows Terminal and VS Code have it on; the classic console window PowerShell
+    opens in has it off until a program asks (``ENABLE_VIRTUAL_TERMINAL_PROCESSING``,
+    Windows 10 and later). rich only reads the flag, and with it off falls back to
+    the console API's sixteen colours, where the banner's art is noise. A stream
+    that is no console (Git Bash's mintty is a pipe to Python) has no mode to ask:
+    then its TERM is what it says it is, and it is taken at its word.
+    """
+    if sys.platform == "win32":
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        try:
+            handle = msvcrt.get_osfhandle(stream.fileno())  # type: ignore[attr-defined]
+        except (AttributeError, OSError, ValueError):
+            return bool(os.environ.get("TERM"))
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        mode = wintypes.DWORD()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return bool(os.environ.get("TERM"))
+        enable_vt = 0x0004  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        if mode.value & enable_vt:
+            return True
+        return bool(kernel32.SetConsoleMode(handle, mode.value | enable_vt))
+    else:
+        return True
 
 
 class Symbols:

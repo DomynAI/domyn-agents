@@ -18,7 +18,7 @@ from domyn.agents.tools.builtin.backends.base import (
 )
 from domyn.agents.tools.builtin.backends.docker import DockerBackend, DockerBackendOptions
 from domyn.agents.tools.builtin.backends.docker.cli import DockerCli
-from domyn.agents.tools.builtin.backends.local import LocalBackend
+from domyn.agents.tools.builtin.backends.local import this_machine
 from domyn.agents.tools.builtin.session import HOME_DIRNAME, state_dir_from_environment
 from domyn.agents.tools.builtin.workspace import Workspace
 
@@ -57,7 +57,7 @@ class AutoBackend(DockerBackend):
         super().__init__(
             workspace, options=docker, allowed_env=allowed, state_dir=self._state_dir, cli=cli
         )
-        self._local = LocalBackend(
+        self._local = this_machine(
             workspace,
             isolate_environment=isolate_environment,
             allowed_env=allowed,
@@ -91,7 +91,9 @@ class AutoBackend(DockerBackend):
         if self.on_notice is not None:
             self.on_notice(f"{problem.problem} Commands run on this machine, not in a container.")
         self._decided = self._on_this_machine = True
-        self.name, self.is_isolated, self.destroys_on_close = "local", False, False
+        # The name of what now runs the commands: `git_bash` on Windows, which the
+        # browser reads to write its lines for a Windows agent-browser.
+        self.name, self.is_isolated, self.destroys_on_close = self._local.name, False, False
 
     async def check(self) -> None:
         await self.decide()

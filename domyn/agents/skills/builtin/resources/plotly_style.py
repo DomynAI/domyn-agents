@@ -52,7 +52,7 @@ if not PALETTE_FILE.is_file():
 # Every colour a chart uses, by its palette key: what the template does not set itself is
 # taken from here by role, e.g. a reference line in PALETTE["text"]["light_background"]
 # ["muted"], the second series' colour in PALETTE["charts"]["categorical"][1].
-PALETTE = json.loads(PALETTE_FILE.read_text())
+PALETTE = json.loads(PALETTE_FILE.read_text(encoding="utf-8"))
 
 # The house style's DM Sans where the viewer has it, then the system sans a page falls back to.
 FONT = (

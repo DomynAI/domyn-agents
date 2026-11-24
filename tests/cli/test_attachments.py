@@ -51,19 +51,28 @@ def attachments(context: AttachmentContext) -> Attachments:
     return Attachments(lambda: context)
 
 
+def dragged_path(path: Path) -> str:
+    """A path as a terminal pastes a file dragged onto it: quoted on Windows (Windows
+    Terminal), where a backslash is the separator, a backslash before each space
+    elsewhere (macOS Terminal, iTerm, GNOME Terminal)."""
+    if os.name == "nt":
+        return f'"{path}"'
+    return str(path).replace(" ", "\\ ")
+
+
 class TestWhichPastesAreImages:
     def test_a_plain_path(self, tmp_path: Path) -> None:
         shot = _picture(tmp_path / "shot.png")
         assert image_paths(str(shot)) == [shot]
 
-    def test_escaped_spaces_as_a_terminal_drags_them_in(self, tmp_path: Path) -> None:
+    def test_as_a_terminal_drags_it_in(self, tmp_path: Path) -> None:
         shot = _picture(tmp_path / "My Shot.png")
-        pasted = str(shot).replace(" ", "\\ ")
-        assert image_paths(pasted) == [shot]
+        assert image_paths(dragged_path(shot)) == [shot]
 
-    def test_quoted(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("quote", ["'", '"'])
+    def test_quoted(self, tmp_path: Path, quote: str) -> None:
         shot = _picture(tmp_path / "My Shot.png")
-        assert image_paths(f"'{shot}' ") == [shot]
+        assert image_paths(f"{quote}{shot}{quote} ") == [shot]
 
     def test_a_file_url(self, tmp_path: Path) -> None:
         shot = _picture(tmp_path / "My Shot.png")

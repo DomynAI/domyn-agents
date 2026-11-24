@@ -42,6 +42,7 @@ _EXECUTABLES = {
     "mac-x64": "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
     "linux64": "chrome-linux64/chrome",
     "linux-arm64": "chrome-linux-arm64/chrome",
+    "win64": "chrome-win64/chrome.exe",
 }
 
 # Where a Chrome the user already has is usually found. agent-browser looks for
@@ -81,6 +82,10 @@ def chrome_platform() -> str | None:
         if is_musl():
             return None
         return "linux-arm64" if arm else ("linux64" if machine in ("x86_64", "amd64") else None)
+    if system == "win32":
+        # No Windows on ARM build exists: there the x64 one runs emulated, as the
+        # rest of the runtime does.
+        return "win64"
     return None
 
 
@@ -90,9 +95,20 @@ def default_browsers_dir() -> Path:
 
 
 def bundled_binary(name: str = "agent-browser") -> str | None:
-    """The copy of ``name`` that ships with the standalone build, if there is one."""
-    candidate = Path(sys.prefix) / "bin" / name
-    return str(candidate) if candidate.is_file() and os.access(candidate, os.X_OK) else None
+    """The copy of ``name`` that ships with the standalone build, if there is one.
+
+    On Windows it is ``<runtime>/bin/<name>.exe``, given with forward slashes: it
+    is run from a Git Bash line, where a backslash is an escape.
+    """
+    folder = Path(sys.prefix) / "bin"
+    if sys.platform == "win32":
+        for candidate in (folder / f"{name}.exe", folder / name):
+            if candidate.is_file():
+                return candidate.as_posix()
+        return None
+    else:
+        candidate = folder / name
+        return str(candidate) if candidate.is_file() and os.access(candidate, os.X_OK) else None
 
 
 def resolve_binary(name: str) -> str:
@@ -129,6 +145,17 @@ def downloaded_chrome(browsers_dir: Path | None = None) -> str | None:
 
 def system_chrome() -> str | None:
     """A Chrome or Chromium the user already has, or ``None``."""
+    if sys.platform == "win32":
+        # Per machine or per user: Program Files, or the user's AppData.
+        for base in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+            folder = os.environ.get(base)
+            chrome = (
+                Path(folder) / "Google" / "Chrome" / "Application" / "chrome.exe"
+                if folder
+                else None
+            )
+            if chrome is not None and chrome.is_file():
+                return str(chrome)
     for path in _SYSTEM_CHROME.get("darwin" if sys.platform == "darwin" else "linux", ()):
         if os.access(path, os.X_OK):
             return path

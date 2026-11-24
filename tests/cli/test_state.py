@@ -4,6 +4,7 @@ The top-level conftest points `CliState.path` at a temporary file, so none of th
 touches the developer's real ``~/.domyn``; the location tests undo that on purpose.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,7 @@ class TestTheFile:
         path.write_text("- a list\n", encoding="utf-8")
         assert CliState.load() == CliState()
 
+    @pytest.mark.skipif(os.name == "nt", reason="Windows has no POSIX permission bits")
     def test_owner_only(self) -> None:
         CliState(auto_approve=True).save()
         assert CliState.path().stat().st_mode & 0o777 == 0o600

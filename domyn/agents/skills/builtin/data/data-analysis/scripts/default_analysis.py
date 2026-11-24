@@ -466,7 +466,7 @@ def main() -> None:
         "Place each in the finding it supports; explain how to read it.\n",
         "\n".join(f"- `{name}`: {what}" for name, what in charts) or "- none",
     ]
-    (out / "default_analysis.md").write_text("\n".join(md) + "\n")
+    (out / "default_analysis.md").write_text("\n".join(md) + "\n", encoding="utf-8")
 
     def records(frame: pd.DataFrame) -> Any:
         return (
@@ -491,10 +491,11 @@ def main() -> None:
                 "charts": dict(charts),
             },
             indent=2,
-        )
+        ),
+        encoding="utf-8",
     )
     common.record_run(out, Path(__file__))
-    print((out / "default_analysis.md").read_text())
+    print((out / "default_analysis.md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

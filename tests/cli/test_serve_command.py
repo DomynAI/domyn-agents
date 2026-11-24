@@ -77,14 +77,14 @@ def _fake_runner(*events: BaseEvent) -> Any:
 class TestServeCommandChannelValidation:
     def test_unknown_channel_exits_with_1(self, tmp_path: Path) -> None:
         fake_file = tmp_path / "agent.py"
-        fake_file.write_text("# agent")
+        fake_file.write_text("# agent", encoding="utf-8")
         with pytest.raises(_ExitExc) as exc_info:
             serve_command(entrypoint=str(fake_file), channel="grpc")
         assert _exit_code(exc_info) == 1
 
     def test_channel_matching_is_case_insensitive(self, tmp_path: Path, agent: Agent) -> None:
         py_file = tmp_path / "agent.py"
-        py_file.write_text("# agent")
+        py_file.write_text("# agent", encoding="utf-8")
         patch_module, patch_collect, patch_find = _patch_py_loader(agent)
         with (
             patch_module,
@@ -98,7 +98,7 @@ class TestServeCommandChannelValidation:
 
     def test_unknown_channel_does_not_start_server(self, tmp_path: Path) -> None:
         fake_file = tmp_path / "agent.py"
-        fake_file.write_text("# agent")
+        fake_file.write_text("# agent", encoding="utf-8")
         with _patch_server_interface() as mock_iface, pytest.raises(_ExitExc):
             serve_command(entrypoint=str(fake_file), channel="websocket")
         mock_iface.assert_not_called()
@@ -122,7 +122,8 @@ class TestReadServeChannelsConfig:
             "      token_env: TELEGRAM_BOT_TOKEN\n"
             "    - type: slack\n"
             "      bot_token_env: SLACK_BOT_TOKEN\n"
-            "      app_token_env: SLACK_APP_TOKEN\n"
+            "      app_token_env: SLACK_APP_TOKEN\n",
+            encoding="utf-8",
         )
 
         channels = _read_serve_channels_config(yaml_file)
@@ -140,7 +141,7 @@ class TestReadServeChannelsConfig:
         from domyn.agents.cli.commands.serve.command import _read_serve_channels_config
 
         yaml_file = tmp_path / "agent.yaml"
-        yaml_file.write_text("entrypoint: MyAgent\n")
+        yaml_file.write_text("entrypoint: MyAgent\n", encoding="utf-8")
 
         with pytest.raises(_ExitExc) as exc_info:
             _read_serve_channels_config(yaml_file)
@@ -150,7 +151,7 @@ class TestReadServeChannelsConfig:
         from domyn.agents.cli.commands.serve.command import _read_serve_channels_config
 
         yaml_file = tmp_path / "agent.yaml"
-        yaml_file.write_text("entrypoint: MyAgent\nserve:\n  channels: []\n")
+        yaml_file.write_text("entrypoint: MyAgent\nserve:\n  channels: []\n", encoding="utf-8")
 
         with pytest.raises(_ExitExc) as exc_info:
             _read_serve_channels_config(yaml_file)
@@ -160,7 +161,7 @@ class TestReadServeChannelsConfig:
         from domyn.agents.cli.commands.serve.command import _read_serve_channels_config
 
         yaml_file = tmp_path / "agent.yaml"
-        yaml_file.write_text("entrypoint: [unterminated\n")
+        yaml_file.write_text("entrypoint: [unterminated\n", encoding="utf-8")
 
         with pytest.raises(_ExitExc) as exc_info:
             _read_serve_channels_config(yaml_file)
@@ -174,7 +175,7 @@ class TestServeTranscriber:
         from domyn.agents.cli.commands.serve.command import _read_serve_channels_config
 
         yaml_file = tmp_path / "agent.yaml"
-        yaml_file.write_text(text)
+        yaml_file.write_text(text, encoding="utf-8")
         return _read_serve_channels_config(yaml_file)
 
     def test_the_shared_one_is_given_to_each_channel(self, tmp_path: Path) -> None:
@@ -306,7 +307,7 @@ class TestServeMulti:
         from domyn.agents.cli.commands.serve.command import _serve_multi
 
         py_file = tmp_path / "agent.py"
-        py_file.write_text("# agent")
+        py_file.write_text("# agent", encoding="utf-8")
 
         with pytest.raises(_ExitExc) as exc_info:
             _serve_multi(str(py_file), max_concurrency=8)
@@ -327,7 +328,8 @@ class TestServeMulti:
             "      token_env: TELEGRAM_BOT_TOKEN\n"
             "    - type: slack\n"
             "      bot_token_env: SLACK_BOT_TOKEN\n"
-            "      app_token_env: SLACK_APP_TOKEN\n"
+            "      app_token_env: SLACK_APP_TOKEN\n",
+            encoding="utf-8",
         )
 
         fake_channels = [MagicMock(name="telegram_channel"), MagicMock(name="slack_channel")]
@@ -877,7 +879,7 @@ class TestParseTargetSpec:
 class TestServeCommandAgentLoading:
     def test_yaml_file_triggers_yaml_loader(self, tmp_path: Path, agent: Agent) -> None:
         yaml_file = tmp_path / "config.yaml"
-        yaml_file.write_text("version: '1.0'")
+        yaml_file.write_text("version: '1.0'", encoding="utf-8")
 
         with (
             patch(
@@ -894,7 +896,7 @@ class TestServeCommandAgentLoading:
 
     def test_yml_extension_triggers_yaml_loader(self, tmp_path: Path, agent: Agent) -> None:
         yml_file = tmp_path / "config.yml"
-        yml_file.write_text("version: '1.0'")
+        yml_file.write_text("version: '1.0'", encoding="utf-8")
 
         with (
             patch(
@@ -911,7 +913,7 @@ class TestServeCommandAgentLoading:
 
     def test_python_file_uses_load_module_from_path(self, tmp_path: Path, agent: Agent) -> None:
         py_file = tmp_path / "agent.py"
-        py_file.write_text("# agent")
+        py_file.write_text("# agent", encoding="utf-8")
         patch_module, patch_collect, patch_find = _patch_py_loader(agent)
 
         with (
@@ -927,7 +929,7 @@ class TestServeCommandAgentLoading:
 
     def test_agent_name_forwarded_to_find_main_agent(self, tmp_path: Path, agent: Agent) -> None:
         py_file = tmp_path / "agent.py"
-        py_file.write_text("# agent")
+        py_file.write_text("# agent", encoding="utf-8")
         patch_module, patch_collect, patch_find = _patch_py_loader(agent)
 
         with (
@@ -943,7 +945,7 @@ class TestServeCommandAgentLoading:
 
     def test_loading_error_exits_with_1(self, tmp_path: Path) -> None:
         py_file = tmp_path / "agent.py"
-        py_file.write_text("# agent")
+        py_file.write_text("# agent", encoding="utf-8")
 
         with (
             patch(
@@ -958,7 +960,7 @@ class TestServeCommandAgentLoading:
 
     def test_loading_error_does_not_start_server(self, tmp_path: Path) -> None:
         py_file = tmp_path / "agent.py"
-        py_file.write_text("# agent")
+        py_file.write_text("# agent", encoding="utf-8")
 
         with (
             patch(
@@ -983,7 +985,7 @@ class TestServeCommandServerLifecycle:
         self, tmp_path: Path, agent: Agent
     ) -> None:
         py_file = tmp_path / "agent.py"
-        py_file.write_text("# agent")
+        py_file.write_text("# agent", encoding="utf-8")
         all_agents = {agent.name: agent}
         patch_module, patch_collect, patch_find = _patch_py_loader(agent)
 
@@ -1000,7 +1002,7 @@ class TestServeCommandServerLifecycle:
 
     def test_keyboard_interrupt_handled_gracefully(self, tmp_path: Path, agent: Agent) -> None:
         py_file = tmp_path / "agent.py"
-        py_file.write_text("# agent")
+        py_file.write_text("# agent", encoding="utf-8")
         patch_module, patch_collect, patch_find = _patch_py_loader(agent)
 
         with (
@@ -1015,7 +1017,7 @@ class TestServeCommandServerLifecycle:
 
     def test_server_start_error_exits_with_1(self, tmp_path: Path, agent: Agent) -> None:
         py_file = tmp_path / "agent.py"
-        py_file.write_text("# agent")
+        py_file.write_text("# agent", encoding="utf-8")
         patch_module, patch_collect, patch_find = _patch_py_loader(agent)
 
         with (

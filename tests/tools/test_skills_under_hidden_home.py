@@ -1,10 +1,15 @@
 """Skills a workspace contains, when the container hides the global `~/.domyn`."""
 
+import os
 from pathlib import Path
 
 import pytest
 
 from domyn.agents.tools.builtin.workspace import Workspace
+
+# The Docker backend is refused on Windows until its mounts translate Windows paths
+# (`backends/docker/backend.py`, `_ON_WINDOWS`): what these check does not run there.
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="no Docker backend on Windows yet")
 
 
 class TestSkillsUnderAHiddenGlobalHome:

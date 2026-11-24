@@ -7,12 +7,15 @@ gracefully not happen.
 import io
 import os
 import re
+import sys
+import types
 
 import pytest
 from rich.console import Console
 
 from domyn.agents.interfaces.cli import Capabilities, Theme, render_banner
 from domyn.agents.interfaces.cli import banner as banner_mod
+from domyn.agents.interfaces.cli import theme as theme_mod
 
 
 def _theme(*, color: bool = True, unicode: bool = True, animation: bool = False) -> Theme:
@@ -32,6 +35,8 @@ def _console(width: int, height: int = 60) -> tuple[Console, io.StringIO]:
     and a CI runner without ``COLORTERM`` gets 8- or 16-colour output. These
     tests are about what we ask for, not about what the machine running them can
     display — left unpinned they assert the capabilities of the terminal.
+    ``legacy_windows`` too: off a real console, rich takes a Windows runner for
+    a legacy one and gives a console sized 150 by 60 only 149 columns.
     """
     buffer = io.StringIO()
     return (
@@ -39,6 +44,7 @@ def _console(width: int, height: int = 60) -> tuple[Console, io.StringIO]:
             file=buffer,
             force_terminal=True,
             color_system="truecolor",
+            legacy_windows=False,
             width=width,
             height=height,
         ),
@@ -114,6 +120,140 @@ class TestCapabilityGates:
         assert "\x1b" not in buffer.getvalue()
 
 
+class _Tty(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+class TestDetectingTheTerminal:
+    """Windows consoles set no TERM, so reading an empty one as a dumb terminal left
+    every Windows session without colour, markdown or the animated banner."""
+
+    @pytest.fixture(autouse=True)
+    def _no_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("TERM", raising=False)
+        monkeypatch.delenv("NO_COLOR", raising=False)
+
+    def test_an_empty_term_is_dumb_off_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert not Capabilities.detect(stream=_Tty()).color
+
+    def test_an_empty_term_is_the_norm_on_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(theme_mod, "_windows_vt", lambda stream: True)
+        caps = Capabilities.detect(stream=_Tty())
+        assert caps.color and caps.animation
+
+    def test_a_windows_console_without_escape_sequences_has_no_colour(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """rich would fall back to the console API's sixteen colours, where the art
+        is noise."""
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(theme_mod, "_windows_vt", lambda stream: False)
+        assert not Capabilities.detect(stream=_Tty()).color
+
+    def test_term_dumb_still_wins_on_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(theme_mod, "_windows_vt", lambda stream: True)
+        monkeypatch.setenv("TERM", "dumb")
+        assert not Capabilities.detect(stream=_Tty()).color
+
+    def test_no_color_still_wins_on_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(theme_mod, "_windows_vt", lambda stream: True)
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert not Capabilities.detect(stream=_Tty()).color
+
+    def test_the_cli_asks_a_windows_console_for_escapes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        asked: list[object] = []
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(sys, "stdout", _Tty())
+        monkeypatch.setattr(theme_mod, "_windows_vt", asked.append)
+        theme_mod.enable_escape_sequences()
+        assert asked == [sys.stdout]
+
+    def test_a_pipe_is_not_asked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        asked: list[object] = []
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(sys, "stdout", io.StringIO())
+        monkeypatch.setattr(theme_mod, "_windows_vt", asked.append)
+        theme_mod.enable_escape_sequences()
+        assert asked == []
+
+    @staticmethod
+    def _console(monkeypatch: pytest.MonkeyPatch, *, mode: int | None, settable: bool = True):
+        """A Windows console stood in for, on any system: ``mode`` None is a stream
+        with no console behind it. Returns the modes the code asked to set."""
+        import ctypes
+
+        set_to: list[int] = []
+
+        class Kernel32:
+            def GetConsoleMode(self, handle, ref):  # noqa: N802 - the API's name
+                if mode is None:
+                    return 0
+                ref._obj.value = mode
+                return 1
+
+            def SetConsoleMode(self, handle, value):  # noqa: N802 - the API's name
+                set_to.append(value)
+                return 1 if settable else 0
+
+        kernel32 = Kernel32()
+        # Attributes the code sets (argtypes) need somewhere to go.
+        for name in ("GetConsoleMode", "SetConsoleMode"):
+            method = getattr(kernel32, name)
+            setattr(kernel32, name, lambda *a, _m=method: _m(*a))
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **k: kernel32, raising=False)
+        monkeypatch.setitem(
+            sys.modules, "msvcrt", types.SimpleNamespace(get_osfhandle=lambda fd: 7)
+        )
+        return set_to
+
+    def test_a_console_with_escapes_on_is_left_as_it_is(self, monkeypatch, tmp_path) -> None:
+        set_to = self._console(monkeypatch, mode=0x3 | 0x4)
+        with open(tmp_path / "out", "w", encoding="utf-8") as stream:
+            assert theme_mod._windows_vt(stream) is True
+        assert set_to == []
+
+    def test_a_console_without_them_is_asked_to_take_them(self, monkeypatch, tmp_path) -> None:
+        set_to = self._console(monkeypatch, mode=0x3)
+        with open(tmp_path / "out", "w", encoding="utf-8") as stream:
+            assert theme_mod._windows_vt(stream) is True
+        assert set_to == [0x3 | 0x4]
+
+    def test_a_console_that_refuses_has_none(self, monkeypatch, tmp_path) -> None:
+        """Before Windows 10, or the console window's legacy mode."""
+        self._console(monkeypatch, mode=0x3, settable=False)
+        with open(tmp_path / "out", "w", encoding="utf-8") as stream:
+            assert theme_mod._windows_vt(stream) is False
+
+    def test_no_console_goes_by_term(self, monkeypatch, tmp_path) -> None:
+        self._console(monkeypatch, mode=None)
+        with open(tmp_path / "out", "w", encoding="utf-8") as stream:
+            assert theme_mod._windows_vt(stream) is False
+            monkeypatch.setenv("TERM", "xterm-256color")
+            assert theme_mod._windows_vt(stream) is True
+
+    def test_a_stream_with_no_file_goes_by_term(self, monkeypatch) -> None:
+        self._console(monkeypatch, mode=0x7)
+        assert theme_mod._windows_vt(io.StringIO()) is False
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="asks the Windows console")
+    def test_a_stream_that_is_no_console_goes_by_its_term(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Git Bash's mintty is a pipe to Python: no console mode to ask."""
+        with open(tmp_path / "out", "w", encoding="utf-8") as stream:
+            assert theme_mod._windows_vt(stream) is False
+            monkeypatch.setenv("TERM", "xterm-256color")
+            assert theme_mod._windows_vt(stream) is True
+
+
 class _VirtualClock:
     """``time`` for the animation loop, with the waiting taken out."""
 
@@ -178,12 +318,7 @@ class TestSkipKey:
         monkeypatch.setattr(banner_mod.sys, "stdin", io.StringIO(""))
         assert banner_mod._skip_key_pressed() is False
 
-    def test_skips_never_happen_on_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The POSIX ``select`` path is not exercised on Windows."""
-        monkeypatch.setattr(banner_mod.sys, "stdin", io.StringIO(""))
-        monkeypatch.setattr(banner_mod.os, "name", "nt")
-        assert banner_mod._skip_key_pressed() is False
-
+    @pytest.mark.skipif(os.name == "nt", reason="select takes sockets only on Windows")
     def test_a_ready_tty_key_is_detected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A key already buffered on a TTY counts as a skip."""
         read_fd, write_fd = os.pipe()
@@ -192,11 +327,12 @@ class TestSkipKey:
             with os.fdopen(read_fd, "rb", buffering=0) as stdin:
                 stdin.isatty = lambda: True  # type: ignore[attr-defined]
                 monkeypatch.setattr(banner_mod.sys, "stdin", stdin)
-                monkeypatch.setattr(banner_mod.os, "name", "posix")
+                monkeypatch.setattr(banner_mod.sys, "platform", "linux")
                 assert banner_mod._skip_key_pressed() is True
         finally:
             os.close(write_fd)
 
+    @pytest.mark.skipif(os.name == "nt", reason="select takes sockets only on Windows")
     def test_an_idle_tty_is_not_a_skip(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """No key buffered means no skip, even on a TTY."""
         read_fd, write_fd = os.pipe()
@@ -204,10 +340,27 @@ class TestSkipKey:
             with os.fdopen(read_fd, "rb", buffering=0) as stdin:
                 stdin.isatty = lambda: True  # type: ignore[attr-defined]
                 monkeypatch.setattr(banner_mod.sys, "stdin", stdin)
-                monkeypatch.setattr(banner_mod.os, "name", "posix")
+                monkeypatch.setattr(banner_mod.sys, "platform", "linux")
                 assert banner_mod._skip_key_pressed() is False
         finally:
             os.close(write_fd)
+
+    @pytest.mark.parametrize("waiting", [True, False])
+    def test_a_windows_console_key_is_read_from_the_console(
+        self, monkeypatch: pytest.MonkeyPatch, waiting: bool
+    ) -> None:
+        """On Windows the console says whether a key waits, and the key is read so
+        it is not left for the REPL."""
+        read: list[str] = []
+        fake = types.SimpleNamespace(kbhit=lambda: waiting, getwch=lambda: read.append("x") or "x")
+        stdin = io.StringIO("")
+        stdin.isatty = lambda: True  # type: ignore[method-assign]
+        monkeypatch.setattr(banner_mod.sys, "stdin", stdin)
+        monkeypatch.setattr(banner_mod.sys, "platform", "win32")
+        monkeypatch.setitem(sys.modules, "msvcrt", fake)
+
+        assert banner_mod._skip_key_pressed() is waiting
+        assert read == (["x"] if waiting else [])
 
     def test_wait_returns_true_only_when_a_key_arrives(
         self, monkeypatch: pytest.MonkeyPatch

@@ -20,6 +20,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from domyn.agents.core.links import is_link
+
 # Names a skill file may have inside its own folder, in priority order.
 SKILL_FILENAMES = ("SKILL.md", "skill.md")
 
@@ -57,14 +59,14 @@ def listed_path_is_linked(path: Path) -> bool:
     ``~/skills``. The folders above an absolute path are left alone, so a symlinked
     parent the user did not choose (``/tmp`` on macOS) is fine.
     """
-    if path.is_symlink():
+    if is_link(path):
         return True
     if path.is_absolute():
         return False
     prefix = Path()
     for part in path.parts[:-1]:
         prefix /= part
-        if prefix.is_symlink():
+        if is_link(prefix):
             return True
     return False
 
@@ -93,7 +95,7 @@ def walk_skill_tree(root: Path) -> list[FoundSkill]:
         with os.scandir(directory) as entries:
             children = sorted(entries, key=lambda e: e.name)
         for entry in children:
-            if entry.is_symlink() or entry.name.startswith(".") or entry.name in SKIPPED_DIRS:
+            if is_link(entry) or entry.name.startswith(".") or entry.name in SKIPPED_DIRS:
                 continue
             if entry.is_dir(follow_symlinks=False):
                 walk(directory / entry.name, (*parts, entry.name))

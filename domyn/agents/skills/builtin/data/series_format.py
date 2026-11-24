@@ -222,7 +222,7 @@ def write_series(
     out.mkdir(parents=True, exist_ok=True)
     meta_path = out / SERIES_META
     if meta_path.exists():
-        before = json.loads(meta_path.read_text())
+        before = json.loads(meta_path.read_text(encoding="utf-8"))
         keys = ("source", "target", "freq")
         if {k: before.get(k) for k in keys} != {k: meta.get(k) for k in keys}:
             sys.exit(
@@ -234,7 +234,9 @@ def write_series(
         future.to_csv(out / FUTURE_FILE, index=False)
     else:
         (out / FUTURE_FILE).unlink(missing_ok=True)
-    meta_path.write_text(json.dumps({"format_version": FORMAT_VERSION, **meta}, indent=2))
+    meta_path.write_text(
+        json.dumps({"format_version": FORMAT_VERSION, **meta}, indent=2), encoding="utf-8"
+    )
     return out / SERIES_FILE
 
 
@@ -250,7 +252,7 @@ def load_series(path: Path) -> tuple[pd.DataFrame, dict[str, Any]]:
             f"{path} (with {SERIES_META} next to it) not found. Prepare the data first with "
             "prepare_series.py, and pass its series.csv."
         )
-    meta = json.loads(meta_path.read_text())
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
     features = list(meta.get("features") or {})
     frame = pd.read_csv(path, dtype={"id": str, "period": str})
     expected_cols = ["id", "period", "y", *features]

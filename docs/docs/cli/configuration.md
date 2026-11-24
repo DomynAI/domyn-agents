@@ -226,6 +226,8 @@ agents:
 
 ## What lives in `~/.domyn`
 
+On Windows, `~/.domyn` is `%USERPROFILE%\.domyn`.
+
 | Path | What it holds |
 |---|---|
 | `config.yaml` | The session's configuration |

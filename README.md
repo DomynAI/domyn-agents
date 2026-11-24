@@ -35,6 +35,12 @@ For the terminal agent, install the `domyn` command. On macOS (Apple Silicon) an
 curl -fsSL https://github.com/domynai/domyn-agents/releases/latest/download/install.sh | sh
 ```
 
+On Windows (x64 and ARM64), in PowerShell; domyn runs commands in Git Bash, so it also needs [Git for Windows](https://git-scm.com/download/win):
+
+```powershell
+irm https://github.com/domynai/domyn-agents/releases/latest/download/install.ps1 | iex
+```
+
 or install it with [uv](https://docs.astral.sh/uv/), on Python 3.12 or later:
 
 ```sh

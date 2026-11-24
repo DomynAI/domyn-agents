@@ -33,6 +33,7 @@ from typing import IO, TYPE_CHECKING, Any, cast
 import yaml
 
 from domyn.agents.agents.agent import MAX_AGENT_NAME_LENGTH
+from domyn.agents.core.links import is_link
 from domyn.agents.instructions.discovery import AUTODISCOVERY_DIRS, find_instruction_files
 from domyn.agents.integrations.domyn_platform_sdk import (
     SDK_REQUIREMENT,
@@ -107,7 +108,6 @@ from domyn.agents.tools.builtin.browser_sessions import INSTALL_HINT
 if TYPE_CHECKING:
     from rich.console import Console
 
-    from domyn.agents.interfaces.cli.config import AgentConfig
     from domyn.agents.interfaces.cli.project_import import ProjectImport
     from domyn.agents.interfaces.cli.theme import Theme
 
@@ -1106,8 +1106,11 @@ def _choose_builtin_skills(
         )
         return current
 
-    declared = [Path(str(path)) for path in source.get("paths") or []]
-    elsewhere = [path for path in declared if not _inside(path, install_dir)]
+    written = [str(entry) for entry in source.get("paths") or []]
+    declared = [Path(entry) for entry in written]
+    # The entries this step does not own go back as the user wrote them: str() of
+    # a Path would spell `my-skills/review` as `my-skills\review` on Windows.
+    elsewhere = [entry for entry in written if not _inside(Path(entry), install_dir)]
 
     catalog = list_builtin_skills()
     names = [skill.name for skill in catalog]
@@ -1190,7 +1193,7 @@ def _choose_builtin_skills(
         highlight=False,
     )
 
-    paths = [str(path) for path in installed_paths] + [str(path) for path in elsewhere]
+    paths = [str(path) for path in installed_paths] + elsewhere
     updated = dict(current or {})
     if paths:
         updated["source"] = {**source, "type": "local_dir", "paths": paths}
@@ -1226,7 +1229,7 @@ def _custom_dir_problem(path: Path, declared: list[str]) -> str | None:
     ``path`` is already absolute. A listed entry is compared by where it resolves to,
     so the same folder spelled another way is still caught.
     """
-    if path.is_symlink():
+    if is_link(path):
         return f"{path} is a link, and links are not followed"
     if not path.exists():
         return f"{path} does not exist"
@@ -1373,7 +1376,7 @@ def _choose_instructions(
         # is under the path the user named.
         path = Path(os.path.abspath(Path(raw).expanduser()))
         problem = None
-        if path.is_symlink():
+        if is_link(path):
             problem = f"{path} is a link, and links are not followed"
         elif path.is_file():
             found = [path]
@@ -1498,7 +1501,7 @@ def _choose_imported_instructions(
 def _discard_imported(path: Path, project: Path) -> None:
     """Delete an instruction file or folder the import copied, i.e. one inside the
     project; anything else is only unlisted."""
-    if not _inside(path, project) or path.is_symlink():
+    if not _inside(path, project) or is_link(path):
         return
     if path.is_dir():
         shutil.rmtree(path, ignore_errors=True)

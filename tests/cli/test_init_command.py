@@ -90,7 +90,7 @@ class TestCreateAgentFile:
 
     def test_file_contains_agent_class_instantiation(self, tmp_path: Path):
         create_agent_file(tmp_path, "test-project")
-        content = (tmp_path / "agent.py").read_text()
+        content = (tmp_path / "agent.py").read_text(encoding="utf-8")
         assert "Agent(" in content
 
     def test_generated_file_loads_as_domyn_run_would(
@@ -106,13 +106,13 @@ class TestCreateAgentFile:
 
     def test_file_contains_example_tools(self, tmp_path: Path):
         create_agent_file(tmp_path, "test-project")
-        content = (tmp_path / "agent.py").read_text()
+        content = (tmp_path / "agent.py").read_text(encoding="utf-8")
         assert "greet_user" in content
         assert "get_current_time" in content
 
     def test_file_includes_project_name_in_agent(self, tmp_path: Path):
         create_agent_file(tmp_path, "super-bot")
-        content = (tmp_path / "agent.py").read_text()
+        content = (tmp_path / "agent.py").read_text(encoding="utf-8")
         # project name appears in agent name or description
         assert "super-bot" in content or "super_bot" in content
 
@@ -129,17 +129,17 @@ class TestCreateReadme:
 
     def test_readme_contains_project_name(self, tmp_path: Path):
         create_readme(tmp_path, "awesome-bot")
-        content = (tmp_path / "README.md").read_text()
+        content = (tmp_path / "README.md").read_text(encoding="utf-8")
         assert "awesome-bot" in content
 
     def test_readme_contains_run_instructions(self, tmp_path: Path):
         create_readme(tmp_path, "test")
-        content = (tmp_path / "README.md").read_text()
+        content = (tmp_path / "README.md").read_text(encoding="utf-8")
         assert "domyn run" in content
 
     def test_readme_contains_setup_instructions(self, tmp_path: Path):
         create_readme(tmp_path, "test")
-        content = (tmp_path / "README.md").read_text()
+        content = (tmp_path / "README.md").read_text(encoding="utf-8")
         assert "uv sync" in content
 
 
@@ -157,7 +157,7 @@ def _make_minimal_pyproject(tmp_path: Path) -> Path:
     project.add("dependencies", tomlkit.array())
     doc.add("project", project)
     pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(tomlkit.dumps(doc))
+    pyproject.write_text(tomlkit.dumps(doc), encoding="utf-8")
     return pyproject
 
 
@@ -168,29 +168,29 @@ class TestCreateDockerfile:
 
     def test_dockerfile_uses_python_slim_base(self, tmp_path: Path):
         create_dockerfile(tmp_path)
-        content = (tmp_path / "Dockerfile").read_text()
+        content = (tmp_path / "Dockerfile").read_text(encoding="utf-8")
         assert "python:3.12-slim" in content
 
     def test_dockerfile_installs_uv(self, tmp_path: Path):
         create_dockerfile(tmp_path)
-        content = (tmp_path / "Dockerfile").read_text()
+        content = (tmp_path / "Dockerfile").read_text(encoding="utf-8")
         assert "uv" in content
 
     def test_dockerfile_exposes_port_8000(self, tmp_path: Path):
         create_dockerfile(tmp_path)
-        content = (tmp_path / "Dockerfile").read_text()
+        content = (tmp_path / "Dockerfile").read_text(encoding="utf-8")
         assert "EXPOSE 8000" in content
 
     def test_dockerfile_cmd_runs_domyn_serve(self, tmp_path: Path):
         create_dockerfile(tmp_path)
-        content = (tmp_path / "Dockerfile").read_text()
+        content = (tmp_path / "Dockerfile").read_text(encoding="utf-8")
         assert "domyn" in content
         assert "serve" in content
         assert "agent.py" in content
 
     def test_dockerfile_cmd_binds_to_all_interfaces(self, tmp_path: Path):
         create_dockerfile(tmp_path)
-        content = (tmp_path / "Dockerfile").read_text()
+        content = (tmp_path / "Dockerfile").read_text(encoding="utf-8")
         assert "0.0.0.0" in content
 
 
@@ -198,7 +198,7 @@ class TestModifyPyprojectToml:
     def test_adds_domyn_agents_to_dependencies(self, tmp_path: Path):
         _make_minimal_pyproject(tmp_path)
         modify_pyproject_toml(tmp_path)
-        content = (tmp_path / "pyproject.toml").read_text()
+        content = (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
         assert "domyn" in content
 
     def test_depends_on_the_cli_extra(self, tmp_path: Path):
@@ -206,7 +206,7 @@ class TestModifyPyprojectToml:
         ``domyn run`` there falls back to a bare ``input()``."""
         _make_minimal_pyproject(tmp_path)
         modify_pyproject_toml(tmp_path)
-        pyproject = tomlkit.loads((tmp_path / "pyproject.toml").read_text())
+        pyproject = tomlkit.loads((tmp_path / "pyproject.toml").read_text(encoding="utf-8"))
         assert "domyn[cli]" in pyproject["project"]["dependencies"]
 
     def test_local_checkout_becomes_a_relative_editable_source(self, tmp_path: Path):
@@ -214,7 +214,7 @@ class TestModifyPyprojectToml:
         project_dir.mkdir(parents=True)
         _make_minimal_pyproject(project_dir)
         modify_pyproject_toml(project_dir, local_checkout=tmp_path / "repo")
-        pyproject = tomlkit.loads((project_dir / "pyproject.toml").read_text())
+        pyproject = tomlkit.loads((project_dir / "pyproject.toml").read_text(encoding="utf-8"))
         source = pyproject["tool"]["uv"]["sources"]["domyn"]
         assert source["path"] == ".."
         assert source["editable"] is True
@@ -226,22 +226,24 @@ class TestModifyPyprojectToml:
     def test_file_is_valid_toml_after_modification(self, tmp_path: Path):
         _make_minimal_pyproject(tmp_path)
         modify_pyproject_toml(tmp_path)
-        tomlkit.loads((tmp_path / "pyproject.toml").read_text())  # must not raise
+        tomlkit.loads((tmp_path / "pyproject.toml").read_text(encoding="utf-8"))  # must not raise
 
 
 class TestFindDomynAgentsCheckout:
     def test_finds_the_checkout_from_a_subdirectory(self, tmp_path: Path):
-        (tmp_path / "pyproject.toml").write_text('[project]\nname = "domyn"\n')
+        (tmp_path / "pyproject.toml").write_text('[project]\nname = "domyn"\n', encoding="utf-8")
         nested = tmp_path / "a" / "b"
         nested.mkdir(parents=True)
         assert find_domyn_agents_checkout(nested) == tmp_path
 
     def test_ignores_other_projects(self, tmp_path: Path):
-        (tmp_path / "pyproject.toml").write_text('[project]\nname = "something-else"\n')
+        (tmp_path / "pyproject.toml").write_text(
+            '[project]\nname = "something-else"\n', encoding="utf-8"
+        )
         assert find_domyn_agents_checkout(tmp_path) is None
 
     def test_skips_an_unreadable_pyproject(self, tmp_path: Path):
-        (tmp_path / "pyproject.toml").write_text("not = [valid")
+        (tmp_path / "pyproject.toml").write_text("not = [valid", encoding="utf-8")
         assert find_domyn_agents_checkout(tmp_path) is None
 
     def test_finds_this_repository(self):
@@ -293,7 +295,7 @@ class TestInitCommand:
     def test_exits_when_directory_exists_and_not_force(self, tmp_path: Path):
         project_dir = tmp_path / "existing"
         project_dir.mkdir()
-        (project_dir / "existing_file.txt").write_text("content")
+        (project_dir / "existing_file.txt").write_text("content", encoding="utf-8")
         with _patch_uv_check(), _patch_run_command(), pytest.raises(SystemExit) as exc_info:
             init_command(project_name="existing", directory=str(project_dir), force=False)
         assert exc_info.value.code == 1
@@ -301,7 +303,7 @@ class TestInitCommand:
     def test_force_flag_overwrites_existing_directory(self, tmp_path: Path):
         project_dir = tmp_path / "existing"
         project_dir.mkdir()
-        (project_dir / "old_file.txt").write_text("old content")
+        (project_dir / "old_file.txt").write_text("old content", encoding="utf-8")
         with _patch_uv_check(), _patch_run_command():
             init_command(project_name="existing", directory=str(project_dir), force=True)
         assert not (project_dir / "old_file.txt").exists()

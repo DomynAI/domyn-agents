@@ -52,7 +52,7 @@ def elsewhere(tmp_path: Path) -> Path:
     """A skills directory that is nowhere near the workspace."""
     directory = tmp_path / "somewhere-else" / "skills"
     (directory / "user-journeys").mkdir(parents=True)
-    (directory / "user-journeys" / "SKILL.md").write_text(SKILL)
+    (directory / "user-journeys" / "SKILL.md").write_text(SKILL, encoding="utf-8")
     return directory
 
 
@@ -113,7 +113,9 @@ class TestTheModelIsToldWhereTheyAre:
         is why it has to be given."""
         flat = tmp_path / "skills"
         flat.mkdir()
-        (flat / "flat-one.md").write_text(SKILL.replace("user-journeys", "flat-one"))
+        (flat / "flat-one.md").write_text(
+            SKILL.replace("user-journeys", "flat-one"), encoding="utf-8"
+        )
         runtime = SkillsRuntime(source=LocalDirSkillSource(paths=[flat]))
         view = build_skill_view_tool(runtime)._actual_callable
 
@@ -124,7 +126,7 @@ class TestTheModelIsToldWhereTheyAre:
         directory = tmp_path / "skills"
         directory.mkdir()
         (directory / "sectioned.md").write_text(
-            "---\nname: sectioned\ndescription: d\n---\n## Steps\nDo it.\n"
+            "---\nname: sectioned\ndescription: d\n---\n## Steps\nDo it.\n", encoding="utf-8"
         )
         runtime = SkillsRuntime(source=LocalDirSkillSource(paths=[directory]))
         view = build_skill_view_tool(runtime)._actual_callable
@@ -176,7 +178,7 @@ class TestTheAgentCanActuallyOpenThem:
         workspace = tmp_path / "project"
         workspace.mkdir()
         secret = tmp_path / "secret.txt"
-        secret.write_text("nope")
+        secret.write_text("nope", encoding="utf-8")
 
         tools = _tools(workspace, skill_dirs=[elsewhere])
         read = next(tool for tool in tools if tool.name == "read_file")
@@ -237,8 +239,9 @@ class TestOneAnswerForWhereSkillsLive:
         home = tmp_path / "home"
         home_skills = home / ".domyn" / "skills"
         (home_skills / "user-journeys").mkdir(parents=True)
-        (home_skills / "user-journeys" / "SKILL.md").write_text(SKILL)
+        (home_skills / "user-journeys" / "SKILL.md").write_text(SKILL, encoding="utf-8")
         monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))  # HOME on Windows
         project = tmp_path / "project"
         project.mkdir()
         monkeypatch.chdir(project)
@@ -312,7 +315,8 @@ class TestOneAnswerForWhereSkillsLive:
             "    skills:\n"
             "      source:\n"
             "        type: local_dir\n"
-            "        paths: ['${TEAM_SKILLS}']\n"
+            "        paths: ['${TEAM_SKILLS}']\n",
+            encoding="utf-8",
         )
         raw = read_raw_config(config)
         assert raw is not None
@@ -512,7 +516,7 @@ class TestWhatTheFileToolsReachForInstalledSkills:
         project = tmp_path / "project"
         project.mkdir()
         secret = tmp_path / "home" / "credentials"
-        secret.write_text("KEY=1")
+        secret.write_text("KEY=1", encoding="utf-8")
         tools = _tools(project, skill_dirs=skill_workspace_roots(self._raw(*paths)))
         read = next(tool for tool in tools if tool.name == "read_file")
 

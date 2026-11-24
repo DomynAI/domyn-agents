@@ -10,8 +10,11 @@ shows — and not a browser. ``test_browser_real.py`` drives the real one.
 import ipaddress
 import json
 import logging
+import os
 import re
 import shlex
+import shutil
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -27,10 +30,13 @@ from domyn.agents.tools.builtin import (
     BuiltinBundleConfig,
     CommandBackend,
     CommandResult,
+    GitBashBackend,
     LocalBackend,
     Workspace,
+    build_backend,
     bundle,
 )
+from domyn.agents.tools.builtin.backends import local as local_backend
 from domyn.agents.tools.builtin.browser_sessions import (
     BrowserOptions,
     BrowserSessions,
@@ -315,6 +321,47 @@ class TestTheCommandLine:
         assert fake.writes[path] == "text"
 
     @pytest.mark.asyncio
+    async def test_under_git_bash_the_config_is_a_fresh_file_and_arguments_stay_as_typed(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Windows: agent-browser.exe has no /dev/stdin to open, so the empty
+        config is a file mktemp makes, removed after; and MSYS path conversion is
+        off, or `/start` typed into a page would arrive as a Windows path. Run
+        with this machine's bash, a stand-in `cygpath`, and the Windows-only
+        process flags off where they do not exist."""
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("no bash on this machine")
+        if os.name != "nt":
+            monkeypatch.setattr(local_backend, "_WINDOWS_CREATION_FLAGS", 0)
+        tools = tmp_path / "bin"
+        tools.mkdir()
+        if os.name != "nt":
+            (tools / "cygpath").write_text('#!/bin/sh\nprintf "%s" "$2"\n', encoding="utf-8")
+            (tools / "cygpath").chmod(0o755)
+        # Stands in for agent-browser: says what config it got, and its arguments.
+        stub = tools / "stub-browser"
+        stub.write_text(
+            '#!/bin/sh\nprintf "config=%s path=%s\\n" "$(cat "$2")" "$2"\n'
+            'shift 2; printf "%s|" "$@"; echo; exit 4\n',
+            encoding="utf-8",
+        )
+        stub.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{tools}{os.pathsep}{os.environ['PATH']}")
+        workspace = tmp_path / "repo"
+        workspace.mkdir()
+        backend = GitBashBackend(Workspace(workspace), isolate_environment=False, bash=Path(bash))
+        sessions = BrowserSessions(backend, BrowserOptions(binary=str(stub)))
+
+        result = await backend.run(sessions.command(CID, "type", "@e3", "/start"), timeout=10)
+
+        assert result.exit_code == 4, result.stderr  # agent-browser's own, passed on
+        head, args = result.stdout.splitlines()
+        assert head.startswith("config={} path=")
+        assert args.endswith("type|@e3|/start|")
+        assert not Path(head.split("path=", 1)[1]).exists(), "the config file was left"
+
+    @pytest.mark.asyncio
     async def test_a_planted_symlink_is_not_written_through(self, tmp_path: Any) -> None:
         """A cloned repo can commit `.domyn/browser/agent-browser.json` as a link
         to a file of the user's. The line, run by a real shell, writes nothing
@@ -322,20 +369,20 @@ class TestTheCommandLine:
         workspace = tmp_path / "repo"
         (workspace / ".domyn" / "browser").mkdir(parents=True)
         victim = tmp_path / "zshrc"
-        victim.write_text("precious\n")
+        victim.write_text("precious\n", encoding="utf-8")
         (workspace / ".domyn" / "browser" / "agent-browser.json").symlink_to(victim)
         # Stands in for agent-browser: prints the file its `--config` names.
         stub = tmp_path / "stub-browser"
-        stub.write_text('#!/bin/sh\ncat "$2"\n')
+        stub.write_text('#!/bin/sh\ncat "$2"\n', encoding="utf-8")
         stub.chmod(0o755)
 
-        backend = LocalBackend(Workspace(workspace))
+        backend = build_backend("local", Workspace(workspace))
         sessions = BrowserSessions(backend, BrowserOptions(binary=str(stub)))
         result = await backend.run(sessions.command(CID, "get", "url"), timeout=10)
 
         assert result.exit_code == 0, result.stderr
         assert result.stdout == "{}"
-        assert victim.read_text() == "precious\n"
+        assert victim.read_text(encoding="utf-8") == "precious\n"
 
     def test_session_names_fit_the_socket_budget(self) -> None:
         """A 37-character name overflowed the 103-byte socket path, measured."""

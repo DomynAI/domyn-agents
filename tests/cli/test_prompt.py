@@ -26,6 +26,7 @@ from rich.console import Console
 from domyn.agents.interfaces.cli import Theme
 from domyn.agents.interfaces.cli import prompt as prompt_mod
 from domyn.agents.interfaces.cli.prompt import InputSession
+from tests.cli.test_attachments import dragged_path
 
 
 def _session(**kwargs: Any) -> tuple[InputSession, io.StringIO]:
@@ -139,7 +140,7 @@ class TestCapabilityGating:
         pytest.importorskip("prompt_toolkit")
         monkeypatch.setattr("sys.stdin.isatty", lambda: True, raising=False)
         blocked = tmp_path / "blocked"
-        blocked.write_text("not a directory")
+        blocked.write_text("not a directory", encoding="utf-8")
         session, _ = _session(enable_enhanced=True, history_path=blocked / "sub" / "history")
         assert session.enhanced
 
@@ -406,7 +407,7 @@ class TestAChoiceInsideTheEditor:
     async def test_an_arrow_after_a_number_does_not_recall_history(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        (tmp_path / "history").write_text("\n# 2026-01-01\n+earlier message\n")
+        (tmp_path / "history").write_text("\n# 2026-01-01\n+earlier message\n", encoding="utf-8")
         assert await self._run(monkeypatch, tmp_path, "2\x1b[A\r") == (0, "reading", False)
 
     @pytest.mark.asyncio
@@ -996,7 +997,7 @@ class TestAttachingImagesInTheEditor:
         shot = self._picture(tmp_path)
         with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
             session.attachments = self._attachments(tmp_path)
-            dragged = str(shot).replace(" ", "\\ ")
+            dragged = dragged_path(shot)
             keys.send_text(f"\x1b[200~{dragged}\x1b[201~what is it?\r")
             sent = await session.ask()
         assert sent.startswith("[Image #1, attached by the user: ")
@@ -1010,7 +1011,7 @@ class TestAttachingImagesInTheEditor:
         with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
             session.attachments = self._attachments(tmp_path)
             shot = self._picture(tmp_path / "work")
-            dragged = str(shot).replace(" ", "\\ ")
+            dragged = dragged_path(shot)
             keys.send_text(f"\x1b[200~{dragged}\x1b[201~what is it?\r")
             sent = await session.ask()
         assert sent == (
@@ -1064,6 +1065,41 @@ class TestAttachingImagesInTheEditor:
         assert sent.endswith(" look")
 
     @pytest.mark.asyncio
+    async def test_an_empty_paste_attaches_the_clipboard(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Windows Terminal keeps Ctrl+V for its own paste, and pastes the clipboard's
+        text: nothing, for an image. Inserted as it came, that empty text opened the
+        completion on an empty word, the list of every slash command."""
+        from PIL import Image
+
+        from domyn.agents.interfaces.cli import attachments as attachments_mod
+
+        monkeypatch.setattr(attachments_mod, "_clipboard_file", lambda: None)
+        monkeypatch.setattr(
+            attachments_mod.ImageGrab, "grabclipboard", lambda: Image.new("RGB", (4, 4))
+        )
+        with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
+            session.attachments = self._attachments(tmp_path)
+            read = asyncio.ensure_future(session.ask())
+            keys.send_text("\x1b[200~\x1b[201~")
+            await _until(lambda: "[Image #1]" in session.draft())
+            keys.send_text("look\r")
+            sent = await read
+        assert sent.startswith("[Image #1, attached by the user: ")
+        assert sent.endswith(" look")
+
+    @pytest.mark.asyncio
+    async def test_an_empty_paste_without_attachments_inserts_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
+            read = asyncio.ensure_future(session.ask())
+            keys.send_text("\x1b[200~\x1b[201~")
+            keys.send_text("hi\r")
+            assert await read == "hi"
+
+    @pytest.mark.asyncio
     async def test_ctrl_v_with_nothing_in_the_clipboard_says_so(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -1113,7 +1149,7 @@ class TestAttachingImagesInTheEditor:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         shot = self._picture(tmp_path)
-        dragged = str(shot).replace(" ", "\\ ")
+        dragged = dragged_path(shot)
         with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
             session.attachments = self._attachments(tmp_path)
             read = asyncio.ensure_future(session.ask())

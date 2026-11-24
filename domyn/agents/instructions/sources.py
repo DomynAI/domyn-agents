@@ -15,6 +15,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from domyn.agents.core.links import is_link
 from domyn.agents.instructions.discovery import (
     AGENTS_FILENAMES,
     AUTODISCOVERY_DIRS,
@@ -196,7 +197,7 @@ class LocalDirInstructionsSource(InstructionsSource):
                 found.append(agents.resolve())
                 break
         for name in (self.soul_filename, *self.agents_filenames):
-            if (source / name).is_symlink():
+            if is_link(source / name):
                 get_logger().warning(f"instructions: {source / name} is a link, not followed")
         return found
 

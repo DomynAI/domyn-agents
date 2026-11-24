@@ -16,6 +16,7 @@ import shlex
 from collections.abc import Callable
 from pathlib import Path
 
+from domyn.agents.core.links import is_link
 from domyn.agents.logger import get_logger
 from domyn.agents.tools.builtin.backends.docker.cli import SLOW_ACTION_SECONDS, DockerCli
 from domyn.agents.tools.builtin.backends.docker.containers import DockerContainer
@@ -139,7 +140,7 @@ def _npm_packages(npm_ls_json: str) -> str | None:
 
 def _read_lines(path: Path) -> list[str]:
     try:
-        if path.is_symlink() or not path.is_file():
+        if is_link(path) or not path.is_file():
             return []
         return [
             line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
@@ -152,7 +153,7 @@ def _write(path: Path, text: str, what: str) -> None:
     """Replace the record atomically, unless it is already this or is a link (a
     write through one would land wherever it leads)."""
     try:
-        if path.is_symlink() or (path.exists() and path.read_text(encoding="utf-8") == text):
+        if is_link(path) or (path.exists() and path.read_text(encoding="utf-8") == text):
             return
         temporary = path.with_name(path.name + ".tmp")
         temporary.write_text(text, encoding="utf-8")

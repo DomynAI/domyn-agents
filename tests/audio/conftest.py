@@ -74,7 +74,7 @@ class FakeOnnxAsr:
         target = Path(path)
         if not target.exists():
             target.mkdir(parents=True)
-            (target / "model.onnx").write_text(name)
+            (target / "model.onnx").write_text(name, encoding="utf-8")
 
     def load_model(self, model: str, path: str, **kwargs: Any) -> FakeAsr:
         self._download("asr", model, path, kwargs)

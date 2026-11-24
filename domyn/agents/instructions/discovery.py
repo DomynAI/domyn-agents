@@ -14,6 +14,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from domyn.agents.core.links import is_link
 from domyn.agents.skills.layout import SKIPPED_DIRS, listed_path_is_linked
 
 SOUL_FILENAME = "SOUL.md"
@@ -37,7 +38,7 @@ weighed most, so the project's brief lands after the user's.
 
 def is_regular_file(path: Path) -> bool:
     """A regular file that is not a link: a linked ``SOUL.md`` is not followed."""
-    return not path.is_symlink() and path.is_file()
+    return not is_link(path) and path.is_file()
 
 
 @dataclass(frozen=True)
@@ -94,7 +95,8 @@ def find_instruction_files(root: Path) -> FoundInstructions:
                 for entry in children:
                     if entry.name.startswith(".") or entry.name in SKIPPED_DIRS:
                         continue
-                    if not entry.is_dir(follow_symlinks=False):
+                    # A junction is a directory to is_dir, even not following links.
+                    if is_link(entry) or not entry.is_dir(follow_symlinks=False):
                         continue
                     below.append(directory / entry.name)
             level = below

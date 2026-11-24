@@ -19,7 +19,7 @@ def _skill(path: Path, name: str) -> None:
     else:
         path.mkdir(parents=True, exist_ok=True)
         file = path / "SKILL.md"
-    file.write_text(f"---\nname: {name}\ndescription: d\n---\nbody\n")
+    file.write_text(f"---\nname: {name}\ndescription: d\n---\nbody\n", encoding="utf-8")
 
 
 async def _loaded(*paths: Path) -> list[str]:

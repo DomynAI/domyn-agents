@@ -20,6 +20,7 @@ ASSETS = {
     "aarch64_unknown_linux_gnu": "agent-browser-linux-arm64",
     "x86_64_unknown_linux_musl": "agent-browser-linux-musl-x64",
     "aarch64_unknown_linux_musl": "agent-browser-linux-musl-arm64",
+    "x86_64_pc_windows_msvc": "agent-browser-win32-x64.exe",
 }
 
 
@@ -29,7 +30,16 @@ def main(argv: list[str]) -> int:
         return 2
     version = argv[1].removeprefix("v")
     out = subprocess.run(
-        ["gh", "release", "view", f"v{version}", "-R", "vercel-labs/agent-browser", "--json", "assets"],
+        [
+            "gh",
+            "release",
+            "view",
+            f"v{version}",
+            "-R",
+            "vercel-labs/agent-browser",
+            "--json",
+            "assets",
+        ],
         check=True,
         capture_output=True,
         text=True,

@@ -49,6 +49,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from domyn.agents.core.links import is_link
 from domyn.agents.logger import get_logger
 
 # Name of the agent's state folder inside the workspace when no other is named,
@@ -92,7 +93,7 @@ def linked_below(start: Path, target: Path) -> Path | None:
     here = start
     for part in target.relative_to(start).parts:
         here = here / part
-        if here.is_symlink():
+        if is_link(here):
             return here
     return None
 
@@ -236,8 +237,14 @@ def ignore_from_version_control(conversations: Path) -> None:
     a link included even when it leads nowhere: the folder is in the project, so
     a cloned repository can commit ``.gitignore`` as a link, and writing through
     it would create a file wherever it points.
+
+    On Windows that is not enough: creating a file over a link that leads nowhere
+    follows it and creates the target (measured in CI). So any name already there,
+    a dangling link included (lexists), is left alone first.
     """
     marker = conversations / ".gitignore"
+    if os.path.lexists(marker):
+        return
     with contextlib.suppress(OSError), open(marker, "x", encoding="utf-8") as f:
         f.write("# Created by domyn: per-conversation working state.\n*\n")
 
@@ -316,15 +323,30 @@ _SAFE_ENV_NAMES = frozenset(
         # runs — `domyn skill remove`, an edit to the config — can tell which
         # configuration is in use.
         PROJECT_DIR_VAR,
-        # Windows equivalents.
+        # Windows equivalents. Without SystemRoot a Windows program cannot even
+        # open a socket; the program folders are where Git Bash and the
+        # programs it starts look for their own files; USERNAME is USER.
         "SystemRoot",
+        "WINDIR",
         "TEMP",
         "TMP",
         "USERPROFILE",
+        "USERNAME",
+        "HOMEDRIVE",
+        "HOMEPATH",
         "APPDATA",
         "LOCALAPPDATA",
+        "ProgramData",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "CommonProgramFiles",
         "ComSpec",
         "PATHEXT",
+        "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE",
+        # Where Git Bash is, when it is not where git_bash.py looks.
+        "DOMYN_GIT_BASH_PATH",
     }
 )
 

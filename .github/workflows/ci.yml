@@ -61,10 +61,14 @@ jobs:
 
   # Pull requests only: on main the job below runs the same tests on every
   # supported version, the one in .python-version included. A required check,
-  # with the coverage of the change checked here too.
+  # with the coverage of the change checked here too, on the Linux and the
+  # Windows runs together: code that runs only on Windows is covered there, and
+  # it waits for the Intel Windows job, which writes that report (ARM's runs
+  # beside it, without one). Run whatever that job ends in.
   test:
-    needs: changes
-    if: github.event_name == 'pull_request' && needs.changes.outputs.code == 'true'
+    needs: [changes, test-windows]
+    if: >-
+      !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -123,14 +127,33 @@ jobs:
             echo "⚪ Coverage not checked: the pull request is labelled \`coverage-exempt\`." >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      # Missing when the Windows tests did not get as far as writing it.
+      - name: Windows coverage
+        if: steps.exempt.outputs.exempt != 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-windows
+
       # The lines the pull request adds or changes, at least 80% of them run by
-      # a test. The uncovered ones are listed in the job summary.
+      # a test, on Linux or on Windows: diff-cover counts a line covered in
+      # either report. The uncovered ones are listed in the job summary.
       - name: Coverage of the change
         if: steps.exempt.outputs.exempt != 'true'
         env:
           BASE: ${{ github.base_ref }}
         run: |
-          uv run diff-cover coverage.xml --compare-branch "origin/$BASE" \
+          reports=(coverage.xml)
+          if [ -f coverage-windows.xml ]; then
+            # Its files are named from the Windows checkout (D:\a\...), which
+            # matches nothing here: from the package folder, as diff-cover reads them.
+            sed -E -i 's#<source>[^<]*</source>#<source>domyn</source>#' coverage-windows.xml
+            reports+=(coverage-windows.xml)
+          else
+            echo "⚠️ No Windows coverage: the lines that run only on Windows count as not covered." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          uv run diff-cover "${reports[@]}" --compare-branch "origin/$BASE" \
             --fail-under 80 --format "markdown:$RUNNER_TEMP/diff-cover.md" \
             && status=0 || status=$?
           cat "$RUNNER_TEMP/diff-cover.md" >> "$GITHUB_STEP_SUMMARY"
@@ -152,6 +175,161 @@ jobs:
           python3 scripts/coverage_total.py compare coverage.xml --baseline "$baseline" \
             | tee -a "$GITHUB_STEP_SUMMARY"
           exit "${PIPESTATUS[0]}"
+
+  # Windows, Intel and ARM, on the version in .python-version. Commands run in
+  # Git Bash (Git for Windows, preinstalled on the runners), as they do for a
+  # user. Pull requests and main alike: a change that breaks Windows is caught
+  # before it is merged.
+  test-windows:
+    needs: changes
+    if: >-
+      always() && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true')
+    name: test-windows (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      # Intel's run writes the coverage the test job checks, in pull requests.
+      COVERAGE_REPORT: ${{ github.event_name == 'pull_request' }}
+      PYTHON_ARCH: x86_64
+
+    # The same steps on ARM below (a YAML anchor): two jobs rather than a matrix,
+    # so the test job can wait for this one alone, which has the coverage, while
+    # ARM runs beside it. Its check is still required.
+    steps: &windows-steps
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The cache keyed by Python's architecture too: its key names the runner's
+      # (aarch64 on ARM) whatever Python runs there, so the ARM job restored the
+      # cache of its earlier, emulated x64 runs, and as an existing key is never
+      # saved again, the ARM64 wheels it built were lost on every run.
+      - name: Install uv
+        id: uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          enable-cache: true
+          cache-suffix: ${{ env.PYTHON_ARCH }}
+
+      # The machine's own Python, as the standalone build of each runs: x64 on
+      # Intel, ARM64 on ARM. uv's build of the version in .python-version, which
+      # uv sync downloads in seconds (setup-python spent two minutes on ARM).
+      - name: Use the machine's Python
+        shell: bash
+        run: |
+          version="$(tr -d '\r\n ' < .python-version)"
+          echo "UV_PYTHON=cpython-${version}-windows-${PYTHON_ARCH}-none" >> "$GITHUB_ENV"
+
+      # On ARM, cryptography, pdf-inspector, firecrawl-anydoc and tiktoken have no
+      # win_arm64 wheel, and uv sync builds them from their sdists, as the arm64
+      # standalone build does (scripts/build_standalone.sh): Rust, the Build
+      # Tools' Clang (for ring, which pdf-inspector uses) and OpenSSL. Only when
+      # uv.lock changes: setup-uv keeps the wheels uv built in its cache (its
+      # `uv cache prune --ci` drops the downloaded ones only), so later runs
+      # build nothing, and these two steps are skipped when that cache is there.
+      # OpenSSL is kept as vcpkg's binary cache, six minutes to build once. The
+      # runner's image has Rust and the Clang component already: the step adds
+      # them only for an image that lacks them.
+      - name: Cache OpenSSL for arm64
+        if: ${{ env.PYTHON_ARCH == 'aarch64' && steps.uv.outputs.cache-hit != 'true' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vcpkg-cache
+          key: vcpkg-openssl-arm64-windows-static-md-v1
+
+      - name: Rust, Clang and OpenSSL for arm64
+        if: ${{ env.PYTHON_ARCH == 'aarch64' && steps.uv.outputs.cache-hit != 'true' }}
+        shell: bash
+        env:
+          VCPKG_DEFAULT_BINARY_CACHE: ${{ runner.temp }}/vcpkg-cache
+        run: |
+          if ! command -v cargo >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+            curl -fsSL -o "$RUNNER_TEMP/rustup-init.exe" \
+              https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe
+            "$RUNNER_TEMP/rustup-init.exe" -y --profile minimal --default-toolchain stable
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          installer="/c/Program Files (x86)/Microsoft Visual Studio/Installer"
+          vs="$("$installer/vswhere.exe" -latest -products '*' -property installationPath | tr -d '\r')"
+          clang="$(cygpath -u "$vs")/VC/Tools/Llvm/ARM64/bin"
+          if [ ! -x "$clang/clang.exe" ]; then
+            "$installer/setup.exe" modify --installPath "$vs" --quiet --norestart \
+              --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 \
+              --add Microsoft.VisualStudio.Component.VC.Llvm.Clang
+          fi
+          cygpath -w "$clang" >> "$GITHUB_PATH"
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+          "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install openssl:arm64-windows-static-md
+          echo "OPENSSL_DIR=$VCPKG_INSTALLATION_ROOT\installed\arm64-windows-static-md" >> "$GITHUB_ENV"
+          echo "OPENSSL_STATIC=1" >> "$GITHUB_ENV"
+
+      # On ARM, when uv builds the packages above: one at a time, and once more
+      # after a failure, which starts where it stopped (what was built is in uv's
+      # cache). Building them all at once, pyo3's build script, which runs Python
+      # to read its configuration, failed once on the runner with "Bad file
+      # descriptor" writing to stdout, a run after the same build had passed.
+      - name: Install dependencies
+        shell: bash
+        run: |
+          if [ "$PYTHON_ARCH" = aarch64 ]; then
+            export UV_CONCURRENT_BUILDS=1
+            uv sync --all-extras || { echo "::warning::uv sync failed, trying once more"; uv sync --all-extras; }
+          else
+            uv sync --all-extras
+          fi
+
+      # A test that hangs is ended after two minutes and named, with its stack,
+      # rather than holding the job until its timeout with nothing to show:
+      # waiting on a process that never exits is how a POSIX assumption fails
+      # here. -rfE lists every failure and error at the end, by name.
+      # UTF-8 on the standard streams only: on the runner's cp1252 console, the
+      # first failure whose text has a character outside it (the banner art)
+      # ended pytest silently in the middle of its summary. Not PYTHONUTF8,
+      # which would also make every file read without an encoding read UTF-8
+      # and hide the very bugs this job is here to find.
+      # Coverage measured through sys.monitoring (COVERAGE_CORE=sysmon, Python
+      # 3.12+), which costs a fifth of the default tracer: on the tests that time
+      # themselves, +12% against +57% (measured on Windows on ARM, x64 emulated).
+      - name: Run tests
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+          COVERAGE_CORE: sysmon
+          COVERAGE: >-
+            ${{ env.COVERAGE_REPORT == 'true'
+            && '--cov=domyn --cov-report=xml:coverage-windows.xml' || '--no-cov' }}
+        run: >-
+          uv run --with pytest-timeout pytest tests/ examples/ -q $COVERAGE
+          -p no:cacheprovider --timeout=120 -rfE
+
+      # Written even when a test failed, so the coverage check still has it.
+      - name: Upload coverage
+        if: ${{ !cancelled() && env.COVERAGE_REPORT == 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-windows
+          path: coverage-windows.xml
+          retention-days: 1
+          if-no-files-found: ignore
+
+  test-windows-arm:
+    needs: changes
+    if: >-
+      always() && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true')
+    name: test-windows (windows-11-arm)
+    runs-on: windows-11-arm
+    # Room for a run after uv.lock changed: OpenSSL and four packages compiled
+    # (some fifteen minutes) before the tests. Others take what Intel's does.
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    env:
+      COVERAGE_REPORT: false
+      PYTHON_ARCH: aarch64
+    steps: *windows-steps
 
   # Every Python version the package supports (pyproject.toml's classifiers,
   # and the Python badge in the README). On main and on release tags (called

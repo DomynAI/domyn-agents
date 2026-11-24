@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from domyn.agents.core.links import is_link
 from domyn.agents.interfaces.cli.config import MEMORY_FILENAME, PrivateFiles
 from domyn.agents.memory.managers.base import Memory
 from domyn.agents.memory.managers.local import FilesystemMemoryManager
@@ -49,7 +50,7 @@ def folder_size(path: Path) -> int:
         here = stack.pop()
         try:
             for entry in here.iterdir():
-                if entry.is_symlink():
+                if is_link(entry):
                     continue
                 if entry.is_dir():
                     stack.append(entry)
@@ -90,13 +91,13 @@ def plan_clean(home: Path, *, older_than_days: int | None) -> CleanPlan:
         plan.kept = len(kept)
 
     root = home / StateFolders.CONVERSATIONS
-    if root.is_dir() and not root.is_symlink():
+    if root.is_dir() and not is_link(root):
         removed = {safe_id(i) for i in plan.ids}
         cutoff_time = (
             None if older_than_days is None else datetime.now() - timedelta(days=older_than_days)
         )
         for folder in sorted(root.iterdir()):
-            if folder.is_symlink() or not folder.is_dir() or folder.name in kept:
+            if is_link(folder) or not folder.is_dir() or folder.name in kept:
                 continue
             # The folder of a conversation being removed, or an orphan: one whose
             # conversation is not in the store (deleted before, another store) and
@@ -169,7 +170,7 @@ def plan_memory_clean(home: Path, *, older_than_days: int | None) -> MemoryPlan:
     )
     path = home / MEMORY_FILENAME
     plan = MemoryPlan(path=path, cutoff=cutoff)
-    if path.is_symlink() or not path.is_file():
+    if is_link(path) or not path.is_file():
         return plan
     for memory in FilesystemMemoryManager(file_path=str(path)).stored():
         if plan.goes(memory):

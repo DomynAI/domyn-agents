@@ -257,7 +257,7 @@ def check(path: Path | str, margins: tuple[float, float] | None = None) -> list[
 def layout_margins() -> tuple[float, float] | None:
     if not LAYOUT_FILE.is_file():
         return None
-    margins = json.loads(LAYOUT_FILE.read_text())["page"]["margins"]
+    margins = json.loads(LAYOUT_FILE.read_text(encoding="utf-8"))["page"]["margins"]
     return margins["left"], margins["right"]
 
 

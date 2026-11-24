@@ -342,7 +342,9 @@ _WRAPPER = """#!/usr/bin/env bash
 # would otherwise be shell.
 D={dir}
 echo $$ > "$D/run.pid"
-ps -o pgid= -p $$ | tr -d ' ' > "$D/run.pgid"
+# Git Bash's ps has no -o: there the group is in /proc/<pid>/pgid, which Linux
+# does not have and macOS has no /proc for, so those fall through to ps.
+{{ cat /proc/$$/pgid 2>/dev/null || ps -o pgid= -p $$; }} | tr -d ' ' > "$D/run.pgid"
 
 # The backstop for the guarantee detaching gives up, inside the group it
 # polices: when it fires, the session that started it may be long closed.
@@ -388,9 +390,10 @@ ps -o pgid= -p $$ | tr -d ' ' > "$D/run.pgid"
 # writer holds an offset and a shrunk file leaves a hole.
 #
 # The head is copied once and left alone. Only the tail is rewritten, and that
-# seam is the one race: whatever arrives between reading the tail and replacing
-# the file is lost, so a line can be cut in half. Bounded — it happens only
-# above the cap — and reported rather than hidden.
+# seam is the one race: whatever arrives between the last look at the size and
+# replacing the file is lost, so a line can be cut in half. Bounded — it happens
+# only above the cap, while the command is writing — and reported rather than
+# hidden.
 #
 # One pass at a time. The timer's pass can still be running when the command
 # ends and the wrapper starts its last one; two at once share `$f.part` and both
@@ -415,8 +418,32 @@ compact_once() {{
     s=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
     [ "${{s:-0}}" -gt {compact_at} ] || continue
     [ -s "$f.head" ] || head -c {head_bytes} "$f" > "$f.head"
-    if tail -c {tail_bytes} "$f" > "$f.part"; then
+    # The tail of the first $s bytes exactly, then whatever arrived while it was
+    # read, until the size holds still. Replaced with the tail alone, the file lost
+    # what the command wrote meanwhile; when it finished meanwhile that was its
+    # end, the part the tail is kept for, and the wrapper's last pass, waiting on
+    # the lock, found nothing left to save. Seen on Windows, where every process
+    # of the pass starts slowly: 5,000 last lines of 300,000 gone. Bounded by what
+    # it adds, one tail's worth, and by rounds: a command that finished is still by
+    # the second look, while one still writing fast would be chased, the copy
+    # growing to the whole log, which then went unread while it was rewritten.
+    if head -c "$s" "$f" | tail -c {tail_bytes} > "$f.part"; then
+      # Read first: between the last look at the size and the rewrite, nothing
+      # else may start a process, each one tens of milliseconds under Git Bash.
       prev=$(cat "$f.cut" 2>/dev/null || echo 0)
+      e=$s
+      still=""
+      for _ in $(seq 20); do
+        n=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
+        [ "${{n:-0}}" -gt "$e" ] || {{ still=1; break; }}
+        tail -c +$(( e + 1 )) "$f" | head -c $(( n - e )) >> "$f.part"
+        e=$n
+        [ $(( e - s )) -lt {tail_bytes} ] || break
+      done
+      if [ -z "$still" ] && [ "$e" -le $(( 2 * {compact_at} )) ]; then
+        rm -f "$f.part"
+        continue
+      fi
       cat "$f.part" > "$f"
       rm -f "$f.part"
       echo $(( prev + s - {tail_bytes} )) > "$f.cut"
@@ -613,19 +640,29 @@ def build_discover(conversation: str = "", *, home: str = HOME) -> str:
     running, still writing, unreachable. Now it is one listing away.
     """
     d = shlex.quote(f"{home}/{safe_id(conversation)}")
+    # Builtins wherever POSIX sh has one, and one stat for every log at the end:
+    # under Git Bash every program started costs tens of milliseconds, and the
+    # ten each process took here made /ps wait 0.7s for every command the
+    # conversation ever started (7s for ten).
     return (
+        "N=$(date +%s); "
         f"for p in {d}/*/; do "
-        f'[ -d "$p" ] || continue; '
-        f'h=$(basename "$p"); '
-        f'P=$(cat "$p/run.pid" 2>/dev/null); '
-        f'if kill -0 "$P" 2>/dev/null; then A=1; else A=0; fi; '
-        f'echo "P $h $A $(cat "$p/run.exit" 2>/dev/null || echo -) '
-        f'$([ -f "$p/run.killed" ] && echo 1 || echo 0) '
-        f'$(cat "$p/run.started" 2>/dev/null || echo 0) $(date +%s) '
-        f'$(stat -c %Y "$p/out.log" 2>/dev/null || stat -f %m "$p/out.log" 2>/dev/null || echo 0) '
-        f'$(wc -c < "$p/out.log" 2>/dev/null | tr -d " " || echo 0)"; '
-        f'echo "C $h $(head -c 200 "$p/cmd.sh" 2>/dev/null | tr "\n" " ")"; '
-        f"done"
+        '[ -d "$p" ] || continue; '
+        "p=${p%/}; h=${p##*/}; "
+        'P=; [ -f "$p/run.pid" ] && read -r P < "$p/run.pid"; '
+        'if [ -n "$P" ] && kill -0 "$P" 2>/dev/null; then A=1; else A=0; fi; '
+        'X=; [ -f "$p/run.exit" ] && read -r X < "$p/run.exit"; '
+        'K=0; [ -f "$p/run.killed" ] && K=1; '
+        'T=; [ -f "$p/run.started" ] && read -r T < "$p/run.started"; '
+        'echo "P $h $A ${X:--} $K ${T:-0} $N"; '
+        "C=; L=; "
+        'if [ -f "$p/cmd.sh" ]; then '
+        'while [ ${#C} -lt 200 ] && { IFS= read -r L || [ -n "$L" ]; }; do C="$C$L "; L=; done '
+        '< "$p/cmd.sh"; fi; '
+        'echo "C $h $C"; '
+        "done; "
+        f"stat -c 'S %Y %s %n' {d}/*/out.log 2>/dev/null "
+        f"|| stat -f 'S %m %z %N' {d}/*/out.log 2>/dev/null; true"
     )
 
 
@@ -637,6 +674,15 @@ def parse_discover(output: str) -> dict[str, dict[str, Any]]:
     we cannot describe, never a failure.
     """
     found: dict[str, dict[str, Any]] = {}
+    # Each log's modification time and size, from the one stat at the end:
+    # `S <mtime> <bytes> <path>`, the path last since it may hold spaces.
+    logs: dict[str, str] = {}
+    for line in output.splitlines():
+        bits = line.split(" ", 3)
+        if len(bits) == 4 and bits[0] == "S" and bits[1].isdigit() and bits[2].isdigit():
+            parts = re.split(r"[\\/]", bits[3].rstrip())
+            if len(parts) >= 2:
+                logs[parts[-2]] = f"{bits[1]} {bits[2]}"
     for line in output.splitlines():
         bits = line.split(" ", 2)
         if len(bits) < 2:
@@ -646,11 +692,18 @@ def parse_discover(output: str) -> dict[str, dict[str, Any]]:
         if not HANDLE.fullmatch(handle):
             continue
         if kind == "P":
-            facts = parse_sweep(f"{handle} {bits[2] if len(bits) > 2 else ''}")
+            rest = bits[2] if len(bits) > 2 else ""
+            # Five facts, the log's two from the stat; seven when a listing still
+            # carries them on the line, as it did before.
+            if len(rest.split()) == 5:
+                rest = f"{rest} {logs.get(handle, '0 0')}"
+            facts = parse_sweep(f"{handle} {rest}")
             if handle in facts:
                 found.setdefault(handle, {}).update(facts[handle])
-        elif (kind == "C" and handle in found) or kind == "C":
-            found.setdefault(handle, {})["command"] = (bits[2] if len(bits) > 2 else "").strip()
+        elif kind == "C":
+            found.setdefault(handle, {})["command"] = (bits[2] if len(bits) > 2 else "").strip()[
+                :200
+            ]
     return {h: v for h, v in found.items() if "running" in v}
 
 
@@ -742,7 +795,7 @@ def build_kill(record: ProcessRecord, grace: int = DEFAULT_GRACE_S) -> str:
     return (
         f"PID=$(cat {d}/run.pid 2>/dev/null); PGID=$(cat {d}/run.pgid 2>/dev/null); "
         f'if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && '
-        f'[ "$(ps -o pgid= -p $PID | tr -d \' \')" = "$PGID" ]; then '
+        f'[ "$({{ cat /proc/$PID/pgid 2>/dev/null || ps -o pgid= -p $PID; }} | tr -d \' \')" = "$PGID" ]; then '
         f'kill -TERM -"$PGID" 2>/dev/null; sleep {grace}; kill -KILL -"$PGID" 2>/dev/null; '
         f'echo "[stopped by the agent at $(date -u +%Y-%m-%dT%H:%M:%SZ)]" >> {d}/out.log; '
         f"echo killed > {d}/run.killed; echo stopped; "

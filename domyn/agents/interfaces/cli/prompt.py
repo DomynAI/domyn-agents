@@ -614,12 +614,7 @@ class InputSession:
 
         @bindings.add("c-v", filter=has_attachments)
         def _paste_image(event: Any) -> None:
-            attachments = self.attachments
-            if attachments is None:
-                return
-            task = asyncio.ensure_future(self._paste_from_clipboard(attachments, event.app))
-            self._pastes.add(task)
-            task.add_done_callback(self._pastes.discard)
+            self._start_clipboard_paste(event.app)
 
         # What a terminal pastes for a dragged file, or a file copied in a file
         # manager, is its path: a paste naming nothing but images attaches them.
@@ -628,6 +623,15 @@ class InputSession:
         def _paste(event: Any) -> None:
             data = event.data.replace("\r\n", "\n").replace("\r", "\n")
             attachments = self.attachments
+            # Nothing pasted: a terminal that keeps Ctrl+V for its own paste
+            # (Windows Terminal, VS Code's) pastes the clipboard's text, of which an
+            # image has none. Ctrl-V was meant, so the image is read as it would be.
+            # Inserted as it came, the empty text opened the completion on an empty
+            # word: every slash command.
+            if not data:
+                if attachments is not None:
+                    self._start_clipboard_paste(event.app)
+                return
             if attachments is not None:
                 from domyn.agents.interfaces.cli.attachments import AttachmentError, image_paths
 
@@ -745,6 +749,15 @@ class InputSession:
         if self._hint_repaint is not None:
             self._hint_repaint.cancel()
             self._hint_repaint = None
+
+    def _start_clipboard_paste(self, app: Any) -> None:
+        """Read the clipboard's image off the key handler, keeping the task alive."""
+        attachments = self.attachments
+        if attachments is None:
+            return
+        task = asyncio.ensure_future(self._paste_from_clipboard(attachments, app))
+        self._pastes.add(task)
+        task.add_done_callback(self._pastes.discard)
 
     async def _paste_from_clipboard(self, attachments: Attachments, app: Any) -> None:
         """What Ctrl-V does: attach the clipboard's image and put its chip at the

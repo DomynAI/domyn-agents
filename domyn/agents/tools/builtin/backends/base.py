@@ -37,7 +37,7 @@ parameter is safe, a required one is a breaking change.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import PurePath
 
 from domyn.agents.tools.builtin.session import HOME_DIRNAME, StateFolders
 
@@ -66,10 +66,12 @@ class ToolHost:
     command: str
     """Run through ``CommandBackend.run`` with the request on stdin: it prints the answer."""
 
-    roots: tuple[Path, ...] = ()
+    roots: tuple[PurePath, ...] = ()
     """What the body may reach besides the workspace and the skills. The boundary a
     workspace draws protects what is the user's on this machine; elsewhere the boundary
-    is what the backend mounts, and these are what it adds."""
+    is what the backend mounts, and these are what it adds. Paths of the machine the
+    body runs on, in its spelling: `PurePosixPath("/")` for a Linux container, which a
+    `Path` on a Windows host would turn into `\\`."""
 
 
 @dataclass(frozen=True)

@@ -36,7 +36,6 @@ four rows it reads as a reveal, not as scrolling.
 from __future__ import annotations
 
 import gzip
-import os
 import sys
 import time
 from collections.abc import Callable
@@ -143,24 +142,34 @@ def _skip_key_pressed() -> bool:
     at it, so this always returns ``False`` there and the banner plays out on its
     own. Pure ``select`` on a pipe would *also* report readable (EOF), which is
     exactly why the TTY check comes first.
+
+    On Windows ``select`` takes sockets only; the console has its own pair, which
+    asks whether a key is waiting and reads it, so it is not left for the REPL.
     """
-    if not (bool(getattr(sys.stdin, "isatty", lambda: False)()) and os.name == "posix"):
+    if not bool(getattr(sys.stdin, "isatty", lambda: False)()):
         return False
+    if sys.platform == "win32":
+        import msvcrt
 
-    import select
+        if not msvcrt.kbhit():
+            return False
+        msvcrt.getwch()
+        return True
+    else:
+        import select
 
-    readable, _, _ = select.select([sys.stdin], [], [], 0)
-    if not readable:
-        return False
+        readable, _, _ = select.select([sys.stdin], [], [], 0)
+        if not readable:
+            return False
 
-    # One byte is enough to know a key was pressed; the rest stays buffered for
-    # the REPL that starts right after the banner. ``.buffer`` when present (a
-    # text stream), the stream itself otherwise (a binary stream).
-    try:
-        ch = getattr(sys.stdin, "buffer", sys.stdin).read(1)
-    except (OSError, ValueError, AttributeError):
-        return False
-    return bool(ch)
+        # One byte is enough to know a key was pressed; the rest stays buffered for
+        # the REPL that starts right after the banner. ``.buffer`` when present (a
+        # text stream), the stream itself otherwise (a binary stream).
+        try:
+            ch = getattr(sys.stdin, "buffer", sys.stdin).read(1)
+        except (OSError, ValueError, AttributeError):
+            return False
+        return bool(ch)
 
 
 def _wait_for_skip(stop: Callable[[], bool]) -> bool:

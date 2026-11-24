@@ -68,7 +68,7 @@ class TestTheSharedScripts:
         """tabular-classification-regression's common.py needs scikit-learn to import, which the test
         environment lacks, so its path setup is checked by reading it."""
         for common in DATA_SKILLS.glob("*/scripts/common.py"):
-            text = common.read_text()
+            text = common.read_text(encoding="utf-8")
             assert "sys.path.append(str(Path(__file__).resolve().parents[2]))" in text, common
             assert "import data_utils" in text, common
 
@@ -87,7 +87,7 @@ class TestTheRunFolder:
 
     def test_scripts_write_only_into_files(self, tmp_path: Path) -> None:
         source = tmp_path / "data.csv"
-        source.write_text("a,b\n1,x\n2,y\n")
+        source.write_text("a,b\n1,x\n2,y\n", encoding="utf-8")
         run_folder = tmp_path / "analysis"
         result = run(
             DATA_SKILLS / "prepare_table.py", "--data", str(source), "--out", str(run_folder)
@@ -124,14 +124,14 @@ class TestLinksInTheFilesFolder:
     @pytest.fixture
     def source(self, tmp_path: Path) -> Path:
         source = tmp_path / "data.csv"
-        source.write_text("a,b\n1,x\n2,y\n")
+        source.write_text("a,b\n1,x\n2,y\n", encoding="utf-8")
         return source
 
     @pytest.fixture
     def outside(self, tmp_path: Path) -> Path:
         outside = tmp_path / "outside" / "secret.txt"
         outside.parent.mkdir()
-        outside.write_text(self.SECRET)
+        outside.write_text(self.SECRET, encoding="utf-8")
         return outside
 
     def prepare(self, source: Path, out: Path) -> subprocess.CompletedProcess[str]:
@@ -142,7 +142,9 @@ class TestLinksInTheFilesFolder:
         result = self.prepare(source, out)
         assert result.returncode != 0
         assert "use a new --out folder" in result.stderr.lower(), result.stderr
-        assert outside.read_text() == self.SECRET, "the file outside was written over"
+        assert outside.read_text(encoding="utf-8") == self.SECRET, (
+            "the file outside was written over"
+        )
         assert sorted(tmp_path.rglob("*")) == before, "something was written"
 
     @pytest.mark.parametrize("name", ["run.sh", "table.csv"])
@@ -194,15 +196,15 @@ class TestRunSh:
     def record(self, out: Path, script: str, monkeypatch: pytest.MonkeyPatch) -> list[str]:
         monkeypatch.setattr(sys, "argv", [script, "--out", str(out)])
         path = out / script
-        path.write_text("")
+        path.write_text("", encoding="utf-8")
         data_utils.record_run(out, path, self.ORDER)
-        return (out / "run.sh").read_text().splitlines()
+        return (out / "run.sh").read_text(encoding="utf-8").splitlines()
 
     def test_it_runs_the_scripts_with_the_interpreter_that_ran_them(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         lines = self.record(tmp_path, "profile_data.py", monkeypatch)
-        assert f'PY="${{PY:-{sys.executable}}}"' in lines
+        assert f'PY="${{PY:-{Path(sys.executable).as_posix()}}}"' in lines
         assert lines[-1].startswith('"$PY" profile_data.py --out ')
 
     def test_a_rerun_replaces_the_line_and_keeps_the_order(
@@ -221,7 +223,8 @@ class TestRunSh:
         # The older format, plus what an agent added: a variable and its own script.
         (tmp_path / "run.sh").write_text(
             '#!/bin/sh\ncd "$(dirname "$0")"\nPY=/project/.venv/bin/python\n'
-            "python prepare_table.py --data /x.csv\n\npython analysis.py\n"
+            "python prepare_table.py --data /x.csv\n\npython analysis.py\n",
+            encoding="utf-8",
         )
         lines = self.record(tmp_path, "profile_data.py", monkeypatch)
         assert lines.count("#!/bin/sh") == 1
@@ -231,7 +234,7 @@ class TestRunSh:
 
     def test_it_reruns_with_another_interpreter_or_falls_back(self, tmp_path: Path) -> None:
         source = tmp_path / "data.csv"
-        source.write_text("a,b\n1,x\n2,y\n")
+        source.write_text("a,b\n1,x\n2,y\n", encoding="utf-8")
         out = tmp_path / "run"
         assert (
             run(
@@ -240,7 +243,8 @@ class TestRunSh:
             == 0
         )
         script = out / "files" / "run.sh"
-        for py in (sys.executable, "/no/such/python"):
+        # With forward slashes, as run.sh writes it: sh -x quotes a backslash path.
+        for py in (Path(sys.executable).as_posix(), "/no/such/python"):
             result = subprocess.run(
                 ["sh", "-x", str(script)],
                 env={"PATH": "/usr/bin:/bin", "PY": py},
@@ -288,7 +292,7 @@ class TestThePreparedTable:
 
     def test_a_table_that_no_longer_matches_its_types_is_refused(self, tmp_path: Path) -> None:
         data_utils.write_table(tmp_path, pd.DataFrame({"a": [1.0]}), {"source": "test"})
-        (tmp_path / data_utils.TABLE_FILE).write_text("b\n1\n")
+        (tmp_path / data_utils.TABLE_FILE).write_text("b\n1\n", encoding="utf-8")
         with pytest.raises(SystemExit):
             data_utils.load_table(tmp_path)
 
@@ -343,27 +347,26 @@ class TestCommentsBeforeTheHeader:
 
     def test_a_header_that_starts_with_a_hash_is_kept(self, tmp_path: Path) -> None:
         path = tmp_path / "data.csv"
-        path.write_text("#,name\n1,a\n2,b\n")
+        path.write_text("#,name\n1,a\n2,b\n", encoding="utf-8")
         df = data_utils.read_table(path)
         assert list(df.columns) == ["#", "name"]
         assert len(df) == 2
 
     def test_a_hash_inside_the_data_is_not_a_comment(self, tmp_path: Path) -> None:
         path = tmp_path / "data.csv"
-        path.write_text("id,colour\n1,#ff0000\n2,#00ff00\n")
+        path.write_text("id,colour\n1,#ff0000\n2,#00ff00\n", encoding="utf-8")
         assert data_utils.read_table(path)["colour"].tolist() == ["#ff0000", "#00ff00"]
 
     def test_the_profile_runs_and_says_so(self, tmp_path: Path) -> None:
         source = tmp_path / "data.csv"
-        source.write_text("# Source: export, v2\nid,price\n1,3.5\n2,4.0\n3,5.5\n")
+        source.write_text("# Source: export, v2\nid,price\n1,3.5\n2,4.0\n3,5.5\n", encoding="utf-8")
         script = DATA_SKILLS / "data-analysis" / "scripts" / "profile_data.py"
         result = run(script, "--data", str(source), "--out", str(tmp_path / "run"))
         assert result.returncode == 0, result.stderr
         assert "# Source: export, v2" in result.stdout
-        assert (
-            "comments before the header, were skipped"
-            in (tmp_path / "run" / "files" / "profile.md").read_text()
-        )
+        assert "comments before the header, were skipped" in (
+            tmp_path / "run" / "files" / "profile.md"
+        ).read_text(encoding="utf-8")
 
 
 class TestTheCleaning:
@@ -375,13 +378,14 @@ class TestTheCleaning:
             "001;02134;1.234,50;34;NYC\n"
             "002;02139;99,00;-1;New York\n"
             "002;02139;99,00;-1;New York\n"
-            "003;10001;5.000,00;151;Boston\n"
+            "003;10001;5.000,00;151;Boston\n",
+            encoding="utf-8",
         )
         return path
 
     def prepare(self, source: Path, spec: dict[str, object]) -> subprocess.CompletedProcess[str]:
         out = source.parent / "out"
-        (source.parent / "cleaning.json").write_text(json.dumps(spec))
+        (source.parent / "cleaning.json").write_text(json.dumps(spec), encoding="utf-8")
         return run(
             DATA_SKILLS / "prepare_table.py",
             "--data", str(source),
@@ -415,7 +419,7 @@ class TestTheCleaning:
         assert "exported twice" in removed["duplicates"]["what"]
         assert removed["exclude"]["affected"] == 1
         assert "impossible age" in removed["exclude"]["what"]
-        summary = (source.parent / "out" / "files" / "table.md").read_text()
+        summary = (source.parent / "out" / "files" / "table.md").read_text(encoding="utf-8")
         assert "exported twice" in summary and "impossible age" in summary
 
     @pytest.mark.parametrize(
@@ -468,7 +472,7 @@ class TestTheBacktestSize:
         script = DATA_SKILLS / "time-series-forecasting" / "scripts" / "forecast_split.py"
         result = run(script, "--series", str(series), *args, "--out", str(out))
         assert result.returncode == 0, result.stderr
-        meta = json.loads((out / "files" / "split.json").read_text())
+        meta = json.loads((out / "files" / "split.json").read_text(encoding="utf-8"))
         return {"n": len(meta["windows"]), "available": meta["windows_available"]}
 
     def test_a_share_of_the_available_windows_is_used(self, series) -> None:  # type: ignore[no-untyped-def]
@@ -562,7 +566,7 @@ class TestTheFeatures:
         self, source: Path, tmp_path: Path, spec: dict, *, future: bool = True
     ) -> subprocess.CompletedProcess[str]:
         spec_path = tmp_path / "features.json"
-        spec_path.write_text(json.dumps(spec))
+        spec_path.write_text(json.dumps(spec), encoding="utf-8")
         args = ["--data", str(source), "--time-col", "time", "--target", "cnt"]
         args += ["--freq", "D", "--aggregate", "sum", "--features", str(spec_path)]
         if future:
@@ -597,7 +601,9 @@ class TestTheFeatures:
         future = pd.read_csv(files / "future_features.csv")
         assert list(future.columns) == ["id", "period", "holiday"]  # known features only
         assert future["period"].iloc[0] == "2024-03-01"
-        assert json.loads((files / "series.json").read_text())["features"]["temp"] == {
+        assert json.loads((files / "series.json").read_text(encoding="utf-8"))["features"][
+            "temp"
+        ] == {
             "use": "lagged",
             "aggregate": "mean",
         }
@@ -705,7 +711,7 @@ class TestFeaturesForPreparedSeries:
         self, series: Path, tmp_path: Path, *extra: str
     ) -> subprocess.CompletedProcess[str]:
         spec = tmp_path / "features.json"
-        spec.write_text(json.dumps(self.SPEC))
+        spec.write_text(json.dumps(self.SPEC), encoding="utf-8")
         calendar = tmp_path / "calendar.csv"
         pd.DataFrame(
             {"time": pd.date_range("2024-03-01", periods=7, freq="D"), "holiday": 0}
@@ -725,7 +731,7 @@ class TestFeaturesForPreparedSeries:
     def test_the_columns_left_out_are_recorded_and_the_split_warns(
         self, analysis: Path, tmp_path: Path
     ) -> None:
-        meta = json.loads(analysis.with_name("series.json").read_text())
+        meta = json.loads(analysis.with_name("series.json").read_text(encoding="utf-8"))
         assert meta["unused_columns"] == ["holiday"]
         result = self.split(analysis, tmp_path / "forecast")
         assert result.returncode == 0, result.stderr
@@ -741,7 +747,7 @@ class TestFeaturesForPreparedSeries:
         before, after = pd.read_csv(analysis), pd.read_csv(files / "series.csv")
         assert list(after.columns) == ["id", "period", "y", "holiday"]
         pd.testing.assert_frame_equal(after[["id", "period", "y"]], before)
-        meta = json.loads((files / "series.json").read_text())
+        meta = json.loads((files / "series.json").read_text(encoding="utf-8"))
         assert meta["extends"] == str(analysis.resolve())
         assert meta["unused_columns"] == []
         assert (files / "future_features.csv").exists()

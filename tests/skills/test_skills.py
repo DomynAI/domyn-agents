@@ -877,7 +877,10 @@ class TestRequiredEnforcementOnTheTurnPath:
         assert [s.name for s in selection.index] == ["report"]
         assert contents == [], "an unavailable skill must not be expanded"
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 file regardless")
+    @pytest.mark.skipif(
+        os.name == "nt" or os.geteuid() == 0,
+        reason="mode 000 does not stop root, nor anyone on Windows",
+    )
     @pytest.mark.asyncio
     async def test_an_unreadable_required_skill_cannot_be_known_to_be_required(
         self, tmp_path: Path
@@ -1247,7 +1250,7 @@ agents:
     skills:
       source:
         type: local_dir
-        paths: ["{skills_dir}"]
+        paths: ["{skills_dir.as_posix()}"]
   - name: Orchestrator
     description: coordinator
     instruction: delegate

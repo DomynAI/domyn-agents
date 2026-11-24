@@ -22,8 +22,8 @@ def places(tmp_path: Path) -> tuple[Path, Path]:
     skills = tmp_path / "elsewhere" / "skills"
     (work / "src").mkdir(parents=True)
     (skills / "a-skill").mkdir(parents=True)
-    (skills / "a-skill" / "SKILL.md").write_text("body")
-    (work / "src" / "main.py").write_text("code")
+    (skills / "a-skill" / "SKILL.md").write_text("body", encoding="utf-8")
+    (work / "src" / "main.py").write_text("code", encoding="utf-8")
     return work, skills
 
 
@@ -70,7 +70,7 @@ class TestWhatIsReachable:
         one prefix to check against."""
         work, skills = places
         outside = tmp_path / "outside.txt"
-        outside.write_text("secret")
+        outside.write_text("secret", encoding="utf-8")
         (skills / "link.txt").symlink_to(outside)
 
         space = Workspace.at(work, also=[skills])
@@ -135,4 +135,4 @@ class TestWhatTheErrorAndTheDisplaySay:
         work, skills = places
         space = Workspace.at(work, also=[skills])
         shown = space.display(skills / "a-skill" / "SKILL.md")
-        assert shown == str(skills / "a-skill" / "SKILL.md")
+        assert shown == (skills / "a-skill" / "SKILL.md").as_posix()

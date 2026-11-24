@@ -56,6 +56,12 @@ TABLE_FORMAT_VERSION = 1
 COLUMN_TYPES = ("number", "integer", "boolean", "date", "string")
 
 
+def _is_link(path: Path) -> bool:
+    """A symbolic link, or a Windows junction, which Python reports as a plain folder
+    but which leads elsewhere just the same (and needs no privilege to make)."""
+    return path.is_symlink() or getattr(path, "is_junction", lambda: False)()
+
+
 def output_dir(out: Path) -> Path:
     """Where a script writes, for `--out <run folder>`: `<run folder>/files`, created.
 
@@ -72,7 +78,7 @@ def output_dir(out: Path) -> Path:
     followed like any other.
     """
     named = out if out.name == FILES_DIR else out / FILES_DIR
-    if named.is_symlink():
+    if _is_link(named):
         sys.exit(
             f"{named} is a link, and the scripts write only into a folder of their own: "
             "use a new --out folder."
@@ -82,9 +88,9 @@ def output_dir(out: Path) -> Path:
     files.mkdir(parents=True, exist_ok=True)
     fonts = files / FONTS_DIR
     entries = list(files.iterdir())
-    if fonts.is_dir() and not fonts.is_symlink():
+    if fonts.is_dir() and not _is_link(fonts):
         entries += list(fonts.iterdir())
-    linked = [p for p in entries if p.is_symlink() or (p.is_file() and p.stat().st_nlink > 1)]
+    linked = [p for p in entries if _is_link(p) or (p.is_file() and p.stat().st_nlink > 1)]
     if linked:
         sys.exit(
             f"{files} holds links, which the scripts would write through to files elsewhere: "
@@ -345,7 +351,7 @@ def load_table(path: Path) -> tuple[pd.DataFrame, dict[str, Any]]:
             f"{path} (with {TABLE_META} next to it) not found. Prepare the data first with "
             "prepare_table.py, and pass its table.csv."
         )
-    meta = json.loads(meta_path.read_text())
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
     types: dict[str, str] = meta["columns"]
     raw = pd.read_csv(path, dtype=str, keep_default_na=False, na_values=[""], encoding="utf-8")
     if list(raw.columns) != list(types):
@@ -398,7 +404,8 @@ def safe_name(text: str) -> str:
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     """Write JSON, turning numpy scalars into plain numbers."""
     path.write_text(
-        json.dumps(payload, indent=2, default=lambda o: o.item() if hasattr(o, "item") else str(o))
+        json.dumps(payload, indent=2, default=lambda o: o.item() if hasattr(o, "item") else str(o)),
+        encoding="utf-8",
     )
 
 
@@ -431,9 +438,10 @@ def _run_header(python: str) -> list[str]:
     The interpreter that ran the scripts is the default, because a bare `python` is
     whichever one comes first on PATH, which may not have the packages.
     `PY=/path/to/python sh run.sh` picks another one, and a default that no longer exists
-    (another machine, a deleted environment) falls back to `python`.
+    (another machine, a deleted environment) falls back to `python`. Written with
+    forward slashes, Windows too, where Git Bash runs `C:/…/python.exe` as is.
     """
-    quoted = re.sub(r'(["$`\\])', r"\\\1", python)
+    quoted = re.sub(r'(["$`\\])', r"\\\1", Path(python).as_posix())
     return [
         "#!/bin/sh",
         'cd "$(dirname "$0")"',
@@ -487,7 +495,7 @@ def record_run(out: Path, script: Path, order: Sequence[str], modules: Iterable[
     header = _run_header(sys.executable)
     commands: dict[str, str] = {}
     others: list[str] = []
-    for line in run.read_text().splitlines() if run.exists() else []:
+    for line in run.read_text(encoding="utf-8").splitlines() if run.exists() else []:
         name = _run_script(line)
         if name is not None:
             commands[name] = _BARE_PYTHON.sub(r'\1"$PY"', line, count=1)
@@ -500,4 +508,4 @@ def record_run(out: Path, script: Path, order: Sequence[str], modules: Iterable[
         return next((i for i, step in enumerate(order) if step in name), len(order))
 
     ordered = [commands[name] for name in sorted(commands, key=rank)]
-    run.write_text("\n".join([*header, *others, *ordered]) + "\n")
+    run.write_text("\n".join([*header, *others, *ordered]) + "\n", encoding="utf-8")

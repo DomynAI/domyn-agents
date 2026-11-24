@@ -8,6 +8,7 @@ running commands — is checked without Docker.
 
 import asyncio
 import io
+import os
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -277,7 +278,11 @@ class TestStartingWithAutoBackend:
                 started.append(True)
                 return 0
 
+        from domyn.agents.tools.builtin.backends.docker import backend as docker_backend
+
         monkeypatch.setattr(run_command, "Repl", _Repl)
+        # Docker as missing, not as refused, which it is first on Windows.
+        monkeypatch.setattr(docker_backend, "_ON_WINDOWS", False)
         backend = AutoBackend(
             Workspace.at(tmp_path), docker=DockerBackendOptions(docker_binary="/no/such/docker")
         )
@@ -291,6 +296,7 @@ class TestStartingWithAutoBackend:
         assert "tools: this machine" in flat
 
     @pytest.mark.asyncio
+    @pytest.mark.skipif(os.name == "nt", reason="no Docker backend on Windows yet")
     async def test_a_container_on_the_home_folder_warns(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

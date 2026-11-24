@@ -18,7 +18,7 @@ The installer downloads a build of the `domyn` command that carries its own Pyth
 curl -fsSL https://github.com/domynai/domyn-agents/releases/latest/download/install.sh | sh
 ```
 
-Builds exist for macOS on Apple Silicon and for Linux on x86-64 and ARM64, with glibc 2.33 or later (Ubuntu 22.04, Debian 12, RHEL 9 or newer) or with musl (Alpine); the installer picks the one for your system. Intel Macs are not supported.
+Builds exist for macOS on Apple Silicon and for Linux on x86-64 and ARM64, with glibc 2.33 or later (Ubuntu 22.04, Debian 12, RHEL 9 or newer) or with musl (Alpine); the installer picks the one for your system. Intel Macs are not supported. For Windows, see [below](#on-windows).
 
 The installer checks the download against its published checksum, puts the runtime in `~/.local/share/domyn` and the `domyn` command in `~/.local/bin`, and adds that directory to your `PATH` in your shell profile if it is not there already. Open a new terminal afterwards, or reload the profile it names. Running it again replaces the installed version.
 
@@ -31,6 +31,20 @@ The installer checks the download against its published checksum, puts the runti
 Set them for the `sh` that runs the script: `curl -fsSL …/install.sh | DOMYN_VERSION=1.5.0 sh`.
 
 To uninstall, delete the two paths: `rm -rf ~/.local/share/domyn ~/.local/bin/domyn`. Your configuration and conversations in `~/.domyn` stay where they are.
+
+#### On Windows
+
+In PowerShell:
+
+```powershell
+irm https://github.com/domynai/domyn-agents/releases/latest/download/install.ps1 | iex
+```
+
+Builds exist for 64-bit Windows on x64 and on ARM64; the installer picks the one for your machine, and on Windows on ARM falls back to the x64 one, which runs under Windows' emulation, for a release that has no ARM64 build. It works the same way as `install.sh`: it checks the checksum, puts the runtime in `%LOCALAPPDATA%\Programs\domyn` and `domyn.exe` in `%USERPROFILE%\.local\bin`, and adds that folder to your user `PATH`. The window you ran it in can use `domyn` straight away; other terminals see it once they are opened again. It takes the same variables, set in PowerShell before running it: `$env:DOMYN_VERSION = "1.5.0"`.
+
+domyn runs commands in Git Bash, never in `cmd.exe`, so it needs [Git for Windows](https://git-scm.com/download/win) (`winget install Git.Git`). The installer says when it is missing; without it domyn starts, and each command the agent runs says what to install.
+
+To uninstall: `Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Programs\domyn", "$env:USERPROFILE\.local\bin\domyn.exe"`. Your configuration in `%USERPROFILE%\.domyn` stays where it is.
 
 The standalone build is the CLI only, with the `audio` extra included, so [`/voice`](../cli/sessions.md#talking-instead-of-typing) works without installing anything else. The musl build is the exception: onnxruntime, which the extra needs, is not built for musl, so that build leaves the extra out and has no `/voice`. To use Domyn Agents as a library, [add it to a project](#add-it-to-a-project).
 
@@ -46,6 +60,12 @@ To install the development version from GitHub instead:
 
 ```bash
 uv tool install "domyn[cli] @ git+https://github.com/domynai/domyn-agents"
+```
+
+On Windows on ARM, give uv an x64 Python: some dependencies publish no ARM64 build for Windows, and building them needs Rust and a C++ compiler. The x64 one runs under Windows' emulation:
+
+```powershell
+uv tool install --python cpython-3.12-windows-x86_64-none "domyn[cli]"
 ```
 
 Whichever way you installed it, check that it works:

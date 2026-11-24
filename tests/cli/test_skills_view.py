@@ -51,7 +51,9 @@ def _skill(
 ) -> Path:
     path = directory / f"{name}.md" if flat else directory / name / "SKILL.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"---\nname: {name}\ndescription: {description}\n{extra}---\n{body}")
+    path.write_text(
+        f"---\nname: {name}\ndescription: {description}\n{extra}---\n{body}", encoding="utf-8"
+    )
     return path
 
 
@@ -89,6 +91,7 @@ def layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]
     project.mkdir(parents=True)
     personal.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # HOME on Windows
     monkeypatch.chdir(work)
     return project, personal
 
@@ -102,8 +105,12 @@ class TestTheListIsGroupedByDirectory:
 
         out = await _render(_runtime(project, personal), width=400)
 
-        assert out.index(str(project)) < out.index("commit-message") < out.index(str(personal))
-        assert out.index(str(personal)) < out.index("journal")
+        assert (
+            out.index(project.as_posix())
+            < out.index("commit-message")
+            < out.index(personal.as_posix())
+        )
+        assert out.index(personal.as_posix()) < out.index("journal")
 
     @pytest.mark.asyncio
     async def test_directories_are_shown_as_absolute_paths(self, layout: tuple[Path, Path]) -> None:
@@ -113,8 +120,8 @@ class TestTheListIsGroupedByDirectory:
 
         out = await _render(_runtime(project, personal), width=400)
 
-        assert f"  {project}\n" in out
-        assert f"  {personal}\n" in out
+        assert f"  {project.as_posix()}\n" in out
+        assert f"  {personal.as_posix()}\n" in out
         assert "./skills" not in out
         assert "~/" not in out
 
@@ -155,7 +162,7 @@ class TestTheListIsGroupedByDirectory:
 
         out = await _render(_runtime(project, personal), width=400)
 
-        assert f"also searched: {personal} (none found)" in out
+        assert f"also searched: {personal.as_posix()} (none found)" in out
 
 
 class TestTheListLayout:
@@ -221,8 +228,8 @@ class TestTheListLayout:
     ) -> None:
         project, _ = layout
         _skill(project, "report", extra="external_files:\n  - a.py\n  - b.py\n")
-        (project / "report" / "a.py").write_text("x")
-        (project / "report" / "b.py").write_text("x")
+        (project / "report" / "a.py").write_text("x", encoding="utf-8")
+        (project / "report" / "b.py").write_text("x", encoding="utf-8")
 
         out = await _render(_runtime(project), "report")
 
@@ -319,7 +326,7 @@ class TestTheDetailView:
         assert "commit-message" in header
         assert "v1.0" in header
         assert "required" in header
-        assert str(project / "commit-message" / "SKILL.md") in out
+        assert (project / "commit-message" / "SKILL.md").as_posix() in out
         assert "Format · Checklist" in out
         assert "env HOME" in out
 
