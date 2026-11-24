@@ -498,7 +498,8 @@ class BaseLLMProvider(BaseModel, ABC):
     ``send_reasoning`` on, the context manager puts the model's whole reasoning on
     the assistant messages of every turn, and the provider sends it
     under that key (`LLMMessage.to_dict(reasoning_key=...)`); otherwise those
-    messages carry the short thoughts as their content."""
+    messages carry only their calls, whose `reasoning` argument holds the short
+    thought."""
 
     send_reasoning: bool = Field(
         default=True,
@@ -506,7 +507,8 @@ class BaseLLMProvider(BaseModel, ABC):
             "Send the model's reasoning back to it with its assistant messages, on a "
             "provider whose API takes it (`reasoning_content_key`). Off for a model "
             "that ignores it (a vLLM chat template that does not read "
-            "`reasoning_content`), which then gets the short thoughts instead."
+            "`reasoning_content`), which then sees only the short thought in each "
+            "call's `reasoning` argument."
         ),
     )
 

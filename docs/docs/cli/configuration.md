@@ -87,7 +87,7 @@ The settings you are most likely to change:
 | Setting | What it does |
 |---|---|
 | `context_window` | The model's context window, in tokens. Left out (`auto` in the wizard), the session asks the provider at start and assumes 150,000 when it cannot answer; `/context` shows the window it got. Set it when the provider reports none, or a wrong one: the session compacts the conversation based on it. |
-| `send_reasoning` | On the provider, `true` unless written. `false` stops the model's reasoning being sent back to it, for a model that ignores it (a vLLM chat template that does not read `reasoning_content`): it then gets the short thoughts instead. Kept when `domyn setup` or `/model` rewrites the file. |
+| `send_reasoning` | On the provider, `true` unless written. `false` stops the model's reasoning being sent back to it, for a model that ignores it (a vLLM chat template that does not read `reasoning_content`): it then sees only the short thought in each call's `reasoning` argument. Kept when `domyn setup` or `/model` rewrites the file. |
 | `vision` | On the provider, `true` when the model reads images, which gives the agent `read_image` with the `files` tools. Written by `domyn setup` and `/model` from the image they send the model, and replaced by that check every time they run: set it by hand only for a model you changed by hand, and expect the next `domyn setup` or `/model` to decide it again. |
 | `stream` | `true` prints the answer as it is generated, `false` when it is complete. |
 | `bundles` | The [built-in tools](tools-and-approvals.md): `files`, `shell` and `browser`. Remove one to take those tools away, or leave the list empty for an agent that only talks. |

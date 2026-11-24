@@ -538,10 +538,10 @@ def _extract_thought(
     Priority:
     1. ``reasoning_content`` — explicit reasoning field (DeepSeek R1, Kimi, etc.)
     2. First ``thinking`` block from ``thinking_blocks`` — Anthropic extended thinking
-    3. ``content`` — plain text preamble emitted before tool calls (solicited via
-       the system prompt instruction in ``ToolUseWithThoughtContextManager``).
-       Only treated as thought when tool_calls are also present — otherwise it
-       is the response to the user.
+    3. ``content`` — plain text the model wrote beside its tool calls, which the
+       system prompt instruction in ``ToolUseWithThoughtContextManager`` asks it
+       not to do. Only treated as thought when tool_calls are also present —
+       otherwise it is the response to the user.
     """
     # Reading the "reasoning" field requires parsing the tool-call arguments.
     # Malformed arguments must NOT abort thought extraction — fall through to the
