@@ -180,6 +180,10 @@ FUNCTION_RESERVED_PARAMS = {
     "run_config",
     "state",
     "conversation_id",
+    # The call to a sub-agent the tool runs in: its interaction id, empty for the
+    # agent the conversation is addressed to. What a tool keeps per agent call
+    # rather than per conversation (the browser's page) is keyed by it.
+    "agent_call_id",
     # Per-call metadata always passed through (REST headers / MCP _meta),
     # unlike run_config it is never gated by VisibilityScope.
     "call_metadata",
@@ -256,6 +260,13 @@ class BaseTool(BaseModel):
         description="Seconds this tool may run before the turn gives up on it. None takes the "
         "runner's ceiling, 0 removes it. On a streaming tool it bounds the wait for each "
         "chunk, not the whole call.",
+    )
+    concurrency_key: str | None = Field(
+        default=None,
+        description="Calls of one model response to tools with the same key run one after "
+        "the other, in the order they were made, while the other calls of the response "
+        "still run at the same time. For tools acting on state the next call reads: the "
+        "browser's tools share `browser`, since they act on one page. None: no ordering.",
     )
 
     # auto-register sub types

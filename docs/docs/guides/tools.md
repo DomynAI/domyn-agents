@@ -248,6 +248,15 @@ A model can ask for several tools in one answer: read three files, query two ser
 
 A call to a tool that requires approval runs alone and in order: everything the model asked for before it has finished, and nothing after it has started. Those are the calls another may depend on, such as writing a file and then running the tests, and an approval is asked about a call that has not begun. While the approval is pending, the calls after it wait; they run once it is answered, before the model is asked again. See [Tool approvals](approvals.md#several-calls-in-one-answer).
 
+Tools that act on something the next call reads, such as a browser's page, can be kept in order without an approval by sharing a `concurrency_key`: calls of one answer to tools with the same key run one after the other, in the order the model made them, while the rest of the answer still runs alongside them. The browser tools share `browser`:
+
+```python
+FunctionTool(func=insert_row, concurrency_key="db")
+FunctionTool(func=read_table, concurrency_key="db")
+```
+
+A call waiting for its turn holds none of the `max_parallel_tool_calls` places.
+
 It is on by default, and an option of the planner strategy, so each agent decides. Turn it off and every call runs after the one before it, in order:
 
 ```python
