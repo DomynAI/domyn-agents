@@ -19,6 +19,7 @@ const sidebars = {
 
     section('Using the CLI'),
     'cli/sessions',
+    'cli/run-headless',
     'cli/tools-and-approvals',
     'cli/configuration',
 

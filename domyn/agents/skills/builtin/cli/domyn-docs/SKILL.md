@@ -37,6 +37,7 @@ other files in this directory.
 ## Using the CLI
 
 - `pages/cli/sessions.md`: **Sessions and commands**. Chat with an agent from the terminal with domyn run: starting a session, working in it, its commands, conversations and the context window
+- `pages/cli/run-headless.md`: **Unattended tasks**. Hand the agent one task with domyn run-headless: it carries it out with nobody to answer and no follow-up, needs no setup, and exits when it is done
 - `pages/cli/tools-and-approvals.md`: **Files, commands and approvals**. The file, command and browser tools of the CLI agent, the workspace they are confined to, and how you approve what the agent does
 - `pages/cli/configuration.md`: **Configuring the CLI**. The CLI's configuration file, the settings you are most likely to change, and what lives in ~/.domyn
 
