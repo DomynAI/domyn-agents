@@ -75,6 +75,9 @@ To build your own agents, in Python or in YAML, see the [documentation](https://
 - **[Standing instructions](docs/docs/guides/standing-instructions.md)**: `SOUL.md` and `AGENTS.md` files that shape every conversation.
 - **[Long conversations](docs/docs/guides/context-compaction.md)**: the conversation is compacted before it outgrows the model's context window.
 - **[Hooks](docs/docs/guides/hooks.md)**: run your code before and after agents and tools, to log, validate or change what they do.
+- **[Persistent memory](docs/docs/guides/conversations-and-memory.md)**: agents remember facts across conversations, in a markdown file you can edit.
+- **[Vision](docs/docs/cli/tools-and-approvals.md)**: with a model that supports vision, the agent can read images from the workspace or attached to a message.
+- **[Decision models](docs/docs/guides/decision-models.md)**: a small model answers typed questions with probabilities, for example to pick skills or judge approvals. Off unless configured.
 
 ## Documentation
 
