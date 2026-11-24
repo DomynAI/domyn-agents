@@ -693,6 +693,18 @@ async def _until(condition: Callable[[], bool], timeout: float = 2.0) -> None:
         await asyncio.sleep(0.01)
 
 
+async def _type(session: Any, keys: Any, text: str) -> None:
+    """Type ``text`` as a person does, one key per read of the terminal.
+
+    Each key is waited for before the next is sent: keys sent faster than the
+    editor reads them, on a busy machine, arrive in one read, which is how a
+    dropped path is told from a typed one."""
+    for char in text:
+        expected = session.draft() + char
+        keys.send_text(char)
+        await _until(lambda expected=expected: session.draft() == expected)
+
+
 class TestCtrlC:
     """At the prompt Ctrl-C clears what is typed and a second one straight after
     quits; while a turn runs it stops the turn. Every keystroke goes through
@@ -1153,9 +1165,7 @@ class TestAttachingImagesInTheEditor:
         with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
             session.attachments = self._attachments(tmp_path)
             read = asyncio.ensure_future(session.ask())
-            for char in "see ":
-                keys.send_text(char)
-                await asyncio.sleep(0.01)
+            await _type(session, keys, "see ")
             keys.send_text(dragged)
             await _until(lambda: session.draft() == "see [Image #1] ")
             read.cancel()
@@ -1170,9 +1180,6 @@ class TestAttachingImagesInTheEditor:
         with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
             session.attachments = self._attachments(tmp_path)
             read = asyncio.ensure_future(session.ask())
-            for char in typed:
-                keys.send_text(char)
-                await asyncio.sleep(0.005)
-            await _until(lambda: session.draft() == typed)
+            await _type(session, keys, typed)
             keys.send_text("\r")
             assert await read == typed
