@@ -57,6 +57,7 @@ from domyn.agents.tools.builtin import (
     VISION_TOOL_NAMES,
     BrowserOptions,
     DockerBackendOptions,
+    SshBackendOptions,
 )
 
 # `DOMYN_PROJECT_DIR`, defined with the tools, which read it: always set by `use_project`, to
@@ -277,8 +278,8 @@ class AgentConfig(BaseModel):
     """Where `run_command` runs: ``auto`` (a Docker container when Docker can be
     used, else this machine, with a warning), ``docker`` (a container per
     conversation that can write only the workspace, or the session does not start;
-    see ``docker`` below) or ``local`` (this machine, no isolation). Visible in
-    `/config` rather than implied."""
+    see ``docker`` below), ``local`` (this machine, no isolation) or ``ssh`` (a
+    server, see ``ssh`` below). Visible in `/config` rather than implied."""
 
     isolate_environment: bool = True
     """Give each conversation its own virtualenv under
@@ -311,6 +312,10 @@ class AgentConfig(BaseModel):
     docker: DockerBackendOptions = Field(default_factory=DockerBackendOptions)
     """How the Docker backend runs. Only read when ``backend`` is not ``local``, and
     kept when it is, so switching back and forth does not lose an allowlist."""
+
+    ssh: SshBackendOptions = Field(default_factory=SshBackendOptions)
+    """The server and the folder on it, for ``backend: ssh``. Kept whatever the
+    backend, like ``docker``."""
 
     stream: bool = True
     """Print the answer as it is generated rather than when it is finished.
@@ -1287,6 +1292,9 @@ def configuration_v1_dict_from(
         docker = agent.docker.model_dump(exclude_defaults=True)
         if docker:
             config["tool_bundles"][0]["docker"] = docker
+        ssh = agent.ssh.model_dump(exclude_defaults=True)
+        if ssh:
+            config["tool_bundles"][0]["ssh"] = ssh
         agent_dict["tool_bundles"] = [CLI_DEFAULT_TOOL_BUNDLE_NAME]
 
     kept = _keep_unowned(config, existing)
@@ -1457,6 +1465,19 @@ def _docker_options(raw: Any) -> DockerBackendOptions:
         return DockerBackendOptions()
 
 
+def _ssh_options(raw: Any) -> SshBackendOptions:
+    """The bundle's ``ssh`` block, or the defaults when it cannot be read. Lenient like
+    ``_docker_options``: the session then says the server is missing when it starts."""
+    if not raw:
+        return SshBackendOptions()
+    try:
+        return SshBackendOptions.model_validate(raw)
+    except ValidationError as exc:
+        get_logger().warning(f"ignoring an invalid ssh block in the config: {type(exc).__name__}")
+        get_logger().debug(f"ssh block detail: {exc}")
+        return SshBackendOptions()
+
+
 def _browser_options(raw: Any) -> BrowserOptions:
     """The bundle's ``browser`` block, or the defaults when it cannot be read.
 
@@ -1529,6 +1550,7 @@ def current_settings_from(
         allowed_env=list(bundle.get("allowed_env") or []) if bundle else default_agent.allowed_env,
         browser=_browser_options(bundle.get("browser") if bundle else None),
         docker=_docker_options(bundle.get("docker") if bundle else None),
+        ssh=_ssh_options(bundle.get("ssh") if bundle else None),
         stream=agent_dict.get("stream", default_agent.stream),
         skills=agent_dict.get("skills", default_agent.skills),
         standing_instructions=agent_dict.get(
@@ -1889,6 +1911,14 @@ def _docker_fields(options: DockerBackendOptions) -> list[tuple[str, str]]:
     ]
 
 
+def _ssh_fields(options: SshBackendOptions) -> list[tuple[str, str]]:
+    return [
+        ("ssh host", options.host or "(not set)"),
+        ("ssh workspace", options.workspace or "(not set)"),
+        ("ssh browser", options.browser),
+    ]
+
+
 def _browser_fields(options: BrowserOptions) -> list[tuple[str, str]]:
     return [
         ("browser engine", options.engine),
@@ -1978,8 +2008,11 @@ def _tool_bundle_items(raw: dict[str, Any]) -> list[ConfigItem]:
             ("isolate_environment", str(b.get("isolate_environment", True))),
             ("allowed_env", ", ".join(b.get("allowed_env") or []) or "(none)"),
         ]
-        if str(b.get("backend", "auto")) != "local":
+        backend = str(b.get("backend", "auto"))
+        if backend in ("auto", "docker"):
             fields += _docker_fields(_docker_options(b.get("docker")))
+        if backend == "ssh":
+            fields += _ssh_fields(_ssh_options(b.get("ssh")))
         if "browser" in (b.get("bundles") or []):
             fields += _browser_fields(_browser_options(b.get("browser")))
         items.append(ConfigItem(name=str(b.get("name", "?")), fields=fields))

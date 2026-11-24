@@ -14,6 +14,7 @@ from domyn.agents.tools.builtin.backends.base import (
 )
 from domyn.agents.tools.builtin.backends.docker import DockerBackend, DockerBackendOptions
 from domyn.agents.tools.builtin.backends.local import GitBashBackend, LocalBackend
+from domyn.agents.tools.builtin.backends.ssh import SshBackend, SshBackendOptions
 
 __all__ = [
     "BACKEND_NAMES",
@@ -25,6 +26,8 @@ __all__ = [
     "DockerBackendOptions",
     "GitBashBackend",
     "LocalBackend",
+    "SshBackend",
+    "SshBackendOptions",
     "ToolHost",
     "build_backend",
 ]

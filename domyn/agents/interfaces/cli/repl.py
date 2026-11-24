@@ -108,7 +108,9 @@ from domyn.agents.runner import PushResult, Runner
 from domyn.agents.skills import LocalDirSkillSource, SkillNotFoundError, SkillsRuntime
 from domyn.agents.skills.integration import attach_skills
 from domyn.agents.tools.builtin.backends.docker import DockerBackend
+from domyn.agents.tools.builtin.backends.ssh import SshBackend
 from domyn.agents.tools.builtin.session import attachments_dir, default_state_dir, state_base
+from domyn.agents.tools.builtin.workspace import Workspace
 
 if TYPE_CHECKING:
     from domyn.agents.conversation_manager import ConversationInfo
@@ -1806,6 +1808,16 @@ class Repl:
             if not any(getattr(tool, "name", None) == "read_image" for tool in built.tools):
                 continue
             root = built.workspace.root
+            if isinstance(built.backend, SshBackend):
+                # The workspace is on the server and the attachments here: every image
+                # is copied into the conversation's folder, which `read_image` reads here.
+                state_dir = default_state_dir()
+                folder = attachments_dir(root, state_dir, self._state.conversation_id)
+                return AttachmentContext(
+                    state=state_base(root, state_dir),
+                    folder=folder,
+                    workspace=Workspace.at(folder),
+                )
             state_dir = (
                 built.backend.state_dir if built.backend is not None else default_state_dir()
             )

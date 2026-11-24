@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from PIL import ExifTags, Image, ImageOps, UnidentifiedImageError
 
 from domyn.agents.logger import get_logger
+from domyn.agents.tools.builtin.disk import LOCAL_DISK, Disk, LocalDisk
 from domyn.agents.tools.builtin.workspace import Workspace, WorkspaceError
 
 if TYPE_CHECKING:
@@ -37,6 +38,7 @@ from domyn.agents.tools.builtin.files import (
     TOOL_BODY_SECONDS,
     answer_of,
     host_path,
+    on_this_machine,
     request_text,
 )
 
@@ -70,26 +72,28 @@ class ImageError(WorkspaceError):
     container, it comes back as a refusal with its message unchanged (``files.serve``)."""
 
 
-def load_image(workspace: Workspace, path: str) -> tuple[bytes, str]:
+def load_image(workspace: Workspace, path: str, disk: Disk = LOCAL_DISK) -> tuple[bytes, str]:
     """The image at ``path`` as it goes to the provider: its bytes and their media type.
 
     Synchronous: decoding is the slow part, so it runs in a thread here, or in the process
     the tool host starts in a container (``files.run_file_operation``).
     """
-    resolved = workspace.resolve(path, must_exist=True)
-    if resolved.is_dir():
+    resolved = disk.resolve(workspace, path, must_exist=True)
+    if disk.is_dir(resolved):
         raise WorkspaceError(f"'{path}' is a directory. Use list_dir for that.")
+    # Read once from another machine; here, opened by its path as it always was.
+    held = None if isinstance(disk, LocalDisk) else disk.read_bytes(resolved)
     try:
-        with Image.open(resolved) as image:
+        with Image.open(resolved if held is None else io.BytesIO(held)) as image:
             media_type = _SENT_AS_IS.get(image.format or "")
             upright = image.getexif().get(ExifTags.Base.Orientation, 1) == 1
             if (
                 media_type
                 and upright
                 and max(image.size) <= MAX_IMAGE_EDGE
-                and resolved.stat().st_size <= MAX_SENT_BYTES
+                and disk.size(resolved) <= MAX_SENT_BYTES
             ):
-                return resolved.read_bytes(), media_type
+                return (held if held is not None else disk.read_bytes(resolved)), media_type
             trasposed_image = ImageOps.exif_transpose(image)
             trasposed_image.thumbnail((MAX_IMAGE_EDGE, MAX_IMAGE_EDGE))
             # JPEG has no transparency, and a transparent area converted as it is turns
@@ -143,6 +147,7 @@ def image_tools(
             # Where an "auto" backend decides between Docker and this machine
             await backend.start()
         where = backend.tool_host if backend is not None else None
+        remote = backend.file_disk() if backend is not None else None
         if (backend is None) or (where is None):  # Local execution
             # The images the user attached to this conversation are in its state
             # folder, which is no root of the workspace: they are added for this call
@@ -158,12 +163,24 @@ def image_tools(
                     state_base,
                 )
 
-                state_dir = backend.state_dir if backend is not None else default_state_dir()
+                # The attachments are on this machine whatever the backend: with the
+                # files on another, its state folder is there, not here.
+                state_dir = (
+                    backend.state_dir
+                    if backend is not None and remote is None
+                    else default_state_dir()
+                )
                 attached = attachments_dir(workspace.root, state_dir, conversation_id)
                 start = state_base(workspace.root, state_dir)
                 if attached.is_dir() and linked_below(start, attached) is None:
                     reach = Workspace.at(workspace.root, also=(*workspace.extra_roots, attached))
-            image, media_type = await asyncio.to_thread(load_image, workspace=reach, path=path)
+            if remote is not None and not on_this_machine(path, reach):
+                space, disk = remote
+                image, media_type = await asyncio.to_thread(
+                    load_image, workspace=space, path=path, disk=disk
+                )
+            else:
+                image, media_type = await asyncio.to_thread(load_image, workspace=reach, path=path)
         else:  # Remote execution
             remote_path = str(host_path(path, workspace))
             result = await backend.run(

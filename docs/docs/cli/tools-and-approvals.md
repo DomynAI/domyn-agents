@@ -52,13 +52,14 @@ A command detached by the shell itself, with `&`, `disown` or `setsid -f`, gets 
 
 By default (`backend: auto`), the agent still runs in your terminal, and so do its approvals. What the agent's tools do moves into a Docker container that can write nothing of yours except the workspace: the commands it runs, its file tools and its browser. A file a command downloads is a file `read_file` reads, and a path a skill names means the same thing to all of them. This needs Docker (or Podman, with `docker_binary`) running on your machine.
 
-If Docker is not installed or not running, or its image cannot be pulled, `domyn run` still starts, warns you, and runs everything on your machine instead. The line under the banner says which one you got (`tools: docker` or `tools: this machine`). Start Docker and run `domyn run` again to use the container. Three values of `backend` say what you want:
+If Docker is not installed or not running, or its image cannot be pulled, `domyn run` still starts, warns you, and runs everything on your machine instead. The line under the banner says which one you got (`tools: docker` or `tools: this machine`). Start Docker and run `domyn run` again to use the container. The value of `backend` says what you want:
 
 | Value | Meaning |
 |---|---|
 | `auto` | A container when Docker works, this machine, with a warning, when it does not |
 | `docker` | Always a container: `domyn run` does not start without Docker |
 | `local` | Always this machine, with no warning |
+| `ssh` | A server you reach with `ssh`: see [Running the tools on a server](#running-the-tools-on-a-server) |
 
 If Docker stops during a session, a command fails with a message; the session does not switch to your machine half way, because the files and packages of the conversation are in the container. Restart `domyn run` to choose again.
 
@@ -138,6 +139,36 @@ How it behaves:
 - **`domyn` runs in the container, with a history of its own.** A command the agent starts, such as `domyn run "ciao"`, finds your `config.yaml` (read-only) and keeps its conversations in an empty folder that belongs to the container's conversation, under `conversations/<conversation_id>/domyn-home/`; your real history, credentials and approvals are not there. It has no API key unless you give it one: put it in a `.env` in the project folder (domyn reads it from the working directory) or list its name under `allowed_env`. Either way the agent in the container can read it. Inside the container `domyn` runs its own tools in that container (`backend` is `local` there, without the Docker warning), since it is already the boundary. A model on your own machine (`localhost`, a private address) is refused by the network, as for every command.
 - **The browser is in the container too**, with its own Chromium, so pages render there and not on your machine. Its network is the same `allowed_network`.
 - **Another image.** To try an image a maintainer pushed under a tag, without editing your configuration, set the environment variable `DOMYN_BACKEND_IMAGE_TAG` to that tag (`my-test`); it replaces the image of your release, and is pulled on every start so a tag pushed again is not served from an old copy. It works from a `.env` file too. **Your own image**: set `docker.image`, which wins over the variable. It needs `bash`, `timeout` and `ps`, and for the file and browser tools a `domyn` at `/opt/domyn` and agent-browser: start from `docker/backend.Dockerfile` in the repository.
+
+### Running the tools on a server
+
+With `backend: ssh` the agent, the model and the approvals stay in your terminal, and the tools work on a server you reach with `ssh`: commands run there, and the file tools read and write its files. Nothing is installed on the server.
+
+```yaml
+tool_bundles:
+- name: cli_tools
+  bundles:
+  - files
+  - shell
+  backend: ssh
+  ssh:
+    host: gpu-box              # a Host of ~/.ssh/config, `name` or `user@name`
+    workspace: /home/me/project
+```
+
+`host` goes to your own `ssh` as it is, so everything `~/.ssh/config` says about it applies (user, port, key, jump host). `user`, `port`, `identity_file` and `config_file` (another configuration file, `ssh -F`) are there for a server the file does not name. `ssh` must connect with no question asked: a key or an agent, and a host key you already accepted. A password or an unknown host key stops it, since nobody is there to answer; run `ssh gpu-box true` once in your terminal first. `domyn run` connects before the first prompt and says what is wrong if it cannot, and the line under the banner says `tools: ssh gpu-box`.
+
+What runs where:
+
+- **Commands** run on the server, in `workspace`, as your user there, with its environment. A command's time limit is enforced on the server.
+- **The file tools** work on the server's files and may not leave `workspace` there. Each operation is a short command (`find`, `realpath`, `grep`, `cat`); documents and images are converted on your machine.
+- **Skills** are read on your machine, as always. Their folders are copied to the server, and copied again when a file changes, so a command that runs a skill's script finds it: the agent writes the paths it was shown and they are rewritten to the copy.
+- **The browser** runs on your machine. Set `ssh: browser: remote` to run it on the server, which then needs agent-browser and Chrome.
+- **Approvals** are the same as on your machine.
+
+Nothing isolates the commands: they can do what your user on the server can. The logs of background commands and the copy of the skills are kept on the server in `~/.cache/domyn/<id>/`, outside the workspace (`ssh: state_dir` to put them elsewhere).
+
+The server needs a login shell of the `sh` family (`bash`, `zsh`, `sh`) that prints nothing in a non-interactive session, and GNU `bash`, `timeout`, `find`, `realpath`, `grep`, `xargs` and `tar`, plus `setsid`, `ps` and `pkill` for background commands: any Linux distribution has them. The session names any that are missing when it starts. There is no virtual environment per conversation: what the agent installs with `pip` goes where `pip` puts it for your user on the server.
 
 ### Browsing
 
