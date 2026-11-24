@@ -10,6 +10,7 @@ as the tool's result, and that the tool exists only for a model that reads image
 import base64
 import io
 import json
+import os
 from pathlib import Path, PurePosixPath
 from typing import Any
 from unittest.mock import MagicMock
@@ -112,7 +113,15 @@ class _Elsewhere(CommandBackend):
             return self.fail
         request = json.loads(stdin or "{}")
         self.requests.append((conversation_id, request))
-        return CommandResult(exit_code=0, stdout=json.dumps(serve(request)) + "\n", stderr="")
+        served = dict(request)
+        if os.name == "nt":
+            # Served here, `/` would be the current drive alone, while where the
+            # bodies run (a Linux container) it is the whole machine: on a runner
+            # the checkout is on D: and the temporary folders on C:.
+            named = [request["root"], *request["extra_roots"], request["arguments"].get("path", "")]
+            anchors = sorted({Path(one).anchor for one in named if Path(one).anchor})
+            served["extra_roots"] = [r for r in request["extra_roots"] if r != "/"] + anchors
+        return CommandResult(exit_code=0, stdout=json.dumps(serve(served)) + "\n", stderr="")
 
 
 async def _read_through(backend: _Elsewhere, workspace: Workspace, model: Model, path: str) -> str:
