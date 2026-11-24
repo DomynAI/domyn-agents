@@ -22,6 +22,7 @@ import asyncio
 import copy
 import logging
 import os
+import re
 import shutil
 import sys
 from collections.abc import Callable, Collection, Iterable
@@ -804,6 +805,23 @@ def _choose_listed_model(
             continue
 
 
+# LiteLLM's `mode` for a model a chat agent can use; any other (`embedding`, `rerank`,
+# `evaluation`, `audio_transcription`…) is left out of the list.
+_CHAT_MODES = frozenset({"chat", "responses"})
+# A plain vLLM server states no mode, nor does a gateway for most models: there the
+# name is all there is to go by.
+_NOT_CHAT_NAME = re.compile(r"embed|rerank", re.IGNORECASE)
+
+
+def _serves_chat(entry: dict[str, Any]) -> bool:
+    """Whether a ``/models`` entry is a model a chat agent can use: its ``mode`` when the
+    endpoint states one, else its name, which rules out embedding and rerank models."""
+    mode = entry.get("mode")
+    if isinstance(mode, str) and mode.strip():
+        return mode.strip().lower() in _CHAT_MODES
+    return not _NOT_CHAT_NAME.search(str(entry.get("id", "")))
+
+
 def _discover_endpoint_models(
     console: Console, theme: Theme, url: str, api_key: str | None
 ) -> dict[str, str]:
@@ -837,11 +855,21 @@ def _discover_endpoint_models(
         return {}
     entries = found.get("data") if isinstance(found, dict) else None
     models: dict[str, str] = {}
+    hidden = 0
     for entry in entries if isinstance(entries, list) else ():
         if not isinstance(entry, dict) or not entry.get("id"):
             continue
+        if not _serves_chat(entry):
+            hidden += 1
+            continue
         window = window_from_model_entry(entry)
         models[str(entry["id"])] = f"{window:,} tokens" if window else ""
+    if hidden:
+        console.print(
+            f"  {hidden} embedding or other non-chat models are not listed",
+            style=theme.style("meta"),
+            highlight=False,
+        )
     if not models:
         console.print(
             "  The endpoint lists no models: type the name instead",

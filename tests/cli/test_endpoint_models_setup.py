@@ -22,6 +22,13 @@ LISTING = {
     "data": [
         {"id": "qwen3-32b", "object": "model", "max_model_len": 32768},
         {"id": "gpt-oss-120b", "object": "model"},
+        # Not chat models: the gateway's `mode` says so, or, without one, the name.
+        {"id": "qwen3-embedding", "object": "model", "mode": "embedding"},
+        {"id": "bge-reranker", "object": "model", "mode": "rerank"},
+        {"id": "clef", "object": "model", "mode": "evaluation"},
+        {"id": "google/embeddinggemma-2", "object": "model"},
+        {"id": "Nemotron-Rerank-8B", "object": "model", "mode": None},
+        {"id": "glm", "object": "model", "mode": "chat"},
     ],
 }
 
@@ -118,3 +125,64 @@ class TestAFailedListingFallsBackToTyping:
         assert result is not None
         assert result["llm_providers"][0]["model_name"] == "typed-model"
         assert "lists no models" in shown
+
+
+class TestOnlyChatModelsAreListed:
+    @respx.mock
+    def test_embedding_rerank_and_evaluation_models_are_left_out(
+        self, theme: Theme, tmp_path: Path
+    ) -> None:
+        respx.get(MODELS_URL).mock(return_value=httpx.Response(200, json=LISTING))
+
+        # the third listed model is the last chat one: the five others are not offered
+        result, shown = _run(
+            theme, tmp_path, ["vllm", "https://gw.example.com/v1", "", "3", "", "", "", ""]
+        )
+
+        assert result is not None
+        assert result["llm_providers"][0]["model_name"] == "glm"
+        assert "5 embedding or other non-chat models are not listed" in shown
+        for hidden in ("qwen3-embedding", "bge-reranker", "clef", "embeddinggemma", "Rerank"):
+            assert hidden not in shown
+
+    @respx.mock
+    def test_a_listing_of_embedding_models_only_asks_for_the_name(
+        self, theme: Theme, tmp_path: Path
+    ) -> None:
+        only = {"data": [{"id": "e5", "mode": "embedding"}, {"id": "text-embed-3"}]}
+        respx.get(MODELS_URL).mock(return_value=httpx.Response(200, json=only))
+
+        result, shown = _run(
+            theme,
+            tmp_path,
+            ["vllm", "https://gw.example.com/v1", "", "typed-model", "", "", "", ""],
+        )
+
+        assert result is not None
+        assert result["llm_providers"][0]["model_name"] == "typed-model"
+        assert "2 embedding or other non-chat models are not listed" in shown
+        assert "lists no models" in shown
+
+
+@pytest.mark.parametrize(
+    ("entry", "serves_chat"),
+    [
+        ({"id": "m", "mode": "chat"}, True),
+        ({"id": "m", "mode": "Chat"}, True),
+        ({"id": "m", "mode": "responses"}, True),
+        ({"id": "m", "mode": "embedding"}, False),
+        ({"id": "m", "mode": "rerank"}, False),
+        ({"id": "m", "mode": "evaluation"}, False),
+        ({"id": "m", "mode": "audio_transcription"}, False),
+        ({"id": "openai/gpt-oss-120b"}, True),
+        ({"id": "Qwen/Qwen3-32B", "mode": None}, True),
+        ({"id": "Qwen/Qwen3-32B", "mode": ""}, True),
+        ({"id": "Qwen/Qwen3-Embedding-0.6B"}, False),
+        ({"id": "google/embeddinggemma-2"}, False),
+        ({"id": "nvidia/Nemotron-3.5-Rerank-8B-BF16"}, False),
+        # The gateway's own word wins over the name.
+        ({"id": "my-embedder", "mode": "chat"}, True),
+    ],
+)
+def test_serves_chat(entry: dict, serves_chat: bool) -> None:
+    assert setup._serves_chat(entry) is serves_chat
