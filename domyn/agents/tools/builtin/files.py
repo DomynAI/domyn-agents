@@ -46,7 +46,7 @@ import re
 import sys
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Any
 
 import anydoc
@@ -934,7 +934,7 @@ def request_text(
     arguments: Mapping[str, Any],
     *,
     root: Path,
-    extra_roots: Sequence[Path],
+    extra_roots: Sequence[PurePath],
 ) -> str:
     return json.dumps(
         {

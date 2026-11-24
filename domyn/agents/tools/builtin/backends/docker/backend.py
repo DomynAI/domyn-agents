@@ -34,7 +34,7 @@ import json
 import os
 import shlex
 from collections.abc import Callable, Iterable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
 from domyn.agents.logger import get_logger
@@ -86,7 +86,7 @@ _ON_WINDOWS = os.name == "nt"
 OPERATIONS_COMMAND = "/opt/domyn/bin/python -P /opt/domyn/tool_host.py"
 """How a tool's body is run in the image: its own ``domyn``, apart from the Python the
 agent's commands use."""
-CONTAINER_ROOTS = (Path("/"),)
+CONTAINER_ROOTS = (PurePosixPath("/"),)
 """What the file tools may reach in the container: all of it. On this machine the
 workspace is the boundary because everything else is the user's; here everything else
 is the container's own, which a command can break as it likes, and what of the host is

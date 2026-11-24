@@ -26,6 +26,7 @@ from rich.console import Console
 from domyn.agents.interfaces.cli import Theme
 from domyn.agents.interfaces.cli import prompt as prompt_mod
 from domyn.agents.interfaces.cli.prompt import InputSession
+from tests.cli.test_attachments import dragged_path
 
 
 def _session(**kwargs: Any) -> tuple[InputSession, io.StringIO]:
@@ -996,7 +997,7 @@ class TestAttachingImagesInTheEditor:
         shot = self._picture(tmp_path)
         with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
             session.attachments = self._attachments(tmp_path)
-            dragged = str(shot).replace(" ", "\\ ")
+            dragged = dragged_path(shot)
             keys.send_text(f"\x1b[200~{dragged}\x1b[201~what is it?\r")
             sent = await session.ask()
         assert sent.startswith("[Image #1, attached by the user: ")
@@ -1010,7 +1011,7 @@ class TestAttachingImagesInTheEditor:
         with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
             session.attachments = self._attachments(tmp_path)
             shot = self._picture(tmp_path / "work")
-            dragged = str(shot).replace(" ", "\\ ")
+            dragged = dragged_path(shot)
             keys.send_text(f"\x1b[200~{dragged}\x1b[201~what is it?\r")
             sent = await session.ask()
         assert sent == (
@@ -1113,7 +1114,7 @@ class TestAttachingImagesInTheEditor:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         shot = self._picture(tmp_path)
-        dragged = str(shot).replace(" ", "\\ ")
+        dragged = dragged_path(shot)
         with _keyboard(monkeypatch, tmp_path) as (session, keys, _):
             session.attachments = self._attachments(tmp_path)
             read = asyncio.ensure_future(session.ask())

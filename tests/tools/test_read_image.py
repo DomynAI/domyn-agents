@@ -10,7 +10,7 @@ as the tool's result, and that the tool exists only for a model that reads image
 import base64
 import io
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -96,7 +96,11 @@ class _Elsewhere(CommandBackend):
 
     @property
     def tool_host(self) -> ToolHost | None:
-        return ToolHost("tool-host", roots=(Path("/"),)) if self.started and self.hosted else None
+        return (
+            ToolHost("tool-host", roots=(PurePosixPath("/"),))
+            if self.started and self.hosted
+            else None
+        )
 
     async def start(self) -> None:
         self.started = True
