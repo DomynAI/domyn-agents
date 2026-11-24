@@ -69,6 +69,7 @@ To build your own agents, in Python or in YAML, see the [documentation](https://
 
 - **[Any model](docs/docs/guides/llm-providers.md)**: vLLM, OpenAI, Anthropic, Cerebras, OpenRouter or any OpenAI-compatible endpoint, with native tool calling or a prompt-based protocol for endpoints without it.
 - **[Tools](docs/docs/guides/tools.md)**: Python functions, streaming tools, remote MCP servers, and built-in file and shell tools confined to a workspace.
+- **[Containerized backend](docs/docs/cli/tools-and-approvals.md#running-the-tools-in-a-docker-container)**: run commands, file tools and the browser are containerized by default, while the orchestration loop remains outside.
 - **[Multi-agent](docs/docs/guides/orchestration.md)**: agents hand work to each other, with control over what each one sees and whom it can call. [Remote agents](docs/docs/guides/remote-agents.md) take part like local ones.
 - **[Human in the loop](docs/docs/guides/approvals.md)**: a tool can wait for approval, remembered for one call, a conversation or longer, and rules or hooks can decide some calls on their own.
 - **[Skills](docs/docs/guides/skills.md)**: teach agents reusable know-how with `SKILL.md` files, loaded only when a task needs them.
