@@ -1,4 +1,4 @@
-"""`domyn fulfill`: one task, nobody to answer, no follow-up, no setup read or needed."""
+"""`domyn run-headless`: one task, nobody to answer, no follow-up, no setup read or needed."""
 
 import os
 from pathlib import Path
@@ -9,8 +9,8 @@ import yaml
 from typer.testing import CliRunner
 
 from domyn.agents.cli.cli import app
-from domyn.agents.cli.commands.fulfill import command as fulfill
-from domyn.agents.cli.commands.fulfill.command import DEFAULT_INSTRUCTIONS, fulfill_config
+from domyn.agents.cli.commands.run_headless import command as run_headless
+from domyn.agents.cli.commands.run_headless.command import DEFAULT_INSTRUCTIONS, run_headless_config
 from domyn.agents.instructions import load_declared
 from domyn.agents.interfaces.cli import config as cli_config
 from domyn.agents.interfaces.cli.state import CliState
@@ -31,10 +31,9 @@ def _config(**given: Any) -> dict[str, Any]:
         "reasoning_effort": None,
         "max_iterations": 1000,
         "instructions": DEFAULT_INSTRUCTIONS,
-        "skill_paths": [],
         "workspace": "/",
     }
-    return fulfill_config(**{**values, **given})
+    return run_headless_config(**{**values, **given})
 
 
 class TestTheConfiguration:
@@ -76,9 +75,9 @@ class TestTheConfiguration:
     async def test_it_loads_with_the_instructions_and_no_file_behind_them(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("FULFILL_TEST_KEY", "sk-test")
+        monkeypatch.setenv("RUN_HEADLESS_TEST_KEY", "sk-test")
         path = tmp_path / "config.yaml"
-        config = _config(max_tokens=4000, api_key_env="FULFILL_TEST_KEY")
+        config = _config(max_tokens=4000, api_key_env="RUN_HEADLESS_TEST_KEY")
         path.write_text(yaml.safe_dump(config))
 
         agent = await load_application_from_file(str(path))
@@ -102,14 +101,14 @@ def started(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         seen.update(kwargs, agent=agent, home=cli_config.home_dir())
         return 0
 
-    monkeypatch.setattr(fulfill, "start_session", fake_start_session)
-    monkeypatch.setenv("FULFILL_TEST_KEY", "sk-test")
+    monkeypatch.setattr(run_headless, "start_session", fake_start_session)
+    monkeypatch.setenv("RUN_HEADLESS_TEST_KEY", "sk-test")
     return seen
 
 
 def _invoke(*args: str, endpoint: bool = True) -> Any:
-    given = ["--base-url", ENDPOINT, "--api-key-env", "FULFILL_TEST_KEY"] if endpoint else []
-    return CliRunner().invoke(app, ["fulfill", *given, *args], catch_exceptions=False)
+    given = ["--base-url", ENDPOINT, "--api-key-env", "RUN_HEADLESS_TEST_KEY"] if endpoint else []
+    return CliRunner().invoke(app, ["run-headless", *given, *args], catch_exceptions=False)
 
 
 class TestTheCommand:
@@ -117,7 +116,7 @@ class TestTheCommand:
         self, tmp_path: Path, started: dict[str, Any]
     ) -> None:
         state = tmp_path / "state"
-        result = _invoke("--model", "m", "--no-skills", "--state-dir", str(state), "do it")
+        result = _invoke("--model", "m", "--state-dir", str(state), "do it")
 
         assert result.exit_code == 0, result.output
         assert started["initial_prompt"] == "do it"
@@ -127,14 +126,14 @@ class TestTheCommand:
         # The state folder plays ~/.domyn: nothing of a setup is read.
         assert started["home"] == state.resolve()
         written = yaml.safe_load((state / "config.yaml").read_text())
-        assert written["llm_providers"][0]["api_key"] == "${FULFILL_TEST_KEY}"
+        assert written["llm_providers"][0]["api_key"] == "${RUN_HEADLESS_TEST_KEY}"
         assert written["llm_providers"][0]["url"] == f"{ENDPOINT}/chat/completions"
 
     def test_no_reasoning_effort_is_sent_unless_given(
         self, tmp_path: Path, started: dict[str, Any]
     ) -> None:
         state = tmp_path / "state"
-        assert _invoke("--model", "m", "--no-skills", "--state-dir", str(state), "x").exit_code == 0
+        assert _invoke("--model", "m", "--state-dir", str(state), "x").exit_code == 0
         params = yaml.safe_load((state / "config.yaml").read_text())["llm_providers"][0][
             "generation_params"
         ]
@@ -148,7 +147,6 @@ class TestTheCommand:
         result = _invoke(
             "--model",
             "m",
-            "--no-skills",
             "--state-dir",
             str(state),
             "--reasoning-effort",
@@ -166,22 +164,22 @@ class TestTheCommand:
         task = tmp_path / "task.md"
         task.write_text("from the file")
         state = str(tmp_path / "state")
-        result = _invoke(
-            "--model", "m", "--no-skills", "--state-dir", state, "--prompt-file", str(task)
-        )
+        result = _invoke("--model", "m", "--state-dir", state, "--prompt-file", str(task))
         assert result.exit_code == 0, result.output
         assert started["initial_prompt"] == "from the file"
 
-    def test_the_built_in_skills_are_installed_in_the_state_folder(
-        self, tmp_path: Path, started: dict[str, Any]
-    ) -> None:
+    def test_no_skill_is_installed_or_loaded(self, tmp_path: Path, started: dict[str, Any]) -> None:
         state = tmp_path / "state"
         assert _invoke("--model", "m", "--state-dir", str(state), "x").exit_code == 0
-        paths = yaml.safe_load((state / "config.yaml").read_text())["agents"][0]["skills"][
-            "source"
-        ]["paths"]
-        assert paths
-        assert all(Path(p).is_relative_to(state.resolve()) for p in paths)
+        assert "skills" not in yaml.safe_load((state / "config.yaml").read_text())["agents"][0]
+        assert not (state / "builtin-skills").exists()
+
+    def test_there_is_no_option_to_install_the_built_in_skills(
+        self, tmp_path: Path, started: dict[str, Any]
+    ) -> None:
+        result = _invoke("--model", "m", "--skills", "--state-dir", str(tmp_path / "s"), "x")
+        assert result.exit_code == 2
+        assert not started
 
     def test_no_endpoint_is_refused_whatever_the_environment_says(
         self, tmp_path: Path, started: dict[str, Any], monkeypatch: pytest.MonkeyPatch
@@ -201,7 +199,6 @@ class TestTheCommand:
             ENDPOINT,
             "--model",
             "m",
-            "--no-skills",
             "--state-dir",
             str(state),
             "x",
@@ -215,7 +212,7 @@ class TestTheCommand:
     def test_a_key_variable_that_is_not_set_is_refused(
         self, tmp_path: Path, started: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.delenv("FULFILL_TEST_KEY")
+        monkeypatch.delenv("RUN_HEADLESS_TEST_KEY")
         result = _invoke("--model", "m", "--state-dir", str(tmp_path / "s"), "x")
         assert result.exit_code == 2
         assert not started
@@ -228,17 +225,17 @@ class TestTheCommand:
         monkeypatch.setattr(
             cli_config, "_credentials_in_environment", {"SETUP_ONLY_KEY": "from-credentials"}
         )
-        result = _invoke("--model", "m", "--no-skills", "--state-dir", str(tmp_path / "s"), "x")
+        result = _invoke("--model", "m", "--state-dir", str(tmp_path / "s"), "x")
         assert result.exit_code == 0, result.output
         assert "SETUP_ONLY_KEY" not in os.environ
         # A key the environment itself holds stays.
-        assert os.environ["FULFILL_TEST_KEY"] == "sk-test"
+        assert os.environ["RUN_HEADLESS_TEST_KEY"] == "sk-test"
 
 
 def _config_file(tmp_path: Path, model: str = "from-file") -> Path:
     path = tmp_path / "my-config.yaml"
     path.write_text(
-        yaml.safe_dump(_config(model=model, api_key_env="FULFILL_TEST_KEY", instructions=None))
+        yaml.safe_dump(_config(model=model, api_key_env="RUN_HEADLESS_TEST_KEY", instructions=None))
     )
     return path
 
@@ -267,7 +264,6 @@ class TestAConfigFile:
         [
             ["--model", "m"],
             ["--base-url", ENDPOINT],
-            ["--no-skills"],
             ["--workspace", "/tmp"],
             # An option's default given explicitly is still an option given.
             ["--reasoning-effort", "default"],

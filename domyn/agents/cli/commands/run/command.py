@@ -247,7 +247,7 @@ async def start_session(
     """Print the status line, then hand over to the REPL.
 
     ``auto_approve``, ``single_turn`` and ``steering`` go to the `Repl` as they are:
-    `domyn fulfill` turns the first two on and the third off.
+    `domyn run-headless` turns the first two on and the third off.
 
     Skills and standing instructions are already on the agent (attached by the
     caller); they are read here only to say which are in play. The banner is drawn

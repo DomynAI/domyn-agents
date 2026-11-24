@@ -1,4 +1,4 @@
-"""``domyn fulfill``: one task, carried out to the end with nobody to answer and no
+"""``domyn run-headless``: one task, carried out to the end with nobody to answer and no
 follow-up, then exit.
 
 For running domyn as a harness: in a container, in CI, on a benchmark. It needs no
@@ -67,7 +67,6 @@ from domyn.agents.interfaces.cli.config import (
     use_project,
     vllm_chat_url,
 )
-from domyn.agents.skills.catalog import install_skills, list_builtin_skills
 
 DEFAULT_INSTRUCTIONS = """\
 # Working on your own
@@ -90,7 +89,7 @@ question, and the session ends when you stop.
   where the request says they go.
 - **Finish with a short summary** of what you did and how you checked it.
 """
-"""The standing instructions of a `domyn fulfill` session, unless ``--instructions`` gives others.
+"""The standing instructions of a `domyn run-headless` session, unless ``--instructions`` gives others.
 
 What the built-in prompts of other coding agents run without a user say, and what a session with
 nobody to answer needs: without them a model tends to describe the steps and offer to
@@ -108,7 +107,6 @@ BUILD_OPTIONS = {
     "max_iterations": "--max-iterations",
     "instructions": "--instructions",
     "no_instructions": "--no-instructions",
-    "skills": "--skills/--no-skills",
     "workspace": "--workspace",
 }
 """The options that build the configuration, by parameter name: refused with ``--config``,
@@ -117,10 +115,9 @@ NO_REASONING_EFFORT = "default"
 """The ``--reasoning-effort`` that sends no ``reasoning_effort`` at all, and its default:
 the endpoint's own applies."""
 AGENT_NAME = "Assistant"
-SKILLS_DIRNAME = "builtin-skills"
 
 
-def fulfill_config(
+def run_headless_config(
     *,
     model: str,
     url: str,
@@ -131,10 +128,9 @@ def fulfill_config(
     reasoning_effort: str | None,
     max_iterations: int,
     instructions: str | None,
-    skill_paths: list[Path],
     workspace: str,
 ) -> dict[str, Any]:
-    """The ``config.yaml`` of a `domyn fulfill` session.
+    """The ``config.yaml`` of a `domyn run-headless` session.
 
     ``None`` for ``context_window`` leaves it to the server (asked at session start,
     `apply_context_window`). ``max_tokens`` and ``temperature`` are always passed, so
@@ -177,8 +173,6 @@ def fulfill_config(
     }
     if instructions:
         agent["standing_instructions"] = {"source": {"type": "memory", "agent": instructions}}
-    if skill_paths:
-        agent["skills"] = {"source": {"type": "local_dir", "paths": [str(p) for p in skill_paths]}}
 
     return {
         "version": "1.0",
@@ -255,7 +249,7 @@ def _given(ctx: typer.Context, names: dict[str, str]) -> list[str]:
     return given
 
 
-def fulfill_command(
+def run_headless_command(
     ctx: typer.Context,
     prompt: str | None = typer.Argument(
         None, help="The task. Or --prompt-file, to keep it off the command line."
@@ -325,9 +319,6 @@ def fulfill_command(
     no_instructions: bool = typer.Option(
         False, "--no-instructions", help="Run with no standing instructions"
     ),
-    skills: bool = typer.Option(
-        True, "--skills/--no-skills", help="Install and offer the built-in skills"
-    ),
     workspace: str = typer.Option(
         "/",
         "--workspace",
@@ -337,7 +328,7 @@ def fulfill_command(
         None,
         "--state-dir",
         help=(
-            "Folder for the session's configuration, skills and conversation history "
+            "Folder for the session's configuration and conversation history "
             "(default: a new temporary folder). Never ~/.domyn."
         ),
     ),
@@ -378,7 +369,7 @@ def fulfill_command(
     folder = (
         state_dir.expanduser().resolve()
         if state_dir is not None
-        else Path(tempfile.mkdtemp(prefix="domyn-fulfill-"))
+        else Path(tempfile.mkdtemp(prefix="domyn-run-headless-"))
     )
     folder.mkdir(parents=True, exist_ok=True)
     if given_config is not None:
@@ -387,12 +378,7 @@ def fulfill_command(
         (folder / CONFIG_FILENAME).write_text(given_config, "utf-8")
     else:
         assert model is not None and base_url is not None
-        skill_paths = (
-            install_skills([s.name for s in list_builtin_skills()], folder / SKILLS_DIRNAME)
-            if skills
-            else []
-        )
-        built = fulfill_config(
+        built = run_headless_config(
             model=model,
             url=base_url,
             api_key_env=api_key_env,
@@ -402,7 +388,6 @@ def fulfill_command(
             reasoning_effort=None if reasoning_effort == NO_REASONING_EFFORT else reasoning_effort,
             max_iterations=max_iterations,
             instructions=standing,
-            skill_paths=skill_paths,
             workspace=workspace,
         )
         (folder / CONFIG_FILENAME).write_text(yaml.safe_dump(built, sort_keys=False), "utf-8")

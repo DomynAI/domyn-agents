@@ -629,7 +629,7 @@ def _warn_once(message: str) -> None:
 def drop_credentials_from_environment() -> None:
     """Take back what `load_credentials_into_environment` put in ``os.environ``: only
     the names it set, and only while they still hold the value it gave them, so a real
-    environment variable or a ``.env`` entry stays. For `domyn fulfill`, which reads no
+    environment variable or a ``.env`` entry stays. For `domyn run-headless`, which reads no
     credentials file: its key comes from the environment it is started in."""
     for name, value in _credentials_in_environment.items():
         if os.environ.get(name) == value:

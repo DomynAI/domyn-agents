@@ -383,7 +383,7 @@ class Repl:
     ) -> None:
         """``auto_approve`` starts the session with auto-approve on whatever
         ``state.yaml`` says, without remembering it there: for a session nobody is at
-        the keyboard of (`domyn fulfill`). The hardline rules still apply.
+        the keyboard of (`domyn run-headless`). The hardline rules still apply.
 
         ``single_turn`` ends the session when the first turn ends, with no read of
         the input: the initial prompt is the whole conversation."""
