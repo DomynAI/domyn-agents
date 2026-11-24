@@ -43,7 +43,7 @@ The first time you run `domyn`, a setup wizard asks how to reach a model. Whatev
 
 | Question | What to enter |
 |---|---|
-| provider | Where the model is served: `domyn` (the models of your Domyn platform space, the first choice), `openai`, `anthropic`, `open_router`, `cerebras` or `vllm`. |
+| provider | Where the model is served: `domyn` (the models of your Domyn platform space, the first choice), `openai`, `anthropic`, `open_router`, `cerebras` or `vllm`. An endpoint that needs headers of its own is set up by hand: see [A custom endpoint](../cli/configuration.md#a-custom-endpoint). |
 | url | Leave it empty to use the provider's default endpoint. It is required for `domyn`, where it is the platform's address, and for `vllm`, where a server's base URL is enough: `https://host/v1` is saved as `https://host/v1/chat/completions`, `http://host:8000` as `http://host:8000/v1/chat/completions`, and a URL already ending in `/chat/completions` as typed. |
 | space id, configuration id | Only for `domyn`: the space whose configuration holds the model, and optionally which configuration to use (empty: the last released one). The platform URL and the space id are taken from `DOMYN_BASE_URL` and `DOMYN_SPACE_ID` when they are set: the wizard says it found them, without printing them, and Enter uses them. Type another value to replace one, and erase a saved one to go back to the variable. |
 | api key | If the provider's variable (for example `OPENAI_API_KEY`) is already set, the wizard finds it. Otherwise paste the key, and it is saved to `~/.domyn/credentials`. A key saved there appears hidden (`********`) when the wizard runs again or you go back to it: press Enter to keep it, or type a new one. |

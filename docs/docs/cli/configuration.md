@@ -99,6 +99,35 @@ The settings you are most likely to change:
 | `allowed_env` | Names of environment variables that commands may see. |
 | `compactor.strategy` | How the conversation is shortened: `two_phase` (default), `prune_only` (never calls the model) or `noop` (never shortens). |
 
+### A custom endpoint
+
+The wizard offers no provider for an OpenAI-compatible endpoint that needs headers of its own, such as a gateway that takes its key as `api-key` or `x-api-key`, or wants extra headers. For a server that takes a plain Bearer key, pick `vllm` in the wizard instead. Otherwise, edit the provider the agent uses (`default_provider`) into a `custom` one:
+
+```yaml
+llm_providers:
+- name: default_provider
+  type: custom
+  model_name: my-model
+  url: https://gateway.example.com/v1/chat/completions
+  headers:
+    Authorization: Bearer ${LLM_API_KEY}
+  body:
+    max_tokens: 16000
+```
+
+- `url` is the full chat completions endpoint. It is posted to as written: unlike the wizard, nothing completes a base URL here.
+- Credentials go in `headers`, in whatever scheme the endpoint expects. Write a `${NAME}` reference rather than the key itself. The variable is read from:
+  - the environment;
+  - a `.env` file in the folder `domyn` runs in;
+  - a `NAME=value` line in `~/.domyn/credentials` (or the project's `credentials`).
+
+  A credentials entry is used only when its name contains `KEY`, `TOKEN`, `SECRET` or `PASSWORD` as a whole `_`-separated part. A variable that is not set stops the configuration from loading.
+- Request fields such as `max_tokens` and `temperature` go in `body`. A `custom` provider has no `generation_params`.
+
+A running session uses the edit from your next message on. `/config` lists the header names, never their values, and `domyn export` replaces a literal secret in a header with a `${…}` reference.
+
+Running `domyn setup` or `/model` on this configuration replaces the provider, headers included. The wizard does not offer `custom`, so edit it back afterwards. [LLM providers](../guides/llm-providers.md#custom) lists every option of the `custom` provider.
+
 ### The browser
 
 With `browser` in `bundles`, its options go in a `browser` block on the same entry. Every key is optional:

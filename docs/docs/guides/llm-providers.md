@@ -136,7 +136,7 @@ llm_providers:
 
 ### `custom`
 
-For any endpoint that speaks OpenAI Chat Completions, with full control over the request. It has no `api_key` and no `generation_params`: credentials go in `headers`, in whatever scheme the endpoint expects (`Authorization: Bearer …`, `api-key`, `x-api-key`…), and request fields in `body`. `domyn setup` does not offer it: it is configured by editing the YAML file. Running `domyn setup` or `/model` on a configuration that uses it replaces the provider, headers included.
+For any endpoint that speaks OpenAI Chat Completions, with full control over the request. It has no `api_key` and no `generation_params`: credentials go in `headers`, in whatever scheme the endpoint expects (`Authorization: Bearer …`, `api-key`, `x-api-key`…), and request fields in `body`. `domyn setup` does not offer it: to use it in the CLI, see [A custom endpoint](../cli/configuration.md#a-custom-endpoint).
 
 | Option | Type | Default | Description |
 |---|---|---|---|
