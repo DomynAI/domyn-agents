@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime
 import os
 import time
 import uuid
@@ -380,6 +381,7 @@ class Repl:
         reload: Callable[[], Awaitable[tuple[Any, dict[str, Any]]]] | None = None,
         auto_approve: bool = False,
         single_turn: bool = False,
+        datetime_format: str = "%Y-%m-%dT%H:%M:%S [%A]",
     ) -> None:
         """``auto_approve`` starts the session with auto-approve on whatever
         ``state.yaml`` says, without remembering it there: for a session nobody is at
@@ -492,6 +494,7 @@ class Repl:
         self._voice: VoiceInput | None = None
         # `domyn run -v` (or a `/verbose` left on) starts with the logs already on,
         # the same ones `/verbose` toggles later.
+        self.datetime_format = datetime_format
         _set_log_level(self._prefs.verbose)
 
     # --- public API --------------------------------------------------------
@@ -656,6 +659,12 @@ class Repl:
             event_type=ExecutionEventType.USER_INPUT,
             author="user",
             content=[Part(text=user_text)],
+            metadata={
+                "user_info": {
+                    "datetime": datetime.datetime.now().astimezone().strftime(self.datetime_format),
+                    "datetime_format": self.datetime_format,
+                }
+            },
         )
         self._state.turns += 1
         self._renderer.begin_turn()
