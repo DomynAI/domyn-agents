@@ -4,8 +4,8 @@ The planner stores ``reasoning_content`` on the first call of a response, or on
 its final answer when it calls nothing (``BaseEvent.reasoning_content``); the
 context manager puts it on the assistant
 message of that response, in every turn, for a provider that sends it
-(``reasoning_key_in_use``). A response without stored reasoning, and providers
-that do not send it, get the short thoughts of every call as the message's content.
+(``reasoning_key_in_use``). The short thought of each call is never added as the
+message's content: it is already the call's own ``reasoning`` argument.
 """
 
 # No `from __future__ import annotations`: builds real agents.
@@ -149,6 +149,15 @@ def _assistants_with_calls(messages: list[LLMMessage]) -> list[LLMMessage]:
     return [m for m in messages if m.role == "assistant" and m.tool_calls]
 
 
+def _thoughts_only_in_the_calls(message: LLMMessage) -> None:
+    """No text beside the calls: each thought is in its call's arguments, once."""
+    assert message.content is None
+    assert [json.loads(c.function.arguments)["reasoning"] for c in message.tool_calls or []] == [
+        "look at a",
+        "look at b",
+    ]
+
+
 class TestAResponseWithoutReasoning:
     @pytest.mark.asyncio
     async def test_stores_none(self) -> None:
@@ -159,7 +168,7 @@ class TestAResponseWithoutReasoning:
 
         assert all(e.reasoning_content is None for e in events)
         (message,) = _assistants_with_calls(provider.requests[1])
-        assert message.content == "look at a\nlook at b"
+        _thoughts_only_in_the_calls(message)
 
 
 class TestAResponseWithReasoning:
@@ -209,7 +218,7 @@ class TestAnEarlierTurn:
         assert message.content is None
 
     @pytest.mark.asyncio
-    async def test_without_reasoning_carries_the_short_thought_of_every_call(self) -> None:
+    async def test_without_reasoning_carries_only_the_calls(self) -> None:
         bare = _calls().model_copy(update={"reasoning_content": None})
         provider = _Script(replies=[bare, _answer("done"), _answer("again")])
         runner, agent = Runner(), _agent(provider)
@@ -219,7 +228,7 @@ class TestAnEarlierTurn:
 
         (message,) = _assistants_with_calls(provider.requests[2])
         assert message.reasoning_content is None
-        assert message.content == "look at a\nlook at b"
+        _thoughts_only_in_the_calls(message)
 
 
 ANSWER_REASONING = "Both files are listed; I can answer now."
@@ -313,14 +322,14 @@ class TestAFinalAnswer:
 
 class TestAProviderThatDoesNotSendIt:
     @pytest.mark.asyncio
-    async def test_gets_the_short_thoughts(self) -> None:
+    async def test_gets_only_the_calls(self) -> None:
         provider = _Silent(replies=[_calls(), _answer("done")])
 
         await _turn(Runner(), _agent(provider), "list a and b", "silent")
 
         (message,) = _assistants_with_calls(provider.requests[1])
         assert message.reasoning_content is None
-        assert message.content == "look at a\nlook at b"
+        _thoughts_only_in_the_calls(message)
 
     @pytest.mark.asyncio
     async def test_the_reasoning_is_stored_all_the_same(self) -> None:
@@ -357,7 +366,7 @@ class TestAProviderThatDoesNotSendIt:
 
 class TestACallWithoutStoredReasoning:
     @pytest.mark.asyncio
-    async def test_renders_its_short_thought(self) -> None:
+    async def test_renders_the_call_alone(self) -> None:
         agent = _agent(_Script())
         ask = BaseEvent(
             event_type=ExecutionEventType.USER_INPUT, author="user", content=[Part(text="go")]
@@ -375,19 +384,19 @@ class TestACallWithoutStoredReasoning:
 
         (message,) = _assistants_with_calls(messages)
         assert message.reasoning_content is None
-        assert message.content == "why"
+        assert message.content is None
 
 
 class TestTheSwitch:
     @pytest.mark.asyncio
-    async def test_off_sends_the_short_thoughts(self) -> None:
+    async def test_off_sends_only_the_calls(self) -> None:
         provider = _Script(replies=[_calls(), _answer("done")], send_reasoning=False)
 
         events = await _turn(Runner(), _agent(provider), "list a and b", "switched off")
 
         (message,) = _assistants_with_calls(provider.requests[1])
         assert message.reasoning_content is None
-        assert message.content == "look at a\nlook at b"
+        _thoughts_only_in_the_calls(message)
         starts = [e for e in events if e.event_type == ExecutionEventType.TOOL_START]
         assert starts[0].reasoning_content == REASONING
 
@@ -446,9 +455,9 @@ def test_reasoning_brings_compaction_to_its_threshold() -> None:
 
 
 class TestTheSummarizer:
-    """A message sent back with the reasoning has no short thoughts as its text:
-    the summarizer reads them from the calls' arguments, or the calls reach it with
-    no reason behind them. The whole reasoning is not read."""
+    """No message has the short thoughts as its text: the summarizer reads them
+    from the calls' arguments, or the calls reach it with no reason behind them.
+    The whole reasoning is not read."""
 
     @pytest.mark.asyncio
     async def test_reads_the_short_thoughts_not_the_reasoning(self) -> None:

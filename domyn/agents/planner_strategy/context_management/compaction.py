@@ -1599,11 +1599,10 @@ class ConversationSummarizer(BaseModel):
         reasoning = (message.reasoning_content or "").strip() if self.read_full_reasoning else ""
         if message.tool_calls:
             names = ", ".join(call.function.name for call in message.tool_calls)
-            # A message sent back with the model's reasoning has no short thoughts
-            # as its text: they are only in each call's `reasoning` argument
-            # (`tool_use_thought`), and without them a call reaches the summary
-            # with no reason behind it. They are read as the text the message has
-            # when the reasoning is not sent; the whole reasoning only with
+            # The short thoughts are never a message's text: they are only in each
+            # call's `reasoning` argument, and without them a call reaches the
+            # summary with no reason behind it. They are read when the message
+            # has no text of its own; the whole reasoning only with
             # `read_full_reasoning`, as the thoughts say why in a fraction of the
             # characters.
             if not body.strip() and not reasoning:

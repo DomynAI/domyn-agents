@@ -68,7 +68,7 @@ An agent with one tool, asked about the weather, produces these events:
 | `response` | `Assistant` | `content`: `It is sunny in Rome.` |
 | `agent_end` | `Assistant` | |
 
-With the default `tool_use_thought` planner, `action.parameters` also holds the `reasoning` argument the planner adds to each call, the same text as `action.thought`.
+With either `tool_use` planner, `action.parameters` also holds the `reasoning` argument the planner adds to each call; with the default `tool_use_thought`, it is the same text as `action.thought`.
 
 The user's own message is not yielded: the stream starts with `agent_start`. The turn ends with the root agent's `agent_end`, or earlier when it [pauses for approval](#pausing-for-approval), [fails](#errors), or a hook stops it, in which case the last event is the hook's `response`.
 

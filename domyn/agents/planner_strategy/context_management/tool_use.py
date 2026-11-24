@@ -140,8 +140,8 @@ class ToolUseContextManager(ContextManager):
 
         # The model's whole reasoning goes back with its assistant messages, every
         # turn's, to a provider that sends it (DeepSeek's API rejects a request
-        # with tools that leaves it out). A message without stored reasoning, or
-        # for a provider that sends none, carries the short thoughts instead.
+        # with tools that leaves it out). The short thought of each call is not
+        # added as text: it is the call's own `reasoning` argument, already in it.
         sends_reasoning = bool(
             getattr(getattr(agent, "llm_provider", None), "reasoning_key_in_use", None)
         )
@@ -163,7 +163,6 @@ class ToolUseContextManager(ContextManager):
                         # renders the whole call as attributed narration.
                         continue
                     if event.action:
-                        thought = event.action.thought or ""
                         tool_call = LLMToolCall(
                             id=event.action.call_id,
                             type="function",
@@ -182,23 +181,14 @@ class ToolUseContextManager(ContextManager):
                             and messages[-1].tool_calls
                         ):
                             messages[-1].tool_calls.append(tool_call)
-                            # The whole reasoning, when the message has it, covers
-                            # every call of the response: their thoughts add nothing.
-                            if thought and not messages[-1].reasoning_content:
-                                existing = messages[-1].content or ""
-                                messages[-1].content = (
-                                    f"{existing}\n{thought}".strip() if existing else thought
-                                )
                         else:
-                            reasoning = event.reasoning_content if sends_reasoning else None
                             messages.append(
                                 LLMMessage(
                                     role=self.assistant_role,
                                     tool_calls=[tool_call],
-                                    reasoning_content=reasoning,
-                                    # Without it, the short thought of every call,
-                                    # the first included.
-                                    content=None if reasoning else (thought or None),
+                                    reasoning_content=(
+                                        event.reasoning_content if sends_reasoning else None
+                                    ),
                                 )
                             )
 
@@ -728,9 +718,11 @@ class ToolUseWithThoughtContextManager(ToolUseContextManager):
     """Context manager for ReAct-style tool-use loops.
 
     Identical to ``ToolUseContextManager`` but appends a reasoning instruction
-    to the system prompt so that the LLM emits plain-text ``content`` before
-    every tool call.  That content is then captured as the ``thought`` by
-    ``ToolUseWithThoughtPlannerStrategy``.
+    to the system prompt, telling the LLM to put its reasoning in each tool
+    call's ``reasoning`` argument and never as text beside the call.
+    ``ToolUseWithThoughtPlannerStrategy`` reads that argument as the call's
+    ``thought``, which is shown to the user and never sent back as ``content``:
+    the argument already carries it.
     """
 
     type: str = "thought_tool_use"

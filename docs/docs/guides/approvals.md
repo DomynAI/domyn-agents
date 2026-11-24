@@ -227,7 +227,7 @@ class SqliteApprovalStore(ApprovalStore):
 
 ## What an approval covers
 
-An approval is remembered for the call's **subject**, the line in `metadata["approval_subject"]`. By default the subject is the tool's name followed by every argument the model sent, so a remembered approval covers only an identical call. The `reasoning` argument that the `tool_use_thought` planner adds to each call is not part of it.
+An approval is remembered for the call's **subject**, the line in `metadata["approval_subject"]`. By default the subject is the tool's name followed by every argument the model sent, so a remembered approval covers only an identical call. The `reasoning` argument that the `tool_use` planners add to each call is not part of it.
 
 To make an approval cover later calls, set `approval_subject`. It says which arguments carry the risk, so an approval covers every call that agrees on those:
 

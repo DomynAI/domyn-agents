@@ -106,7 +106,7 @@ Default `generation_params`:
 |---|---|---|---|---|
 | `vllm` | `timeout` | `float` | `300.0` | Seconds to wait for the server, for slow or large models. |
 | `cerebras`, `open_router` | `max_retries` | `int` | `3` | Attempts when the API answers with an empty body. |
-| `vllm`, `custom`, `domyn`, `cerebras`, `open_router` | `send_reasoning` | `bool` | `True` | Sends the model's reasoning back to it with its assistant messages (see [Planner strategies](planner-strategies.md)). Set it to `false` for a model that ignores it, such as one whose vLLM chat template does not read `reasoning_content`: it then gets the short thoughts instead. |
+| `vllm`, `custom`, `domyn`, `cerebras`, `open_router` | `send_reasoning` | `bool` | `True` | Sends the model's reasoning back to it with its assistant messages (see [Planner strategies](planner-strategies.md)). Set it to `false` for a model that ignores it, such as one whose vLLM chat template does not read `reasoning_content`: it then sees only the short thought in each call's `reasoning` argument. |
 | `open_router` | `reasoning_supported` | `bool` | `False` | Sends `reasoning: {effort: medium}`. Set it only for models that accept the parameter: others reject the request. |
 
 ### `domyn`
