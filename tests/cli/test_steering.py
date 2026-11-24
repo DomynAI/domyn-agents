@@ -861,7 +861,7 @@ def _choosing_repl(rounds: int = 1):
     return repl, scripted, provider, buffer
 
 
-async def _until(condition: Any, timeout: float = 0.0) -> None:
+async def _until(condition: Any, timeout: float = 30.0) -> None:
     """Wait for ``condition``, by the clock rather than by loop ticks.
 
     Reaching the gate goes through work done off the loop (the conversation store,
