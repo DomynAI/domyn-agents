@@ -19,6 +19,7 @@ from domyn.agents.llm.base import (
     ToolCallFunction,
     log_inference_request,
     log_inference_response,
+    raise_for_status,
 )
 from domyn.agents.llm.context_window import get_json, positive_int
 from domyn.agents.logger import get_logger
@@ -285,14 +286,7 @@ class AnthropicProvider(BaseLLMProvider):
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(self.url, headers=headers, json=payload)
-            if response.is_error:
-                body_bytes = await response.aread()
-                logger.error(f"Anthropic API {response.status_code} on {self.url}")
-                logger.debug(
-                    "Anthropic API error body",
-                    payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},
-                )
-            response.raise_for_status()
+            await raise_for_status(logger, response, "Anthropic")
             data = response.json()
 
             # Extract content, tool calls, and thinking blocks from response
@@ -407,14 +401,7 @@ class AnthropicProvider(BaseLLMProvider):
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(self.url, headers=headers, json=payload)
-            if response.is_error:
-                body_bytes = await response.aread()
-                logger.error(f"Anthropic API {response.status_code} on {self.url}")
-                logger.debug(
-                    "Anthropic API error body",
-                    payload={"body": body_bytes.decode("utf-8", "ignore")[:2000]},
-                )
-            response.raise_for_status()
+            await raise_for_status(logger, response, "Anthropic")
 
             token_count = 0
             usage_info: dict[str, Any] = {}

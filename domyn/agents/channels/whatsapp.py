@@ -245,7 +245,8 @@ class WhatsAppChannel:
                             len(parts),
                         )
         except Exception as exc:
-            logger.warning("WhatsAppChannel: error parsing webhook payload: %s", exc)
+            logger.warning("WhatsAppChannel: error parsing webhook payload: %s", type(exc).__name__)
+            logger.debug("WhatsAppChannel: webhook payload parse detail: %s", exc, exc_info=True)
 
         return b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK"
 
@@ -294,7 +295,10 @@ class WhatsAppChannel:
                 result = resp.json().get("url")
                 return str(result) if result is not None else None
         except Exception as exc:
-            logger.warning("WhatsAppChannel: failed to resolve media_id=%s: %s", media_id, exc)
+            logger.warning(
+                "WhatsAppChannel: failed to resolve media_id=%s: %s", media_id, type(exc).__name__
+            )
+            logger.debug("WhatsAppChannel: media resolution failure detail: %s", exc, exc_info=True)
             return None
 
     # ------------------------------------------------------------------
@@ -323,17 +327,17 @@ class WhatsAppChannel:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(url, headers=headers, content=json.dumps(payload))
                 if resp.status_code not in (200, 201):
-                    logger.warning(
-                        "WhatsAppChannel: send failed status=%d body=%s",
-                        resp.status_code,
-                        resp.text,
-                    )
+                    logger.warning("WhatsAppChannel: send failed status=%d", resp.status_code)
+                    logger.debug("WhatsAppChannel: send failure body", payload={"body": resp.text})
                 else:
                     logger.debug("WhatsAppChannel: sent reply to wa_id=%s", conversation_id)
         except Exception as exc:
             logger.warning(
-                "WhatsAppChannel: failed to send message to %s: %s", conversation_id, exc
+                "WhatsAppChannel: failed to send message to %s: %s",
+                conversation_id,
+                type(exc).__name__,
             )
+            logger.debug("WhatsAppChannel: send failure detail: %s", exc, exc_info=True)
 
 
 _FILE_TYPE_TO_WHATSAPP = {

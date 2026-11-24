@@ -241,12 +241,16 @@ def _schedule_on_gateway_loop(coro: Any, *, label: str) -> None:
             asyncio.run_coroutine_threadsafe(coro, gateway_loop)
             return
         except Exception as exc:
-            logger.warning("platform-gateway: schedule %s failed - %s", label, exc)
+            logger.warning("platform-gateway: schedule %s failed - %s", label, type(exc).__name__)
+            logger.debug("platform-gateway: schedule failure detail", exc_info=True)
     # Same-loop fallback for tests / synchronous contexts.
     try:
         asyncio.get_event_loop().create_task(coro)
     except Exception as exc:
-        logger.warning("platform-gateway: fallback %s dispatch failed - %s", label, exc)
+        logger.warning(
+            "platform-gateway: fallback %s dispatch failed - %s", label, type(exc).__name__
+        )
+        logger.debug("platform-gateway: fallback dispatch failure detail", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

@@ -3,6 +3,8 @@ serialization of concurrent authorization round trips sharing a port, and the
 patches to the mcp SDK's token parsing and scope selection."""
 
 import asyncio
+import logging
+import traceback
 from types import SimpleNamespace
 from urllib.parse import parse_qsl, urlparse
 
@@ -12,6 +14,7 @@ import pytest
 from key_value.aio.stores.filetree import FileTreeStore
 from key_value.aio.stores.memory import MemoryStore
 from mcp.client.auth import AuthorizationCodeResult
+from mcp.client.auth.exceptions import OAuthTokenError
 from mcp.shared.auth import OAuthMetadata, OAuthToken
 from pydantic import ValidationError
 
@@ -254,6 +257,34 @@ async def test_a_failed_refresh_clears_the_tokens():
 
     assert not refreshed
     assert provider.context.current_tokens is None
+
+
+# Invalid, and short enough that pydantic's message would quote the token whole.
+_INVALID_TOKEN_RESPONSE = b'{"refresh_token": "s3cr3t"}'
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_token_response_names_its_fields_not_its_tokens():
+    """The error reaches the conversation as the tool's error, with whatever it chains."""
+    with pytest.raises(OAuthTokenError) as raised:
+        await mcp_oauth2.handle_token_response_scopes(_token_response(_INVALID_TOKEN_RESPONSE))
+
+    assert "access_token (missing)" in str(raised.value)
+    assert "s3cr3t" not in "".join(traceback.format_exception(raised.value))
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_refresh_response_is_logged_without_its_tokens(caplog):
+    provider = build_oauth_provider(
+        OAuthProviderConfig(name="p", type="in_memory"), "https://mcp.example.com/mcp"
+    )
+    caplog.set_level(logging.DEBUG)
+
+    refreshed = await provider._handle_refresh_response(_token_response(_INVALID_TOKEN_RESPONSE))
+
+    assert not refreshed
+    assert "Invalid refresh response: access_token (missing)" in caplog.text
+    assert "s3cr3t" not in caplog.text
 
 
 _SERVER_METADATA = OAuthMetadata(

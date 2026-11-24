@@ -21,6 +21,7 @@ from domyn.agents.logger import (
     get_log_context,
     get_logger,
     set_logger,
+    url_origin,
 )
 
 
@@ -151,3 +152,29 @@ class TestBindLogContext:
             with bind_log_context(turn_id="inner"):
                 assert get_log_context()["turn_id"] == "inner"
             assert get_log_context()["turn_id"] == "outer"
+
+
+class TestUrlOrigin:
+    """What a log line may say about a configured endpoint: scheme, host and port, nothing after."""
+
+    @pytest.mark.parametrize(
+        ("url", "origin"),
+        [
+            ("https://mcp.zapier.com/api/v1/connect?token=secret", "https://mcp.zapier.com"),
+            (
+                "https://user:secret@llm.example.com:8443/v1/chat/completions",
+                "https://llm.example.com:8443",
+            ),
+            ("wss://relay.example.com/api/relay/v1/ws/secret-path#frag", "wss://relay.example.com"),
+            ("http://[::1]:8000/v1", "http://[::1]:8000"),
+            ("http://vllm-router.llm:8000", "http://vllm-router.llm:8000"),
+        ],
+    )
+    def test_keeps_only_scheme_host_and_port(self, url, origin):
+        assert url_origin(url) == origin
+
+    @pytest.mark.parametrize(
+        "url", ["", None, "localhost:8000/v1?token=secret", "http://host:notaport/x"]
+    )
+    def test_a_url_it_cannot_read_is_not_echoed(self, url):
+        assert url_origin(url) == "<invalid url>"

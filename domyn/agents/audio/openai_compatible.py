@@ -17,7 +17,7 @@ from pydantic import Field, SecretStr
 
 from domyn.agents.audio.base import AudioSource, Transcriber
 from domyn.agents.audio.models import Segment, Transcript, TranscriptionError
-from domyn.agents.logger import get_logger
+from domyn.agents.logger import get_logger, url_origin
 
 
 class OpenAICompatibleTranscriber(Transcriber):
@@ -72,8 +72,9 @@ class OpenAICompatibleTranscriber(Transcriber):
             data["language"] = self.language
 
         logger = get_logger()
+        endpoint = url_origin(self.url)
         logger.info(
-            f"[Transcription Request]: {self.url}",
+            f"[Transcription Request]: {endpoint}",
             payload={"model": self.model, "bytes": len(content), "format": mime},
         )
         started = time.monotonic()
@@ -89,7 +90,7 @@ class OpenAICompatibleTranscriber(Transcriber):
                 body: dict[str, Any] = response.json()
         except httpx.HTTPStatusError as exc:
             logger.warning(
-                f"[Transcription Response]: {self.url} refused the audio: "
+                f"[Transcription Response]: {endpoint} refused the audio: "
                 f"{exc.response.status_code}"
             )
             logger.debug(f"transcription error detail: {exc.response.text}")
@@ -97,7 +98,7 @@ class OpenAICompatibleTranscriber(Transcriber):
                 f"The transcription endpoint answered {exc.response.status_code}"
             ) from exc
         except (httpx.HTTPError, ValueError) as exc:
-            logger.warning(f"[Transcription Response]: {self.url} failed: {type(exc).__name__}")
+            logger.warning(f"[Transcription Response]: {endpoint} failed: {type(exc).__name__}")
             logger.debug(f"transcription error detail: {exc}")
             raise TranscriptionError(
                 f"The transcription endpoint could not be reached or answered with "
@@ -106,7 +107,7 @@ class OpenAICompatibleTranscriber(Transcriber):
 
         transcript = _parse(body, self.language)
         logger.info(
-            f"[Transcription Response]: {self.url}",
+            f"[Transcription Response]: {endpoint}",
             payload={
                 "execution_time": round(time.monotonic() - started, 3),
                 "text_length": len(transcript.text),
@@ -114,7 +115,7 @@ class OpenAICompatibleTranscriber(Transcriber):
                 "language": transcript.language,
             },
         )
-        logger.debug(f"[Transcription Response] full payload: {self.url}", payload=body)
+        logger.debug(f"[Transcription Response] full payload: {endpoint}", payload=body)
         return transcript
 
 

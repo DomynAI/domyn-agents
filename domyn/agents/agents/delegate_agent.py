@@ -49,7 +49,7 @@ from domyn.agents.core import (
 )
 from domyn.agents.decisions import DecisionRuntime
 from domyn.agents.hooks import FunctionHook, HookPhase
-from domyn.agents.logger import get_logger
+from domyn.agents.logger import get_logger, url_origin
 from domyn.agents.tools import DelegateTool, FunctionTool, MCPTool
 
 logger = get_logger()
@@ -394,8 +394,8 @@ class DelegateAgent(BaseAgent):
                 await t.initialize()
             except Exception as e:
                 get_logger().warning(
-                    f"Could not initialize MCP tool {t.name} from {t.server_url}: "
-                    f"{type(e).__name__}"
+                    f"Could not initialize MCP tool {t.name} from server '{t.group}' "
+                    f"({url_origin(t.server_url)}): {type(e).__name__}"
                 )
                 get_logger().debug(f"MCP tool {t.name} initialization detail: {e}")
 

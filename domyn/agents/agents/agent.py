@@ -21,7 +21,7 @@ from domyn.agents.hooks import FunctionHook, HookFactory, HookPhase
 from domyn.agents.hooks.builtin.memory import memory_update_hook
 from domyn.agents.instructions import AgentInstructions, InstructionRuntime
 from domyn.agents.llm import BaseLLMProvider, LLMProviderFactory
-from domyn.agents.logger import get_logger
+from domyn.agents.logger import get_logger, url_origin
 from domyn.agents.memory.managers import (
     BaseMemoryManager,
     MemoryExecutionMode,
@@ -413,8 +413,8 @@ class Agent(BaseAgent):
                 await t.initialize()
             except Exception as e:
                 get_logger().warning(
-                    f"Could not initialize MCP tool {t.name} from {t.server_url}: "
-                    f"{type(e).__name__}"
+                    f"Could not initialize MCP tool {t.name} from server '{t.group}' "
+                    f"({url_origin(t.server_url)}): {type(e).__name__}"
                 )
                 get_logger().debug(f"MCP tool {t.name} initialization detail: {e}")
 
@@ -458,7 +458,9 @@ class Agent(BaseAgent):
 
                 self.tools = new_tools
             except Exception:
-                get_logger().warning(f"Could not discover tools from MCP server {s.url}")
+                get_logger().warning(
+                    f"Could not discover tools from MCP server '{s.name}' ({url_origin(s.url)})"
+                )
 
         await asyncio.gather(*tasks)
 

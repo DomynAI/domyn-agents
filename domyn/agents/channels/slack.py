@@ -209,7 +209,10 @@ class SlackChannel:
                 await client.chat_postMessage(**kwargs)
             logger.debug("SlackChannel: sent reply to channel=%s", channel_id)
         except Exception as exc:
-            logger.warning("SlackChannel: failed to send message to %s: %s", channel_id, exc)
+            logger.warning(
+                "SlackChannel: failed to send message to %s: %s", channel_id, type(exc).__name__
+            )
+            logger.debug("SlackChannel: send failure detail: %s", exc, exc_info=True)
 
     async def _send_file(
         self,

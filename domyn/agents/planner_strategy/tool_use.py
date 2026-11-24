@@ -78,7 +78,6 @@ from domyn.agents.planner_strategy.utils import (
     FORWARD_VERBATIM_FEEDBACK_INVALID_FORMAT,
     FORWARD_VERBATIM_FEEDBACK_NOT_FOUND,
     FORWARD_VERBATIM_FEEDBACK_PATH_NOT_RESOLVED,
-    FORWARD_VERBATIM_MISS_UNRESOLVED,
     is_valid_source_id_format,
     resolve_verbatim_detailed,
 )
@@ -396,9 +395,10 @@ def _handle_forward_verbatim(
         return ForwardVerbatimMiss(feedback=FORWARD_VERBATIM_FEEDBACK_EMPTY_SOURCE_ID)
 
     if not is_valid_source_id_format(source_id):
-        logger.warning(
-            f"FORWARD_VERBATIM source_id={source_id!r} failed format check (likely hallucinated)"
-        )
+        # Not identifier-shaped means the model wrote free text there, which can be the answer
+        # itself: the value goes to debug only.
+        logger.warning("FORWARD_VERBATIM source_id failed format check (likely hallucinated)")
+        logger.debug(f"FORWARD_VERBATIM source_id={source_id!r} failed format check")
         return ForwardVerbatimMiss(
             feedback=FORWARD_VERBATIM_FEEDBACK_INVALID_FORMAT.format(source_id=source_id),
         )
@@ -407,9 +407,6 @@ def _handle_forward_verbatim(
     text, found = resolution.text, resolution.found
 
     if not found:
-        logger.warning(
-            FORWARD_VERBATIM_MISS_UNRESOLVED.format(source_id=source_id, source_key=source_key)
-        )
         # Distinguish the AGENT_END + source_key reject from a generic miss so
         # the LLM gets actionable feedback. ``resolve_verbatim`` returns the
         # same ``(text="", found=False)`` for both cases; reproduce the check
