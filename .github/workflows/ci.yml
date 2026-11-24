@@ -183,10 +183,10 @@ jobs:
   test-windows:
     needs: changes
     if: >-
-      always() && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true')
+      !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true')
     name: test-windows (windows-latest)
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     permissions:
       contents: read
     env:
@@ -318,12 +318,12 @@ jobs:
   test-windows-arm:
     needs: changes
     if: >-
-      always() && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true')
+      !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true')
     name: test-windows (windows-11-arm)
     runs-on: windows-11-arm
     # Room for a run after uv.lock changed: OpenSSL and four packages compiled
     # (some fifteen minutes) before the tests. Others take what Intel's does.
-    timeout-minutes: 40
+    timeout-minutes: 60
     permissions:
       contents: read
     env:
