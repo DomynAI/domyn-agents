@@ -14,6 +14,7 @@ from domyn.agents.cli import project as cli_project
 from domyn.agents.cli.cli import app
 from domyn.agents.interfaces.cli import Theme
 from domyn.agents.interfaces.cli import config as cfg
+from domyn.agents.interfaces.cli.project_trust import code_files, project_problems
 
 P = f"${{{cfg.PROJECT_DIR_VAR}}}"
 
@@ -191,6 +192,61 @@ class TestTheCode:
         folder = _with_tool(tmp_path)
 
         _select(folder)  # `domyn skills`, `export`…: nothing asked, nothing run
+
+
+_CODE_TOOLS: list[dict[str, Any]] = [
+    {"name": "a", "type": "function", "path": f"{P}/code/a.py"},
+    {"name": "b", "type": "function", "func": {"name": "b", "path": f"{P}/skills/b.py"}},
+    {"name": "c", "type": "function", "func": {"name": "c", "module": f"{P}/code/c.py"}},
+    {
+        "name": "d",
+        "type": "mcp",
+        "server_url": "http://mcp",
+        "hooks": [
+            {"name": "h", "type": "updater", "trigger": "pre_tool_call", "path": f"{P}/h.py"}
+        ],
+    },
+]
+
+
+class TestEveryKeyThatRunsCode:
+    """The loader runs a tool's ``path``, else its ``func.path`` or ``func.module``,
+    a hook's ``path``, and a hook written in a tool's ``hooks``: each is code to show."""
+
+    def test_each_one_is_listed_where_it_is(self, tmp_path: Path) -> None:
+        folder = _project(
+            tmp_path,
+            tools=_CODE_TOOLS,
+            hooks=[{"name": "g", "type": "listener", "path": f"{P}/code/g.py"}],
+        )
+        raw = cfg.read_raw_config(folder / cfg.CONFIG_FILENAME)
+        assert raw is not None
+        cfg.use_project(str(folder))
+
+        found = {p.relative_to(folder.resolve()).as_posix() for p in code_files(raw)}
+
+        assert found == {"code/a.py", "skills/b.py", "code/c.py", "h.py", "code/g.py"}
+
+    def test_a_func_path_outside_the_folder_is_a_file_outside(self, tmp_path: Path) -> None:
+        tool = {"name": "b", "type": "function", "func": {"name": "b", "path": "/elsewhere/b.py"}}
+        folder = _project(tmp_path, tools=[tool])
+        raw = cfg.read_raw_config(folder / cfg.CONFIG_FILENAME)
+        assert raw is not None
+
+        assert project_problems(folder, raw) == ["tool 'b' func.path: /elsewhere/b.py"]
+
+    def test_a_tool_with_a_func_path_is_asked_about_before_it_runs(
+        self, tmp_path: Path, answer: list[str]
+    ) -> None:
+        tool = {"name": "b", "type": "function", "func": {"name": "b", "path": f"{P}/b.py"}}
+        folder = _project(tmp_path, tools=[tool])
+        (folder / "b.py").write_text("def b() -> str:\n    return 'b'\n", encoding="utf-8")
+
+        answer.append("no")
+        with pytest.raises(typer.Exit):
+            _select(folder, runs_code=True)
+
+        assert "b.py" in _said[0]
 
 
 class TestTheCommands:

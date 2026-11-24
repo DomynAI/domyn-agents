@@ -155,11 +155,12 @@ def _confirm(console: Console, theme: Theme, question: str, refusal: str) -> Non
     if not interactive_terminal():
         _say(console, theme, "error", refusal)
         raise typer.Exit(1)
-    if not _yes(console, theme, question):
+    if not ask_yes(console, theme, question):
         raise typer.Exit(1)
 
 
-def _yes(console: Console, theme: Theme, question: str) -> bool:
+def ask_yes(console: Console, theme: Theme, question: str) -> bool:
+    """Ask a yes/no question whose answer is no unless the user says otherwise."""
     answer = select(
         console,
         theme,
