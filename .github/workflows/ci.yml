@@ -198,6 +198,13 @@ jobs:
     # so the test job can wait for this one alone, which has the coverage, while
     # ARM runs beside it. Its check is still required.
     steps: &windows-steps
+      # Defender's real-time scan opens every file written and every program
+      # started, and the suite does both by the thousand: a checkout, uv's
+      # installs, a Git Bash per command. The runner is thrown away after the job.
+      - name: Turn off Defender's real-time scan
+        shell: pwsh
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -293,6 +300,10 @@ jobs:
       # Coverage measured through sys.monitoring (COVERAGE_CORE=sysmon, Python
       # 3.12+), which costs a fifth of the default tracer: on the tests that time
       # themselves, +12% against +57% (measured on Windows on ARM, x64 emulated).
+      # Eight workers on the runner's four cores: the slowest tests (background
+      # commands under Git Bash) mostly wait, so twice as many overlap their
+      # waits. worksteal hands a free worker the tests still queued on a busy one,
+      # so a 15 s test drawn last does not hold the job on one worker.
       - name: Run tests
         shell: bash
         env:
@@ -303,7 +314,7 @@ jobs:
             && '--cov=domyn --cov-report=xml:coverage-windows.xml' || '--no-cov' }}
         run: >-
           uv run --with pytest-timeout pytest tests/ examples/ -q $COVERAGE
-          -p no:cacheprovider --timeout=120 -rfE
+          -p no:cacheprovider --timeout=120 -rfE -n 8 --dist worksteal
 
       # Written even when a test failed, so the coverage check still has it.
       - name: Upload coverage
