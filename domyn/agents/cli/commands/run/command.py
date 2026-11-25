@@ -4,7 +4,7 @@ import importlib.util
 import inspect
 import shlex
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -243,10 +243,11 @@ async def start_session(
     auto_approve: bool = False,
     single_turn: bool = False,
     steering: bool = True,
+    follow_ups: Sequence[str] = (),
 ) -> int:
     """Print the status line, then hand over to the REPL.
 
-    ``auto_approve``, ``single_turn`` and ``steering`` go to the `Repl` as they are:
+    ``auto_approve``, ``single_turn``, ``steering`` and ``follow_ups`` go to the `Repl` as they are:
     `domyn run-headless` turns the first two on and the third off.
 
     Skills and standing instructions are already on the agent (attached by the
@@ -339,6 +340,7 @@ async def start_session(
         enable_steering=steering,
         auto_approve=auto_approve,
         single_turn=single_turn,
+        follow_ups=follow_ups,
     )
     if resumed is not None:
         conversations.render_history(console, theme, resumed, verbose=verbose)

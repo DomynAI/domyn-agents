@@ -23,7 +23,7 @@ import os
 import time
 import uuid
 from collections import deque
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -382,13 +382,16 @@ class Repl:
         auto_approve: bool = False,
         single_turn: bool = False,
         datetime_format: str = "%Y-%m-%dT%H:%M:%S [%A]",
+        follow_ups: Sequence[str] = (),
     ) -> None:
         """``auto_approve`` starts the session with auto-approve on whatever
         ``state.yaml`` says, without remembering it there: for a session nobody is at
         the keyboard of (`domyn run-headless`). The hardline rules still apply.
 
         ``single_turn`` ends the session when the first turn ends, with no read of
-        the input: the initial prompt is the whole conversation."""
+        the input: the initial prompt is the whole conversation, save ``follow_ups``,
+        sent in order as further user turns each time a turn ends, before the session
+        ends (`domyn run-headless`'s review turn)."""
         self._agent = agent
         # Tasks started in the background (the backend's container); held so they are
         # not collected while they run.
@@ -424,6 +427,7 @@ class Repl:
         if auto_approve:
             self._prefs.auto_approve = True
         self._single_turn = single_turn
+        self._follow_ups: deque[str] = deque(follow_ups)
         if resumed is not None:
             self._state.resume_conversation(resumed)
         self._spinner = Spinner(console, theme)
@@ -655,6 +659,9 @@ class Repl:
                 if self._single_turn:
                     return 130
             if self._single_turn:
+                if self._follow_ups:
+                    pending_user_text = self._follow_ups.popleft()
+                    continue
                 return 0
 
     # --- turn execution ----------------------------------------------------

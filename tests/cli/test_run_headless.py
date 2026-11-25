@@ -13,7 +13,11 @@ from typer.testing import CliRunner
 from domyn.agents import BaseEvent, ExecutionEventType, Part, Runner
 from domyn.agents.cli.cli import app
 from domyn.agents.cli.commands.run_headless import command as run_headless
-from domyn.agents.cli.commands.run_headless.command import DEFAULT_INSTRUCTIONS, run_headless_config
+from domyn.agents.cli.commands.run_headless.command import (
+    DEFAULT_INSTRUCTIONS,
+    REVIEW_PROMPT,
+    run_headless_config,
+)
 from domyn.agents.instructions import load_declared
 from domyn.agents.interfaces.cli import config as cli_config
 from domyn.agents.interfaces.cli.state import CliState
@@ -222,6 +226,8 @@ class TestTheCommand:
         assert started["auto_approve"] is True
         assert started["single_turn"] is True
         assert started["steering"] is False
+        # One review turn after the task's, unless --review-turns says otherwise.
+        assert list(started["follow_ups"]) == [REVIEW_PROMPT]
         # The state folder plays ~/.domyn: nothing of a setup is read.
         assert started["home"] == state.resolve()
         written = yaml.safe_load((state / "config.yaml").read_text())
@@ -407,6 +413,15 @@ class TestAConfigFile:
         assert result.exit_code == 0, result.output
         assert os.environ["SETUP_ONLY_KEY"] == "from-credentials"
 
+    def test_review_turns_zero_ends_with_the_task(
+        self, tmp_path: Path, started: dict[str, Any]
+    ) -> None:
+        result = _invoke(
+            "--model_name", "m", "--state-dir", str(tmp_path / "s"), "--review-turns", "0", "x"
+        )
+        assert result.exit_code == 0, result.output
+        assert list(started["follow_ups"]) == []
+
     def test_without_it_the_endpoint_and_model_are_needed(
         self, tmp_path: Path, started: dict[str, Any]
     ) -> None:
@@ -425,6 +440,17 @@ class TestTheRepl:
         repl._single_turn = True
         assert await repl.run(initial_prompt="the task") == 0
         assert repl._state.turns == 1
+        assert repl._input._session._lines == ["never read"]  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_follow_ups_are_sent_as_further_turns_then_the_session_ends(self) -> None:
+        from collections import deque
+
+        repl, _ = _repl("never read")
+        repl._single_turn = True
+        repl._follow_ups = deque(["review it"])
+        assert await repl.run(initial_prompt="the task") == 0
+        assert repl._state.turns == 2
         assert repl._input._session._lines == ["never read"]  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
