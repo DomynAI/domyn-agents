@@ -1,8 +1,9 @@
 """Tell the user, at most once a day, that a newer domyn is out.
 
 `update_notice` is called by ``domyn run`` under the banner. It asks PyPI for the
-latest stable release only when the last answer is older than a day, and keeps the
-answer in ``~/.domyn/update-check.json`` with whether the check is on
+latest stable release only when the last answer is older than a day, in a background
+thread so startup never waits on the network: the answer shows from the next run. It
+keeps the answer in ``~/.domyn/update-check.json`` with whether the check is on
 (``/update-check on|off``). The file is always the global one, never a project's:
 there is one installation to update, whichever project a session uses.
 """
@@ -11,6 +12,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -92,6 +94,21 @@ def update_command() -> str:
     return 'pip install -U "domyn[cli]"'
 
 
+def _refresh_latest() -> None:
+    """Ask PyPI and save the answer, for the next run to show."""
+    latest = latest_version()
+    # Read again after the request, so an `/update-check` given meanwhile is kept.
+    update_checks = _read_update_checks()
+    # Saved even when the check failed, so an offline machine asks once a day.
+    _write_update_checks(
+        {
+            **update_checks,
+            "checked_at": time.time(),
+            "latest": latest or update_checks.get("latest"),
+        }
+    )
+
+
 def update_notice() -> str | None:
     """The line to show when a newer release is out, else None."""
     installed = domyn.agents.__version__
@@ -107,14 +124,10 @@ def update_notice() -> str | None:
         not isinstance(checked_at, (int, float))
         or time.time() - checked_at > CHECK_INTERVAL_SECONDS
     ):
-        latest = latest_version()
-        # Stored even when the check failed, so an offline machine asks once a day.
-        update_checks = {
-            **update_checks,
-            "checked_at": time.time(),
-            "latest": latest or update_checks.get("latest"),
-        }
-        _write_update_checks(update_checks)
+        # Asked in the background so startup never waits on the network: the answer
+        # is saved for the next run, and this one shows what was saved before. A
+        # daemon thread, so a session that ends first is not kept open by it.
+        threading.Thread(target=_refresh_latest, daemon=True).start()
 
     latest = update_checks.get("latest")
     try:

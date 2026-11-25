@@ -2,8 +2,11 @@
 
 import json
 import sys
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -31,7 +34,17 @@ def calls(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     monkeypatch.setattr(update_check, "latest_version", latest)
     monkeypatch.setattr(update_check, "_update_checks_path", _REAL_UPDATE_CHECKS_PATH)
     monkeypatch.setattr(sys, "prefix", "/nowhere/python")
+    # The request runs where the thread would, but at once, so a test can read its answer.
+    monkeypatch.setattr(update_check, "threading", SimpleNamespace(Thread=_RunNow))
     return made
+
+
+class _RunNow:
+    def __init__(self, target: Callable[[], None], daemon: bool) -> None:
+        self._target = target
+
+    def start(self) -> None:
+        self._target()
 
 
 def _update_checks() -> dict:
@@ -39,7 +52,8 @@ def _update_checks() -> dict:
 
 
 class TestTheNotice:
-    def test_names_a_newer_version_and_the_command(self, calls: list[int]) -> None:
+    def test_names_a_newer_version_from_the_next_run(self, calls: list[int]) -> None:
+        assert update_check.update_notice() is None
         notice = update_check.update_notice()
         assert notice is not None
         assert "2.0.0" in notice
@@ -87,6 +101,27 @@ class TestOnceADay:
         assert update_check.update_notice() is None
         assert calls == [1]
 
+    def test_startup_does_not_wait_for_the_answer(
+        self, calls: list[int], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(update_check, "threading", threading)
+        answer = threading.Event()
+
+        def slow() -> str:
+            answer.wait(5)
+            return "2.0.0"
+
+        monkeypatch.setattr(update_check, "latest_version", slow)
+        started = time.monotonic()
+        assert update_check.update_notice() is None
+        assert time.monotonic() - started < 1
+
+        answer.set()
+        deadline = time.monotonic() + 5
+        while not update_check._update_checks_path().is_file() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert update_check.update_notice() is not None
+
 
 class TestTurningItOff:
     def test_off_asks_nothing_and_says_nothing(self, calls: list[int]) -> None:
@@ -98,6 +133,7 @@ class TestTurningItOff:
     def test_on_again(self, calls: list[int]) -> None:
         update_check.set_enabled(False)
         update_check.set_enabled(True)
+        update_check.update_notice()
         assert update_check.update_notice() is not None
 
     @pytest.mark.asyncio
