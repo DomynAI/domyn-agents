@@ -492,9 +492,15 @@ class Repl:
         # Built on the first /voice, not before: it reads the configuration and
         # may load a speech model, which a session that never talks should not pay.
         self._voice: VoiceInput | None = None
+        # Checked once here, so a bad format stops the session at startup rather than
+        # failing every turn: Windows' strftime raises on an unknown directive.
+        try:
+            datetime.datetime.now().strftime(datetime_format)
+        except ValueError as e:
+            raise ValueError(f"Invalid datetime_format {datetime_format!r}: {e}") from e
+        self._datetime_format = datetime_format
         # `domyn run -v` (or a `/verbose` left on) starts with the logs already on,
         # the same ones `/verbose` toggles later.
-        self.datetime_format = datetime_format
         _set_log_level(self._prefs.verbose)
 
     # --- public API --------------------------------------------------------
@@ -661,8 +667,8 @@ class Repl:
             content=[Part(text=user_text)],
             metadata={
                 "user_info": {
-                    "datetime": datetime.datetime.now().astimezone().strftime(self.datetime_format),
-                    "datetime_format": self.datetime_format,
+                    "datetime": datetime.datetime.now().astimezone().strftime(self._datetime_format),
+                    "datetime_format": self._datetime_format,
                 }
             },
         )
