@@ -596,6 +596,93 @@ class TestLineEndingsAndBom:
         assert path.read_bytes() == b"A\nb\n"
 
 
+class TestEditingWhatTheModelMeant:
+    """An edit that names the right text but retypes it slightly wrong.
+
+    The model read the file, then wrote the block out again from memory: a
+    curly quote where the file has a straight one, a space at the end of a line
+    it dropped. Neither is a mistake about *what* to change, and both used to
+    cost a turn — the edit failed, the file was read again, and the second
+    attempt was the first one with a character taken out.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_typographic_quote_in_the_old_text_still_matches(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        path = workspace.root / "quote.py"
+        path.write_text("# don't touch\nx = 1\n", encoding="utf-8")
+        out = await _call(
+            tools, "edit_file", path="quote.py", old="# don\u2019t touch", new="# leave"
+        )
+        assert path.read_text(encoding="utf-8") == "# leave\nx = 1\n"
+        assert "quote" in out, "the model is told which tolerance was used"
+
+    @pytest.mark.asyncio
+    async def test_trailing_whitespace_in_the_old_text_still_matches(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        path = workspace.root / "block.py"
+        path.write_text("def f():\n    a = 1\n    b = 2  \n    return a\n", encoding="utf-8")
+        out = await _call(
+            tools,
+            "edit_file",
+            path="block.py",
+            old="def f():\n    a = 1\n    b = 2\n    return a",
+            new="def f():\n    a = 1\n    b = 3\n    return a",
+        )
+        assert path.read_text(encoding="utf-8") == "def f():\n    a = 1\n    b = 3\n    return a\n"
+        assert "whitespace" in out
+        # The tolerance decides *where* the edit goes; `new` decides what is
+        # there afterwards, so the trailing space the model did not write is
+        # gone from the region it replaced.
+        assert "  \n" not in path.read_text(encoding="utf-8")
+
+    @pytest.mark.asyncio
+    async def test_an_exact_match_says_nothing_extra(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        """The common case keeps the message it had: one line, no caveat."""
+        out = await _call(
+            tools, "edit_file", path="app.py", old="print('hello')", new="print('hi')"
+        )
+        assert out.startswith("Edited app.py")
+        assert "matched" not in out
+
+    @pytest.mark.asyncio
+    async def test_a_reindented_block_is_still_refused(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        """Without context lines, forgiving the indent means guessing the block."""
+        path = workspace.root / "deep.py"
+        path.write_text("    a\n        b\n", encoding="utf-8")
+        out = await _call(
+            tools, "edit_file", path="deep.py", old="    a\n    b", new="    a\n    c"
+        )
+        assert out.startswith("ERROR:")
+        assert path.read_text(encoding="utf-8") == "    a\n        b\n"
+
+    @pytest.mark.asyncio
+    async def test_loose_false_requires_an_exact_match(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        path = workspace.root / "strict.py"
+        path.write_text("    x = 1\n", encoding="utf-8")
+        out = await _call(
+            tools, "edit_file", path="strict.py", old="    x = 1   ", new="    x = 2", loose=False
+        )
+        assert out.startswith("ERROR:")
+        assert path.read_text(encoding="utf-8") == "    x = 1\n"
+
+    @pytest.mark.asyncio
+    async def test_an_empty_old_text_is_refused_by_name(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        out = await _call(tools, "edit_file", path="app.py", old="", new="x")
+        assert "must not be empty" in out
+        assert (workspace.root / "app.py").read_text(encoding="utf-8").startswith("print('hello')")
+
+
 class TestWritingThroughHardLinks:
     """A hard link is a second name for the same file, so it has nothing for
     `Workspace.resolve` to follow: the name is inside the workspace, the file

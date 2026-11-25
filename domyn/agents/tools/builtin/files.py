@@ -13,11 +13,14 @@ to escape every quote and newline in it, and over a few thousand characters it
 misses one. Splitting the write into several smaller calls is the only route
 out that does not depend on the model getting a long escape right.
 
-``edit_file`` replaces an exact string rather than taking a diff or a line
-range. Line numbers go stale between the read and the write, and a diff is a
-format the model gets subtly wrong. An exact match that must occur exactly once
-fails loudly when the file is not what the model thought it was, which is the
-failure you want.
+``edit_file`` replaces a string rather than taking a diff or a line range. Line
+numbers go stale between the read and the write, and a diff is a format the
+model gets subtly wrong. The string must occur exactly once, which fails loudly
+when the file is not what the model thought it was — the failure you want. What
+it does forgive is a difference that cannot change the meaning: a typographic
+quote where the file has the plain character, and whitespace at the ends of the
+lines of a block (see ``matching``). Forgiving those costs nothing. Forgiving a
+merely *similar* block would mean choosing one, and choosing wrong is silent.
 
 Documents — PDF, Word, Excel, PowerPoint, OpenDocument, RTF, EPUB — are read by
 converting them to markdown first, because a model handed the bytes of a PDF
@@ -53,6 +56,7 @@ from typing import TYPE_CHECKING, Any
 import anydoc
 
 from domyn.agents.core import ApprovalType, documents
+from domyn.agents.tools.builtin import matching
 from domyn.agents.tools.builtin.workspace import Workspace, WorkspaceError, is_ignored
 
 if TYPE_CHECKING:
@@ -590,6 +594,18 @@ def _megabytes(size: int) -> str:
     return f"{size / (1024 * 1024):.1f} MB"
 
 
+_LEVEL_NOTES = {
+    matching.PUNCTUATION: " (matched ignoring quote and dash variants)",
+    matching.TRAILING: " (matched ignoring whitespace at the ends of lines)",
+}
+"""What an edit says when the match was not exact.
+
+Said out loud because it is information about the file — there was a curly quote
+there, or a trailing space — and because a tolerance nobody mentions is a
+tolerance the model never learns to stop relying on.
+"""
+
+
 def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
     """Build every file callable bound to one workspace."""
 
@@ -810,17 +826,24 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
             handle.write(stored)
         return f"Appended {written} characters to {workspace.display(resolved)}."
 
-    def edit_file(path: str, old: str, new: str) -> str:
-        r"""Replace an exact piece of text in a file, once.
+    def edit_file(path: str, old: str, new: str, loose: bool = True) -> str:
+        r"""Replace a piece of text in a file, once.
 
-        The old text must appear exactly once, so include enough surrounding
-        context to make it unique. Line endings are the file's business: write
-        ``\n`` in both arguments and a CRLF file stays CRLF.
+        The text is matched exactly first. If that finds nothing, a difference
+        that cannot change the meaning is forgiven: a typographic quote or dash
+        where the file has the plain character, and — unless ``loose`` is false
+        — whitespace at the end of a line. The match must still be unique, so
+        include enough surrounding context to make it so.
+
+        Line endings are the file's business: write ``\n`` in both arguments and
+        a CRLF file stays CRLF.
 
         Args:
             path: File to edit, relative to the workspace root.
-            old: Exact text to replace.
+            old: Text to replace.
             new: Text to put in its place.
+            loose: Also accept a match that differs only in whitespace at the
+                ends of lines. Defaults to true; false requires an exact match.
         """
         resolved = workspace.resolve(path, must_exist=True)
         _refuse_hard_link(path, resolved)
@@ -828,21 +851,25 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
         text = _read_text(path, workspace)
         old = _lf_view(old.removeprefix(BOM))
         new = _lf_view(new.removeprefix(BOM))
-        occurrences = text.view.count(old)
-        if occurrences == 0:
+        if not old:
+            raise WorkspaceError(
+                "old must not be empty. Use write_file to create or replace a file."
+            )
+        matches = matching.find(text.view, old, loose=loose)
+        if not matches:
             raise WorkspaceError(
                 f"That text does not appear in {workspace.display(resolved)}. "
                 "Read the file again — it may not be what you expect."
             )
-        if occurrences > 1:
+        if len(matches) > 1:
             raise WorkspaceError(
-                f"That text appears {occurrences} times in {workspace.display(resolved)}. "
+                f"That text appears {len(matches)} times in {workspace.display(resolved)}. "
                 "Include more surrounding context so the match is unique."
             )
-        start = text.view.index(old)
+        match = matches[0]
         dropped = _dropped(text.stored)
-        first = _stored_offset(dropped, start)
-        last = _stored_offset(dropped, start + len(old), end=True)
+        first = _stored_offset(dropped, match.start)
+        last = _stored_offset(dropped, match.end, end=True)
         region = text.stored[first:last]
         # The replacement takes the ending of what it replaces: a file with
         # mixed endings keeps them outside the edited region and gains no third
@@ -850,7 +877,7 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
         ending = _ending(region) if "\n" in region else text.ending
         edited = text.stored[:first] + _with_ending(new, ending) + text.stored[last:]
         _write_text(resolved, BOM + edited if text.bom else edited)
-        return f"Edited {workspace.display(resolved)}."
+        return f"Edited {workspace.display(resolved)}{_LEVEL_NOTES.get(match.level, '')}."
 
     return {
         "read_file": read_file,
