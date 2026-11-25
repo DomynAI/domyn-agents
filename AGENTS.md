@@ -843,6 +843,16 @@ def my_tool(param: str) -> str:
 tool = FunctionTool(func=my_tool)
 ```
 
+A call whose arguments do not match the signature is refused with a message that
+names them — *"edit_file is missing `old` and `new`. It got `old_text` and
+`new_text`, which are not parameters of this tool. `old_text` looks like `old`."*
+— and not with the `TypeError` the callable would raise: that one names the Python
+function and never mentions what was sent, so the model retries the same way.
+Measured on real sessions, 95 of 96 failed `edit_file` calls used another
+harness's vocabulary (`old_text`/`new_text`, `old_string`/`new_string`), and one
+session repeated the mistake 93 times. Keys the runner adds (`state`, `context`,
+`tool_action`) are still dropped silently: they are not the model's.
+
 **Streamable Function Tools** — an async generator, for output that arrives in
 pieces. Same registration, `type=ToolType.STREAMABLE_FUNCTION` via the decorator.
 

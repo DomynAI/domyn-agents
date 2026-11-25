@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import importlib
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import cached_property
 from typing import Any, Literal
@@ -273,15 +274,45 @@ class FunctionTool(BaseTool):
     async def execute(self, **kwargs: Any) -> ToolResult:
         """Execute the function with given parameters."""
         try:
+            parameters = inspect.signature(self.callable_function).parameters
+            # Keys the runtime adds (``state``, ``context``) are not the model's
+            # arguments and are dropped silently. Keys the model got wrong are
+            # dropped too, so they are remembered here: without them the call
+            # fails with a TypeError that names the Python function and never
+            # mentions what was actually sent, and the model retries the same
+            # way. One session made that mistake ninety-three times.
+            dropped = [key for key in kwargs if key not in parameters]
             kwargs = {
                 k: deepcopy(
                     v
                 )  # Ensure that a tool can not modify kwargs (e.g. state) in place without returning it
                 for k, v in kwargs.items()
-                if k in list(inspect.signature(self.callable_function).parameters.keys())
+                if k in parameters
             }
 
             config_params = {param.name: param.value for param in self.config_params}
+
+            missing = [
+                name
+                for name, param in parameters.items()
+                if param.default is inspect.Parameter.empty
+                and param.kind
+                not in (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL)
+                and name not in kwargs
+                and name not in config_params
+            ]
+            if missing:
+                return ToolResult(
+                    success=False,
+                    error=_arguments_error(
+                        self.name,
+                        parameters,
+                        {key for key in config_params if key},
+                        missing,
+                        dropped,
+                    ),
+                    error_code="ToolArgumentsError",
+                )
 
             if self._is_async_generator:
                 result = "".join(
@@ -451,3 +482,68 @@ class FunctionTool(BaseTool):
             raise ValueError(
                 f"FunctionTool with name '{config['reference']}' not found in registry."
             )
+
+
+_PLANNER_KEYS = frozenset({"reasoning", "thought"})
+"""Arguments the planner puts in the call itself, not in the tool's signature.
+
+``reasoning`` is how domyn asks a model to think before acting — it is read as
+the action's ``thought``, and it appeared in 280 of 280 real ``edit_file`` calls.
+Listing it among the wrong arguments would tell a model that did the right thing
+that it did something wrong.
+"""
+
+
+def _arguments_error(
+    name: str,
+    parameters: Mapping[str, inspect.Parameter],
+    config_names: set[str],
+    missing: list[str],
+    dropped: list[str],
+) -> str:
+    """What a model is told when it calls a tool with the wrong argument names.
+
+    Names, not the TypeError the callable raises: that one says
+    ``build_tools.<locals>.edit_file() missing 2 required positional
+    arguments``, which names neither the tool nor the arguments the model sent,
+    so the model has no way of knowing it used another harness's vocabulary.
+    """
+    shown = [key for key in parameters if key not in config_names]
+    dropped = [key for key in dropped if key not in _PLANNER_KEYS]
+    parts = [f"{name} is missing {_listing([f'`{key}`' for key in missing])}."]
+    if dropped:
+        parts.append(
+            f"It got {_listing([f'`{key}`' for key in dropped])}, which "
+            f"{'is not a parameter' if len(dropped) == 1 else 'are not parameters'} "
+            "of this tool."
+        )
+        hints = [
+            f"`{key}` looks like `{match}`" for key in dropped if (match := _closest(key, shown))
+        ]
+        if hints:
+            parts.append(f"{_listing(hints)}.")
+    parts.append(f"It takes: {', '.join(shown)}.")
+    return " ".join(parts)
+
+
+def _listing(items: list[str]) -> str:
+    """``a``, ``a and b``, ``a, b and c``."""
+    if len(items) <= 1:
+        return "".join(items)
+    return f"{', '.join(items[:-1])} and {items[-1]}"
+
+
+def _closest(key: str, parameters: Sequence[str]) -> str | None:
+    """The parameter a wrong name most likely meant, when one is obvious.
+
+    The real confusions are other harnesses' vocabularies — ``old_text``,
+    ``old_string``, ``file_path`` — so a shared prefix or suffix catches them
+    all; the fuzzy match is only for typos.
+    """
+    for candidate in parameters:
+        if len(candidate) < 2:
+            continue
+        if key.startswith(candidate) or key.endswith(candidate):
+            return candidate
+    matches = difflib.get_close_matches(key, list(parameters), n=1, cutoff=0.7)
+    return matches[0] if matches else None
