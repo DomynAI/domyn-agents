@@ -299,6 +299,27 @@ def _rejection_body(error: BaseException) -> str | None:
         return None
 
 
+_TRANSIENT_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504, 529})
+"""Statuses a provider answers with when the request itself was fine: a timeout, too
+many requests, an overloaded or restarting backend, a gateway that lost its upstream."""
+
+
+def is_transient(error: BaseException) -> bool:
+    """Whether a provider call failed in a way the same request may not fail again.
+
+    A stream the server or a proxy broke off midway (``RemoteProtocolError``: "peer
+    closed connection without sending complete message body"), a timeout, a dropped or
+    refused connection, or one of the statuses in ``_TRANSIENT_STATUS``. A rejection of
+    the request itself (400, 401, 413, a context overflow) is not: sending it again gets
+    the same answer.
+    """
+    if isinstance(error, httpx.HTTPStatusError):
+        return error.response.status_code in _TRANSIENT_STATUS
+    return isinstance(
+        error, httpx.TimeoutException | httpx.NetworkError | httpx.RemoteProtocolError
+    )
+
+
 def is_context_overflow(error: BaseException) -> bool:
     """Whether the provider rejected a request because the prompt did not fit.
 

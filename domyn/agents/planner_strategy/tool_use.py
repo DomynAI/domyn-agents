@@ -20,6 +20,7 @@ Response contract
   - Content only (no tool calls) → implicit ``AGENT_END``.
 """
 
+import asyncio
 import json
 import traceback
 import uuid
@@ -57,6 +58,7 @@ from domyn.agents.llm.base import (
     TokenUsage,
     add_token_usage,
     is_context_overflow,
+    is_transient,
     token_usage_metadata,
 )
 from domyn.agents.logger import get_logger
@@ -91,6 +93,10 @@ MAX_FV_SOFT_MISS_RETRIES = 2
 # Number of times to re-invoke the LLM verbatim (same messages) when a tool
 # call's arguments fail to parse as JSON, before giving up.
 MAX_TOOL_CALL_ARGS_RETRIES = 3
+MAX_TRANSIENT_RETRIES = 3
+"""Times a model call is made again after a transient failure (`is_transient`)."""
+TRANSIENT_RETRY_DELAYS: tuple[float, ...] = (2.0, 8.0, 30.0)
+"""Seconds waited before each of those calls."""
 
 
 def _parse_tool_call_args(
@@ -788,86 +794,107 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                     generation_complete = False
                     malformed_json_retries = 0
                     empty_retries = 0
+                    transient_retries = 0
                     while not generation_complete:
-                        if agent.stream:
-                            streamed_text_parts: list[str] = []
-                            response = None
-                            last_chunk = None
-                            streamed_thought = False
-                            # The whole reasoning, from the chunk that carries it: the
-                            # closing chunk of an answer without calls has none.
-                            streamed_reasoning: str | None = None
-                            # Stream content as it arrives. If tool_calls follow in
-                            # the same turn, this content is a user-visible preamble,
-                            # not internal thought; do not copy it onto the tool event.
-                            async for chunk in agent.llm_provider.generate_streaming(
-                                messages=messages, tools=tool_defs if tool_defs else None
-                            ):
-                                last_chunk = chunk
-                                if chunk.reasoning_content:
-                                    streamed_reasoning = chunk.reasoning_content
-                                # A model with native thinking emits its reasoning
-                                # before the answer, and the provider surfaces it in
-                                # a chunk of its own the moment it is complete.
-                                # Forwarding it here keeps the order the user sees
-                                # the same as the order the model produced: think,
-                                # then answer. Waiting for LLM_END would put the
-                                # reasoning underneath the answer it explains.
-                                if (
-                                    self.carries_thought
-                                    and chunk.reasoning_content
-                                    and not streamed_thought
+                        try:
+                            if agent.stream:
+                                streamed_text_parts: list[str] = []
+                                response = None
+                                last_chunk = None
+                                streamed_thought = False
+                                # The whole reasoning, from the chunk that carries it: the
+                                # closing chunk of an answer without calls has none.
+                                streamed_reasoning: str | None = None
+                                # Stream content as it arrives. If tool_calls follow in
+                                # the same turn, this content is a user-visible preamble,
+                                # not internal thought; do not copy it onto the tool event.
+                                async for chunk in agent.llm_provider.generate_streaming(
+                                    messages=messages, tools=tool_defs if tool_defs else None
                                 ):
-                                    streamed_thought = True
-                                    yield BaseEvent(
-                                        event_type=ExecutionEventType.RESPONSE_TOKEN,
-                                        content=[Part(thought=chunk.reasoning_content.strip())],
-                                        author=agent.name,
-                                        is_partial=True,
-                                    )
-                                # Drop only no-op (None/empty) chunks. Whitespace-only
-                                # chunks (paragraph breaks, list separators) carry
-                                # semantic meaning and must reach the consumer; the
-                                # accumulator also depends on them so the final
-                                # ``response.content`` keeps its formatting.
-                                if chunk.content:
-                                    streamed_text_parts.append(chunk.content)
-                                    # With thought, a sub-agent's text is its reasoning
-                                    # or its report to the caller, never shown as typed.
-                                    if not (self.carries_thought and self.use_stop):
+                                    last_chunk = chunk
+                                    if chunk.reasoning_content:
+                                        streamed_reasoning = chunk.reasoning_content
+                                    # A model with native thinking emits its reasoning
+                                    # before the answer, and the provider surfaces it in
+                                    # a chunk of its own the moment it is complete.
+                                    # Forwarding it here keeps the order the user sees
+                                    # the same as the order the model produced: think,
+                                    # then answer. Waiting for LLM_END would put the
+                                    # reasoning underneath the answer it explains.
+                                    if (
+                                        self.carries_thought
+                                        and chunk.reasoning_content
+                                        and not streamed_thought
+                                    ):
+                                        streamed_thought = True
                                         yield BaseEvent(
                                             event_type=ExecutionEventType.RESPONSE_TOKEN,
-                                            content=[Part(text=chunk.content)],
+                                            content=[Part(thought=chunk.reasoning_content.strip())],
                                             author=agent.name,
                                             is_partial=True,
                                         )
-                                if chunk.tool_calls:
-                                    response = chunk.model_copy(
+                                    # Drop only no-op (None/empty) chunks. Whitespace-only
+                                    # chunks (paragraph breaks, list separators) carry
+                                    # semantic meaning and must reach the consumer; the
+                                    # accumulator also depends on them so the final
+                                    # ``response.content`` keeps its formatting.
+                                    if chunk.content:
+                                        streamed_text_parts.append(chunk.content)
+                                        # With thought, a sub-agent's text is its reasoning
+                                        # or its report to the caller, never shown as typed.
+                                        if not (self.carries_thought and self.use_stop):
+                                            yield BaseEvent(
+                                                event_type=ExecutionEventType.RESPONSE_TOKEN,
+                                                content=[Part(text=chunk.content)],
+                                                author=agent.name,
+                                                is_partial=True,
+                                            )
+                                    if chunk.tool_calls:
+                                        response = chunk.model_copy(
+                                            update={"content": "".join(streamed_text_parts)}
+                                        )
+
+                                if response is None:
+                                    accumulated = "".join(streamed_text_parts)
+                                    base = last_chunk or LLMResponse(
+                                        content="", generated_tokens=0, execution_time=0.0
+                                    )
+                                    response = base.model_copy(
+                                        update={
+                                            "content": accumulated,
+                                            "tool_calls": [],
+                                            "reasoning_content": base.reasoning_content
+                                            or streamed_reasoning,
+                                        }
+                                    )
+                                else:
+                                    response = response.model_copy(
                                         update={"content": "".join(streamed_text_parts)}
                                     )
-
-                            if response is None:
-                                accumulated = "".join(streamed_text_parts)
-                                base = last_chunk or LLMResponse(
-                                    content="", generated_tokens=0, execution_time=0.0
-                                )
-                                response = base.model_copy(
-                                    update={
-                                        "content": accumulated,
-                                        "tool_calls": [],
-                                        "reasoning_content": base.reasoning_content
-                                        or streamed_reasoning,
-                                    }
-                                )
                             else:
-                                response = response.model_copy(
-                                    update={"content": "".join(streamed_text_parts)}
+                                response = await agent.llm_provider.generate(
+                                    messages=messages,
+                                    tools=tool_defs if tool_defs else None,
                                 )
-                        else:
-                            response = await agent.llm_provider.generate(
-                                messages=messages,
-                                tools=tool_defs if tool_defs else None,
+                        except Exception as e:
+                            # A stream broken off midway, a timeout, a 429 or 5xx: the
+                            # request was fine and may well go through again. Whatever
+                            # had streamed of this answer is dropped (a consumer may
+                            # already have shown part of it) and the call is made
+                            # again, a few times, waiting longer each time. Anything
+                            # else goes to the handler below, as before.
+                            if not is_transient(e) or transient_retries >= MAX_TRANSIENT_RETRIES:
+                                raise
+                            delay = TRANSIENT_RETRY_DELAYS[
+                                min(transient_retries, len(TRANSIENT_RETRY_DELAYS) - 1)
+                            ]
+                            transient_retries += 1
+                            logger.warning(
+                                f"LLM call failed ({type(e).__name__}), retrying in {delay:g}s "
+                                f"({transient_retries}/{MAX_TRANSIENT_RETRIES})"
                             )
+                            await asyncio.sleep(delay)
+                            continue
 
                         token_usage = add_token_usage(token_usage, response)
                         if not response.content and not response.tool_calls:

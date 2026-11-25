@@ -2385,6 +2385,92 @@ class TestToolUseWithThoughtPlannerStrategy:
         assert any(e.event_type == ExecutionEventType.ERROR_OCCURRED for e in events)
 
     @pytest.mark.asyncio
+    async def test_a_stream_broken_midway_is_called_again(self, monkeypatch):
+        """A stream the server breaks off is called again; what it had streamed is dropped."""
+        import httpx
+
+        from domyn.agents.planner_strategy import tool_use
+
+        monkeypatch.setattr(tool_use, "TRANSIENT_RETRY_DELAYS", (0.0,))
+        strategy = self._make_strategy()
+        agent = self._make_agent()
+        agent.stream = True
+        agent.llm_provider = AsyncMock()
+        calls = 0
+
+        async def flaky_streaming(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                yield LLMResponse(content="half an ans", generated_tokens=1, execution_time=0.0)
+                raise httpx.RemoteProtocolError(
+                    "peer closed connection without sending complete message body"
+                )
+            yield LLMResponse(content="the answer", generated_tokens=1, execution_time=0.0)
+
+        agent.llm_provider.generate_streaming = flaky_streaming
+        context = make_context(
+            conversation_history=[make_event(ExecutionEventType.USER_INPUT, content_text="Hi")]
+        )
+
+        events = [event async for event in strategy.execute(agent, context)]
+
+        assert calls == 2
+        assert not any(e.event_type == ExecutionEventType.ERROR_OCCURRED for e in events)
+        response_event = next(e for e in events if e.event_type == ExecutionEventType.RESPONSE)
+        assert response_event.content[0].text == "the answer"
+
+    @pytest.mark.asyncio
+    async def test_transient_failures_are_retried_a_few_times_then_reported(self, monkeypatch):
+        import httpx
+
+        from domyn.agents.planner_strategy import tool_use
+
+        monkeypatch.setattr(tool_use, "TRANSIENT_RETRY_DELAYS", (0.0,))
+        strategy = self._make_strategy()
+        agent = self._make_agent()
+        agent.stream = False
+        request = httpx.Request("POST", "http://llm/v1/chat/completions")
+        agent.llm_provider.generate = AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "503", request=request, response=httpx.Response(503, request=request)
+            )
+        )
+        context = make_context(
+            conversation_history=[make_event(ExecutionEventType.USER_INPUT, content_text="Hi")]
+        )
+
+        events = [event async for event in strategy.execute(agent, context)]
+
+        assert agent.llm_provider.generate.await_count == 1 + tool_use.MAX_TRANSIENT_RETRIES
+        assert any(e.event_type == ExecutionEventType.ERROR_OCCURRED for e in events)
+
+    @pytest.mark.asyncio
+    async def test_a_rejected_request_is_not_retried(self, monkeypatch):
+        import httpx
+
+        from domyn.agents.planner_strategy import tool_use
+
+        monkeypatch.setattr(tool_use, "TRANSIENT_RETRY_DELAYS", (0.0,))
+        strategy = self._make_strategy()
+        agent = self._make_agent()
+        agent.stream = False
+        request = httpx.Request("POST", "http://llm/v1/chat/completions")
+        agent.llm_provider.generate = AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "401", request=request, response=httpx.Response(401, request=request)
+            )
+        )
+        context = make_context(
+            conversation_history=[make_event(ExecutionEventType.USER_INPUT, content_text="Hi")]
+        )
+
+        events = [event async for event in strategy.execute(agent, context)]
+
+        assert agent.llm_provider.generate.await_count == 1
+        assert any(e.event_type == ExecutionEventType.ERROR_OCCURRED for e in events)
+
+    @pytest.mark.asyncio
     async def test_stream_true_non_str_llm_response_chunk_not_emitted_as_token(self):
         """LLMResponse chunks (non-str) from generate_streaming must NOT produce RESPONSE_TOKEN."""
         strategy = self._make_strategy()

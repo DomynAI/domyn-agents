@@ -175,3 +175,40 @@ def test_the_reported_prompt_is_the_whole_prompt(usage: dict, prompt: int) -> No
 def test_a_usage_without_a_count_reports_nothing(usage: dict | None) -> None:
     """`None`, not 0: "no count" and "an empty prompt" lead to opposite decisions."""
     assert reported_prompt_tokens(usage) is None
+
+
+class TestIsTransient:
+    @staticmethod
+    def _status(code: int) -> "httpx.HTTPStatusError":
+        import httpx
+
+        request = httpx.Request("POST", "http://llm/v1/chat/completions")
+        return httpx.HTTPStatusError(
+            str(code), request=request, response=httpx.Response(code, request=request)
+        )
+
+    def test_a_stream_broken_midway_is_transient(self) -> None:
+        import httpx
+
+        from domyn.agents.llm.base import is_transient
+
+        assert is_transient(
+            httpx.RemoteProtocolError(
+                "peer closed connection without sending complete message body"
+            )
+        )
+        assert is_transient(httpx.ReadTimeout("timed out"))
+        assert is_transient(httpx.ConnectError("refused"))
+
+    def test_overload_and_gateway_statuses_are_transient(self) -> None:
+        from domyn.agents.llm.base import is_transient
+
+        for code in (429, 500, 502, 503, 504):
+            assert is_transient(self._status(code)), code
+
+    def test_a_rejected_request_is_not(self) -> None:
+        from domyn.agents.llm.base import is_transient
+
+        for code in (400, 401, 403, 404, 413, 422):
+            assert not is_transient(self._status(code)), code
+        assert not is_transient(ValueError("bad"))
