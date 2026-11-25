@@ -13,7 +13,7 @@ import pytest
 from pydantic import PrivateAttr
 
 from domyn.agents.agents import Agent
-from domyn.agents.approvals import append_user_edit_note, user_edit_note
+from domyn.agents.approvals import user_edit_note, with_user_edit_note
 from domyn.agents.core import (
     METADATA_INITIAL_PARAMETERS,
     ApprovalType,
@@ -42,7 +42,7 @@ from domyn.agents.runner import Runner
 from domyn.agents.tools.base import ToolResult
 from domyn.agents.tools.function_tool import FunctionTool
 
-USER_EDIT_NOTE = "before approving, the user rejected the arguments you proposed"
+USER_EDIT_NOTE = "the user edited this call before approving it"
 REFUSAL = "User refused to execute the tool multiply"
 
 
@@ -153,7 +153,7 @@ async def test_tool_use_shows_the_edited_call_as_it_ran(planner: str) -> None:
     assert USER_EDIT_NOTE in str(request[-1].content)
     assert '"a": 3' in str(request[-1].content), "the note names the initial arguments"
     # Without it, a sub-agent went back to the value its task named.
-    assert "override your task" in str(request[-1].content)
+    assert "differs from their earlier message or your task" in str(request[-1].content)
 
 
 @pytest.mark.parametrize("planner", ["tool_use", "tool_use_thought"])
@@ -192,7 +192,7 @@ async def test_tool_use_shows_an_edited_call_that_failed_as_it_ran(planner: str)
     assert request[-1].role == "tool"
     assert "a=4 is not allowed" in str(request[-1].content)
     assert _joined_contents(request).count(USER_EDIT_NOTE) == 1
-    assert "the error above" in str(request[-1].content)
+    assert "the error below" in str(request[-1].content)
     # Told only to start from "the user's values", models retried with the rejected ones.
     assert 'To retry, call exactly multiply({"a": 4, "b": 5})' in str(request[-1].content)
     assert "The call is done" not in _joined_contents(request)
@@ -210,15 +210,17 @@ def _multiply_returning_zero() -> Any:
 
 @pytest.mark.parametrize("planner", ["tool_use", "tool_use_thought"])
 @pytest.mark.asyncio
-async def test_tool_use_keeps_a_zero_result_before_the_note(planner: str) -> None:
+async def test_tool_use_keeps_a_zero_result_after_the_note(planner: str) -> None:
     _, provider = await _run_and_answer_approval(
         planner, approve=True, edit=True, func=_multiply_returning_zero()
     )
     request = provider._requests[-1]
 
     assert request[-1].role == "tool"
-    # After the event id the model is shown, the result comes before the note.
-    assert "]\n0\n\nNote: " + USER_EDIT_NOTE in str(request[-1].content)
+    # After the event id the model is shown, the note comes before the result.
+    content = str(request[-1].content)
+    assert content.startswith("[event_id: ") and "]\nNote: " + USER_EDIT_NOTE in content
+    assert content.endswith("\n\n0")
 
 
 @pytest.mark.asyncio
@@ -305,7 +307,7 @@ async def test_react_tells_an_edited_call_failed_with_the_users_arguments(prompt
     messages = await _react_messages(runner, narrow=True, prompting=prompting())
 
     assert _joined_contents(messages).count(USER_EDIT_NOTE) == 1
-    assert "the error above" in _joined_contents(messages)
+    assert "the error below" in _joined_contents(messages)
 
 
 @pytest.mark.asyncio
@@ -399,7 +401,7 @@ async def test_a_long_edited_result_is_cut_before_the_note() -> None:
 
     assert len(shown_result) <= 2_000
     assert "are not shown here" in shown_result
-    assert shown_result.endswith(user_edit_note(events[1], has_result=True))
+    assert user_edit_note(events[1], has_result=True) + "\n\n" in shown_result
     read_back = planner.context_manager.tool_results(agent, context).text("edited_tool_end")
     assert read_back == long_result
 
@@ -415,9 +417,9 @@ def _user_edited_tool_end(observation: Any) -> BaseEvent:
 
 @pytest.mark.parametrize("observation", [0, False, "  indented"])
 def test_the_user_edit_note_keeps_every_result(observation: Any) -> None:
-    rendered_result = append_user_edit_note(observation, _user_edited_tool_end(observation))
+    rendered_result = with_user_edit_note(observation, _user_edited_tool_end(observation))
 
-    assert rendered_result.startswith(f"{observation}\n\n")
+    assert rendered_result.endswith(f"\n\n{observation}")
     assert USER_EDIT_NOTE in rendered_result
 
 
@@ -435,18 +437,18 @@ def test_a_missing_result_is_the_user_edit_note_alone(
     event = _user_edited_tool_end(observation)
     event.event_type = event_type
 
-    rendered_result = append_user_edit_note(observation, event)
+    rendered_result = with_user_edit_note(observation, event)
 
     assert rendered_result.startswith("Note: ")
-    assert f'multiply({{"a": 0, "b": 5}}) and {outcome}' in rendered_result
-    assert "above" not in rendered_result
+    assert f"not yours, and {outcome}" in rendered_result
+    assert "below" not in rendered_result
 
 
 def test_a_result_of_a_call_not_edited_is_left_as_it_is() -> None:
     event = _user_edited_tool_end({"a": 1})
     event.metadata = {}
 
-    assert append_user_edit_note({"a": 1}, event) == {"a": 1}
+    assert with_user_edit_note({"a": 1}, event) == {"a": 1}
 
 
 @pytest.mark.asyncio

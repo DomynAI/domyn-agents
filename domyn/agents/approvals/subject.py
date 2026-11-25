@@ -50,9 +50,9 @@ def visible_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
 
 
 def user_edit_note(tool_result_event: BaseEvent, has_result: bool) -> str:
-    """The note for the model after the result of a call the user edited before approving
-    it, starting with the blank line that parts it from the result (*has_result* false: the
-    note alone, saying the call gave nothing); empty for any other event.
+    """The note for the model before the result of a call the user edited before approving
+    it (*has_result* false: the note alone, saying the call gave nothing); empty for any
+    other event.
 
     Added where the result is rendered for a model, never to the stored result: the
     note is an instruction to the model, and the stored result is what users see.
@@ -68,33 +68,30 @@ def user_edit_note(tool_result_event: BaseEvent, has_result: bool) -> str:
 
     final_call = format_call(final_action.parameters or {})
     failed = tool_result_event.event_type == ExecutionEventType.TOOL_ERROR
-    # Says whose arguments were rejected, and that they outrank the task: told only "the user's
-    # values", models retried with the rejected ones, or went back to what their task named.
     if has_result:
-        gap = "\n\n"
-        outcome = f", and the {'error' if failed else 'result'} above is for the user's arguments."
+        outcome = f", and the {'error' if failed else 'result'} below is for them."
     else:
-        gap = ""
-        outcome = " and failed with no error message." if failed else " and returned nothing."
+        outcome = ", and failed with no error message." if failed else ", and returned nothing."
+    # Before the result, saying the edit is the request now: after it, or without that, models
+    # read the edit as a mistake and made the call again with the values of the user's message.
     note = (
-        f"{gap}Note: before approving, the user rejected the arguments you proposed, "
-        f"{format_call(initial_parameters)}, and replaced them: this call ran as {final_call}"
-        f"{outcome}"
+        f"Note: the user edited this call before approving it. You proposed "
+        f"{format_call(initial_parameters)}; the user replaced it with {final_call}, so this call "
+        f"ran with the user's arguments, not yours{outcome} By editing it the user changed their "
+        "request: where the edit differs from their earlier message or your task, the edit is "
+        "what they want now, not a mistake, so do not go back to the earlier values."
     )
     if not failed:
         note += " The call is done: do not make it again."
-    note += (
-        " The user's arguments override your task and the request: use them from now on, in "
-        "related calls too, and never the rejected values."
-    )
+    note += " Use the user's arguments from now on, in related calls too."
     if failed:
         note += f" To retry, call exactly {final_call}."
     return note
 
 
-def append_user_edit_note(tool_result: Any, tool_result_event: BaseEvent) -> Any:
-    """*tool_result*, followed by ``user_edit_note`` when *tool_result_event* is the result of
-    a call the user edited before approving it; unchanged for any other event.
+def with_user_edit_note(tool_result: Any, tool_result_event: BaseEvent) -> Any:
+    """*tool_result*, after ``user_edit_note`` when *tool_result_event* is the result of a
+    call the user edited before approving it; unchanged for any other event.
 
     *tool_result* is passed apart because it is not always the event's observation: the
     delegate relay passes the error message of a failed call. A missing or empty one gets
@@ -110,7 +107,7 @@ def append_user_edit_note(tool_result: Any, tool_result_event: BaseEvent) -> Any
     note = user_edit_note(tool_result_event, has_result=has_result)
     if not note:
         return tool_result
-    return f"{text}{note}" if has_result else note
+    return f"{note}\n\n{text}" if has_result else note
 
 
 def compute_subject(tool: Any, parameters: dict[str, Any]) -> str:

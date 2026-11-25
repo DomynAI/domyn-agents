@@ -254,17 +254,16 @@ class ToolUseContextManager(ContextManager):
                             )
                             header = ""
                             body_budget = self.max_tool_result_chars
-                        # The note on an edited call goes after the cut, so a long result never
+                        # The note on an edited call is outside the cut, so a long result never
                         # cuts it, and takes its room from the result's.
                         text = texts.text_of(event)
                         note = user_edit_note(event, has_result=text != "")
-                        observation = (
-                            _keep_start_and_end(
-                                text,
-                                max(body_budget - len(note), 0),
-                                event.event_id if reads_back else None,
-                            )
-                            + note
+                        if note and text:
+                            note += "\n\n"
+                        observation = note + _keep_start_and_end(
+                            text,
+                            max(body_budget - len(note), 0),
+                            event.event_id if reads_back else None,
                         )
                         if event.author != agent.name:
                             # Foreign tool result: attributed user-role

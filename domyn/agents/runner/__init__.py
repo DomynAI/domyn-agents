@@ -22,10 +22,10 @@ from domyn.agents.approvals import (
     ApprovalScope,
     ApprovalVerdict,
     ConversationApprovalStore,
-    append_user_edit_note,
     build_request,
     is_already_approved,
     visible_parameters,
+    with_user_edit_note,
 )
 from domyn.agents.conversation_manager import (
     BaseConversationManager,
@@ -2374,13 +2374,13 @@ class Runner:
                 delegate_result_event = delegate_result_event.model_copy(deep=True)
                 delegate_result_action: Any = delegate_result_event.action
                 tool_result = delegate_result_action.observation
-                delegate_result_action.observation = append_user_edit_note(
+                delegate_result_action.observation = with_user_edit_note(
                     tool_result, delegate_result_event
                 )
                 if delegate_result_event.event_type == ExecutionEventType.TOOL_ERROR:
                     # Adapters hand a remote only the error message of a failed call; a
                     # tool that yielded nothing has none, only the observation.
-                    delegate_result_event.error_message = append_user_edit_note(
+                    delegate_result_event.error_message = with_user_edit_note(
                         delegate_result_event.error_message or tool_result, delegate_result_event
                     )
             await state.current_agent.transport.send_result(
