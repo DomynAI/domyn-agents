@@ -99,6 +99,6 @@ These are passed to `Runner.run()` as `user_input`.
 
 | Type | Purpose |
 |---|---|
-| `user_input` | A message from the user: `content` with its text. |
+| `user_input` | A message from the user: `content` with its text. Optionally `metadata["user_info"]`, a dict the model is shown before the text, one `KEY: value` line per entry; sub-agents the message reaches get it too. `domyn run` sets `datetime` (the local date and time) and `datetime_format` (the `strftime` format it is written in). |
 | `tool_feedback` | The answer to a `tool_needs_feedback`: its `action`, with `approve` set and, optionally, edited `parameters` and a `remember_scope`. See [Tool approvals](../guides/approvals.md). |
 | `compaction_requested` | Asks for a compaction now, instead of waiting for the threshold. The stream is only `context_compaction_start` and `context_compacted` (only the latter, with `changed: False`, for a planner that cannot compact), and the request is not added to the conversation. See [Context compaction](../guides/context-compaction.md). |

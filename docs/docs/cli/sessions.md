@@ -36,6 +36,8 @@ Which skills and [standing instructions](../guides/standing-instructions.md) a s
 
 Type a message and press Enter. To start a new line without sending, press Ctrl+J, or Alt+Enter (on a Mac, Option+Enter, if the terminal is set to use Option as Meta). The answer is printed as it is generated, together with each tool call the agent makes, one line per call. While the model is working or a tool is running, a clock shows how long that step has taken (`thinking` or `executing`), and when the turn ends the session prints its total time.
 
+Each message you send carries your local date, time and day of the week (`2026-11-25T10:30:56 [Wednesday]`), so the agent knows when you are writing: "tomorrow" or "last Friday" mean what you meant. It is sent to the model with the message, so the model's provider sees your local time, and with it your timezone.
+
 The answer and the model's reasoning are rendered as Markdown: headings, lists, quotes, code blocks with syntax colours, and tables with borders. A line appears once it is complete; the line still being written, or a table still being received, is shown above the input line until it is. When the output is not a terminal that shows colour, such as a pipe, a file or a terminal with `NO_COLOR` set, the text is printed as the model wrote it, so output redirected to a file keeps the Markdown source.
 
 **While the agent is working** you can keep typing:
