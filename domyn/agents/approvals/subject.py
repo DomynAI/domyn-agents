@@ -49,9 +49,10 @@ def visible_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in parameters.items() if key not in INJECTED_PARAMS}
 
 
-def append_user_edit_note(tool_result: Any, tool_result_event: BaseEvent) -> Any:
-    """*tool_result*, followed by a note for the model when *tool_result_event* is the result of a
-    call the user edited before approving it; unchanged for any other event.
+def user_edit_note(tool_result_event: BaseEvent, has_result: bool) -> str:
+    """The note for the model after the result of a call the user edited before approving
+    it, starting with the blank line that parts it from the result (*has_result* false: the
+    note alone, saying the call gave nothing); empty for any other event.
 
     Added where the result is rendered for a model, never to the stored result: the
     note is an instruction to the model, and the stored result is what users see.
@@ -59,7 +60,7 @@ def append_user_edit_note(tool_result: Any, tool_result_event: BaseEvent) -> Any
     initial_parameters = tool_result_event.metadata.get(METADATA_INITIAL_PARAMETERS)
     final_action: Any = tool_result_event.action  # mypy reads `BaseEvent.action` as `None`
     if initial_parameters is None or final_action is None:
-        return tool_result
+        return ""
 
     def format_call(parameters: dict[str, Any]) -> str:
         arguments = json.dumps(visible_parameters(parameters), ensure_ascii=False, default=str)
@@ -69,25 +70,47 @@ def append_user_edit_note(tool_result: Any, tool_result_event: BaseEvent) -> Any
     failed = tool_result_event.event_type == ExecutionEventType.TOOL_ERROR
     # Says whose arguments were rejected, and that they outrank the task: told only "the user's
     # values", models retried with the rejected ones, or went back to what their task named.
-    user_edit_note = (
-        f"Note: before approving, the user rejected the arguments you proposed, "
-        f"{format_call(initial_parameters)}, and replaced them: this call ran as {final_call}, "
-        f"and the {'error' if failed else 'result'} above is for the user's arguments."
+    if has_result:
+        gap = "\n\n"
+        outcome = f", and the {'error' if failed else 'result'} above is for the user's arguments."
+    else:
+        gap = ""
+        outcome = " and failed with no error message." if failed else " and returned nothing."
+    note = (
+        f"{gap}Note: before approving, the user rejected the arguments you proposed, "
+        f"{format_call(initial_parameters)}, and replaced them: this call ran as {final_call}"
+        f"{outcome}"
     )
     if not failed:
-        user_edit_note += " The call is done: do not make it again."
-    user_edit_note += (
+        note += " The call is done: do not make it again."
+    note += (
         " The user's arguments override your task and the request: use them from now on, in "
         "related calls too, and never the rejected values."
     )
     if failed:
-        user_edit_note += f" To retry, call exactly {final_call}."
-    if isinstance(tool_result, dict | list):
-        tool_result = json.dumps(tool_result, ensure_ascii=False, default=str)
-    # Only a missing result gives way to the note: a 0 or False is the result.
-    if tool_result is None or tool_result == "":
-        return user_edit_note
-    return f"{tool_result}\n\n{user_edit_note}"
+        note += f" To retry, call exactly {final_call}."
+    return note
+
+
+def append_user_edit_note(tool_result: Any, tool_result_event: BaseEvent) -> Any:
+    """*tool_result*, followed by ``user_edit_note`` when *tool_result_event* is the result of
+    a call the user edited before approving it; unchanged for any other event.
+
+    *tool_result* is passed apart because it is not always the event's observation: the
+    delegate relay passes the error message of a failed call. A missing or empty one gets
+    the note alone.
+    """
+    text = (
+        json.dumps(tool_result, ensure_ascii=False, default=str)
+        if isinstance(tool_result, dict | list)
+        else tool_result
+    )
+    # Only a missing result is no result: a 0 or False is the result.
+    has_result = text is not None and text != ""
+    note = user_edit_note(tool_result_event, has_result=has_result)
+    if not note:
+        return tool_result
+    return f"{text}{note}" if has_result else note
 
 
 def compute_subject(tool: Any, parameters: dict[str, Any]) -> str:

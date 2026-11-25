@@ -13,7 +13,7 @@ import pytest
 from pydantic import PrivateAttr
 
 from domyn.agents.agents import Agent
-from domyn.agents.approvals import append_user_edit_note
+from domyn.agents.approvals import append_user_edit_note, user_edit_note
 from domyn.agents.core import (
     METADATA_INITIAL_PARAMETERS,
     ApprovalType,
@@ -358,6 +358,52 @@ async def test_a_reused_call_id_shows_only_the_edited_call_as_it_ran() -> None:
     ]
 
 
+@pytest.mark.asyncio
+async def test_a_long_edited_result_is_cut_before_the_note() -> None:
+    planner = PlannerStrategyFactory.from_config(
+        {"type": "tool_use_thought", "context_manager": {"max_tool_result_chars": 2_000}},
+        save_in_registry=False,
+    )
+    agent = Agent(
+        name="Calc",
+        description="Multiplies.",
+        instruction="Use the tools.",
+        llm_provider=_ScriptedProvider(),
+        planner=planner,
+        tools=[FunctionTool(func=multiply, approval_type=ApprovalType.PARAMS_UPDATE)],
+    )
+    long_result = "".join(f"line {i}\n" for i in range(1_000))
+    events = [
+        BaseEvent(
+            event_type=event_type,
+            event_id=f"edited_{event_type.value}",
+            author="Calc",
+            action=ToolAction(
+                call_id="call_1",
+                name="multiply",
+                parameters={"a": 4, "b": 5},
+                observation=long_result,
+            ),
+            metadata={METADATA_INITIAL_PARAMETERS: {"a": 3, "b": 2}}
+            if event_type == ExecutionEventType.TOOL_END
+            else {},
+        )
+        for event_type in (ExecutionEventType.TOOL_START, ExecutionEventType.TOOL_END)
+    ]
+    context = InteractionContext(
+        conversation_id="c1", user_id="u", agent_input=events[0], conversation_history=events
+    )
+
+    messages = await planner.context_manager.get_context(context, agent)
+    shown_result = next(m.content for m in messages if m.role == "tool")
+
+    assert len(shown_result) <= 2_000
+    assert "are not shown here" in shown_result
+    assert shown_result.endswith(user_edit_note(events[1], has_result=True))
+    read_back = planner.context_manager.tool_results(agent, context).text("edited_tool_end")
+    assert read_back == long_result
+
+
 def _user_edited_tool_end(observation: Any) -> BaseEvent:
     return BaseEvent(
         event_type=ExecutionEventType.TOOL_END,
@@ -376,10 +422,31 @@ def test_the_user_edit_note_keeps_every_result(observation: Any) -> None:
 
 
 @pytest.mark.parametrize("observation", [None, ""])
-def test_a_missing_result_is_the_user_edit_note_alone(observation: Any) -> None:
-    rendered_result = append_user_edit_note(observation, _user_edited_tool_end(observation))
+@pytest.mark.parametrize(
+    ("event_type", "outcome"),
+    [
+        (ExecutionEventType.TOOL_END, "returned nothing."),
+        (ExecutionEventType.TOOL_ERROR, "failed with no error message."),
+    ],
+)
+def test_a_missing_result_is_the_user_edit_note_alone(
+    observation: Any, event_type: ExecutionEventType, outcome: str
+) -> None:
+    event = _user_edited_tool_end(observation)
+    event.event_type = event_type
+
+    rendered_result = append_user_edit_note(observation, event)
 
     assert rendered_result.startswith("Note: ")
+    assert f'multiply({{"a": 0, "b": 5}}) and {outcome}' in rendered_result
+    assert "above" not in rendered_result
+
+
+def test_a_result_of_a_call_not_edited_is_left_as_it_is() -> None:
+    event = _user_edited_tool_end({"a": 1})
+    event.metadata = {}
+
+    assert append_user_edit_note({"a": 1}, event) == {"a": 1}
 
 
 @pytest.mark.asyncio

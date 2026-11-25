@@ -9,7 +9,7 @@ import json
 import uuid
 from typing import Any
 
-from domyn.agents.approvals import INJECTED_PARAMS
+from domyn.agents.approvals import INJECTED_PARAMS, user_edit_note
 from domyn.agents.core import (
     METADATA_CONVERTED_TO_AGENT_END,
     METADATA_EXTERNAL_PART_AGENT_VISIBLE,
@@ -254,10 +254,17 @@ class ToolUseContextManager(ContextManager):
                             )
                             header = ""
                             body_budget = self.max_tool_result_chars
-                        observation = _keep_start_and_end(
-                            texts.text_of(event),
-                            body_budget,
-                            event.event_id if reads_back else None,
+                        # The note on an edited call goes after the cut, so a long result never
+                        # cuts it, and takes its room from the result's.
+                        text = texts.text_of(event)
+                        note = user_edit_note(event, has_result=text != "")
+                        observation = (
+                            _keep_start_and_end(
+                                text,
+                                max(body_budget - len(note), 0),
+                                event.event_id if reads_back else None,
+                            )
+                            + note
                         )
                         if event.author != agent.name:
                             # Foreign tool result: attributed user-role
