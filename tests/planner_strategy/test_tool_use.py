@@ -1927,6 +1927,41 @@ class TestToolUseWithThoughtPlannerStrategy:
         assert any(e.event_type == ExecutionEventType.ERROR_OCCURRED for e in events)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("use_stop", "finish"),
+        [(False, "write your answer to the user"), (True, "call the `STOP` tool")],
+    )
+    async def test_an_empty_response_is_told_it_may_answer_or_call_a_tool(
+        self, use_stop: bool, finish: str
+    ):
+        """After a response with neither text nor a tool call, the model is told
+        both ways out — finish, or call a tool as a tool call — not only to
+        answer the user, which made a model that meant to call a tool write the
+        call out as text. A sub-agent finishes through its stop tool."""
+        strategy = self._make_strategy(use_stop=use_stop)
+        agent = self._make_agent(tools=[make_mock_tool("search")], use_stop=use_stop)
+        agent.llm_provider = AsyncMock()
+        sent: list[list[LLMMessage]] = []
+        responses = iter([self._llm_response(content=""), self._llm_response(content="Done.")])
+
+        async def generate(messages, **_):
+            sent.append(list(messages))
+            return next(responses)
+
+        agent.llm_provider.generate = AsyncMock(side_effect=generate)
+        context = make_context(
+            conversation_history=[make_event(ExecutionEventType.USER_INPUT, content_text="Hi")]
+        )
+
+        async for _ in strategy.execute(agent, context):
+            pass
+
+        feedback = sent[1][-1]
+        assert feedback.role == "system"
+        assert finish in feedback.content
+        assert "Otherwise, call the tool you need next as a tool call" in feedback.content
+
+    @pytest.mark.asyncio
     async def test_thought_propagated_to_agent_handoff(self):
         """AgentAction.thought and .message must carry the extracted thought on handoff."""
         strategy = self._make_strategy()
