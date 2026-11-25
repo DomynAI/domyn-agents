@@ -26,8 +26,8 @@ The estimate counts three characters per token, rounding up, plus a small allowa
 
 The conversation is split in three parts:
 
-- **The head**: the system prompt and the conversation's first message. Never summarized, since it frames the whole conversation.
-- **The tail**: the most recent messages, about `keep_recent_tokens` (20,000 by default) worth, and never more than half the room the conversation has under the threshold, so that a small window can still be compacted. Never compacted, since it is what the agent is working on.
+- **The head**: the system prompt and the conversation's first message. Never summarized, since it frames the whole conversation, unless that message alone is larger than the tail: a pasted document is no framing.
+- **The tail**: the most recent messages, about `keep_recent_tokens` (20,000 by default) worth, and never more than half the room the conversation has under the threshold, so that a small window can still be compacted. Never compacted, since it is what the agent is working on. An earlier message from the user larger than the whole tail stays out of it, so it can be summarized; the last message is always in it.
 - **The middle**: everything in between, which is what gets shortened.
 
 The cut never separates a tool call from its result, which providers would reject.
@@ -35,13 +35,21 @@ The cut never separates a tool call from its result, which providers would rejec
 Compaction happens in two phases:
 
 1. **Pruning.** Each tool output before the tail longer than 200 characters is replaced with a note saying what it was, such as `[fetch_report output dropped to save context — 3 lines. Read it again with read_tool_result(result_id="event_…")]`, with the exit code when the output had one. The agent can read the output again with that call, since the conversation keeps it whole. A sub-agent's task or report, pruned the same way, has no tool output to read and its note gives no call. It needs no model call, and in an agent conversation tool outputs are usually most of the text.
-2. **Summarizing.** If the conversation is still over the threshold, the agent's model is asked to summarize the middle: what the user asked for, what was established, what was tried and failed, and what is still open. The summary replaces the middle, as one message starting with `[conversation summary]`. The user's latest message is never summarized, wherever the tail begins. If the summary fails, the pruning is kept.
+2. **Summarizing.** If the conversation is still over the threshold, the agent's model is asked to summarize the middle: what the user asked for, what was established, what was tried and failed, and what is still open. The summary replaces the middle, as one message starting with `[conversation summary]`. The user's latest message is never summarized, wherever the tail begins. If the summary fails, or is no shorter than what it would replace, the pruning is kept.
 
 The conversation itself is never rewritten: every event stays in the history. What was dropped and the summary are recorded in the conversation's state, for each agent, and applied again on every later request, so a compaction lasts and a summary is paid for once. When a later compaction summarizes again, the previous summary is part of what it summarizes.
 
+## A message larger than the window
+
+No phase shortens a message from the user. One that does not fit the window on its own, with the system prompt, the tool definitions and the turn's skills and memories, such as a large pasted document, is refused before anything is sent: the turn ends with an `error_occurred` event whose `error_code` is `RequestTooLong`, and the message is left out of the conversation. Every later request carries a one-line note in its place, saying a message was not sent because it did not fit, so the agent can tell the user what happened. The conversation itself still holds the message.
+
+The same happens when, once compacted, the whole request is still over the window: the user's message is left out when the conversation fits without it. Otherwise the turn ends with `ConversationTooLong`, and the conversation has to start again. So no request larger than the window is ever sent, and the share of the window that `llm_start` reports never exceeds 100%. A message from earlier in the conversation that no longer fits, after the window got smaller, is left out too, and the turn goes on: `context_compacted` says so, with the message in `metadata["excluded"]`.
+
+All of this needs a known window, and an acting strategy: with `noop`, or with compaction disabled, nothing is refused.
+
 ## When the provider rejects a request
 
-The estimate can still fall short, or the window can be unknown. When the provider rejects a request because the prompt is too long, the agent compacts the conversation to about half its estimated size and sends the request again. It does this once per turn: a second rejection ends the turn with an `error_occurred` event. When the rejection states the window, as vLLM, OpenAI, OpenRouter, Anthropic and LiteLLM's do (`maximum context length is 32768 tokens`), that window is used for the requests that follow, and remembered for the same endpoint and model until the process exits.
+The estimate can still fall short, or the window can be unknown. When the provider rejects a request because the prompt is too long, the agent compacts the conversation to about half its estimated size and sends the request again, if the compaction changed it. When it did not, a message that alone is over the window the rejection states, or, when it states none, over half the request, is left out as above, and the request is sent again without it; with no such message, the turn ends with `ConversationTooLong` rather than sending the same request again. It retries once per turn: a second rejection ends the turn with an `error_occurred` event. When the rejection states the window, as vLLM, OpenAI, OpenRouter, Anthropic and LiteLLM's do (`maximum context length is 32768 tokens`), that window is used for the requests that follow, and remembered for the same endpoint and model until the process exits.
 
 This needs no `context_window`. It works with every provider: a rejection is recognized by its HTTP status, 400 or 413, and by the provider's wording, such as `maximum context length` or `prompt is too long`. Any other error is not retried. With the `noop` strategy, or with compaction disabled, nothing is retried.
 
@@ -140,7 +148,7 @@ In the interactive CLI, `/compact` sends this request, and `/context` shows what
 
 An automatic compaction shows in the event stream as `context_compaction_start`, before the work starts, and `context_compacted`, when it ends. A summary takes a model call, so an interface can use them to explain the pause, and why the agent may no longer have the details of earlier turns. After a rejected request, `context_compaction_start` carries `rejected: true` in its `metadata`.
 
-`context_compacted` reports two different things in its `metadata`: `changed`, whether anything was dropped or summarized, and `sufficient`, whether the result is under the threshold. A compaction can change a lot and still not be sufficient: with `prune_only`, a conversation whose text alone is over the threshold reports `changed: false, sufficient: false` on every request.
+`context_compacted` reports two different things in its `metadata`: `changed`, whether anything was dropped or summarized, and `sufficient`, whether the result is under the threshold. A message left out because it does not fit the window shows as a `context_compacted` with `metadata["excluded"]`, or, when it is the user's latest, as the `error_occurred` that ends the turn. A compaction can change a lot and still not be sufficient: with `prune_only`, a conversation whose text alone is over the threshold reports `changed: false, sufficient: false` on every request.
 
 Every `llm_start` also carries `metadata["context_usage"]`, the measurement of the request about to be sent. [Event types](../reference/events.md) lists the fields of all three.
 

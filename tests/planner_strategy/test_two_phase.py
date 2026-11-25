@@ -663,3 +663,29 @@ class TestTheSummarizedSpanFallsOnCleanBoundaries:
         for message in out:
             for call in message.tool_calls or []:
                 assert call.id in results, f"call {call.id} lost its result"
+
+
+class TestASummaryThatSavesNothing:
+    @pytest.mark.asyncio
+    async def test_it_is_not_kept(self) -> None:
+        """A one-line greeting came back as a paragraph: kept, the compaction grew the
+        context it was meant to shrink, and said it had compacted it."""
+        provider = _Provider(answer="The assistant greeted the user in Italian. " * 10)
+        messages = [
+            LLMMessage(role="system", content="sys"),
+            LLMMessage(role="user", content="ciao", source_event_id="u0"),
+            LLMMessage(
+                role="assistant", content="Ciao! Come posso aiutarti?", source_event_id="a0"
+            ),
+            LLMMessage(role="user", content="x" * 21_000, source_event_id="u1"),
+        ]
+        compactor = _compactor()
+        state: dict[str, Any] = {}
+
+        plan = compactor.assess(messages, _agent(provider))
+        out, done = await compactor.run(messages, plan, state, AGENT)
+
+        assert len(provider.seen) == 1, "the fixture must reach the summary"
+        assert out == messages
+        assert done.metadata["changed"] is False
+        assert read_record(state, AGENT).summary is None

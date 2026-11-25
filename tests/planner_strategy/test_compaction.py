@@ -1080,3 +1080,116 @@ class TestTheReserveAfterTheShare:
         agent = self._agent(context_window=262_144)
         _adopt_window(agent, 100_000)
         assert agent.llm_provider.max_reply_tokens == 50_000
+
+
+class TestAMessageNoWindowHolds:
+    """A pasted text larger than the window: no compaction shortens a request, so it
+    was sent anyway, rejected, and carried by every later request of the conversation."""
+
+    @staticmethod
+    def _pasted(chars: int) -> list[LLMMessage]:
+        return [
+            _msg("system", "sys"),
+            _msg("user", "hello", source_event_id="hello"),
+            _msg("assistant", "hi", source_event_id="hi"),
+            _msg("user", _long(chars), source_event_id="paste"),
+        ]
+
+    def test_only_a_request_over_the_window_on_its_own_is_found(self) -> None:
+        found = _active().oversized(self._pasted(30_000), _Agent(5_000))
+        assert list(found) == ["paste"]
+        assert found["paste"] >= 10_000
+
+    def test_what_every_request_carries_counts(self) -> None:
+        """A request that fits alone, not with the tool definitions sent beside it."""
+        messages = self._pasted(12_000)
+        tools = [{"type": "function", "function": {"name": "t", "description": "x" * 3_000}}]
+        assert _active().oversized(messages, _Agent(4_500)) == {}
+        assert list(_active().oversized(messages, _Agent(4_500), tools)) == ["paste"]
+
+    def test_without_a_window_or_a_strategy_nothing_is_found(self) -> None:
+        assert _active().oversized(self._pasted(30_000), _Agent(None)) == {}
+        inert = Compactor(strategy=NoOpCompaction())
+        assert inert.oversized(self._pasted(30_000), _Agent(5_000)) == {}
+
+    def test_left_out_it_stays_out_of_every_later_request(self) -> None:
+        compactor = _active()
+        state: dict[str, Any] = {}
+        messages = self._pasted(30_000)
+        compactor.leave_out(messages, compactor.oversized(messages, _Agent(5_000)), state, "A")
+
+        later = [*self._pasted(30_000), _msg("user", "what happened?", source_event_id="q")]
+        replayed = compactor.replay(later, state, "A")
+
+        assert "not sent" in str(replayed[3].content)
+        assert _long(100) not in str(replayed[3].content)
+        assert replayed[3].role == "user" and replayed[4].content == "what happened?"
+
+    def test_the_request_that_does_not_fit_what_is_left_is_left_out(self) -> None:
+        compactor = _active()
+        state: dict[str, Any] = {}
+        messages = self._pasted(9_000)
+        window = compactor.tokens_after(messages) - 100
+        metadata = compactor.usage_metadata(messages, None, _Agent(window), state)
+
+        event = compactor.refuse_over_window(messages, metadata, state, "A", "A")
+
+        assert event is not None and event.error_code == "RequestTooLong"
+        assert "not sent" in str(compactor.replay(messages, state, "A")[-1].content)
+
+    def test_a_conversation_over_the_window_without_its_request_is_refused_whole(self) -> None:
+        compactor = _active()
+        state: dict[str, Any] = {}
+        messages = [*self._pasted(9_000), _msg("assistant", "ok"), _msg("user", "and?")]
+        metadata = compactor.usage_metadata(messages, None, _Agent(1_000), state)
+
+        event = compactor.refuse_over_window(messages, metadata, state, "A", "A")
+
+        assert event is not None and event.error_code == "ConversationTooLong"
+        assert compactor.replay(messages, state, "A") == messages, "nothing is left out"
+
+    def test_a_request_under_the_window_goes_out(self) -> None:
+        compactor = _active()
+        messages = self._pasted(300)
+        metadata = compactor.usage_metadata(messages, None, _Agent(100_000), {})
+        assert compactor.refuse_over_window(messages, metadata, {}, "A", "A") is None
+
+
+class TestALargeOlderRequestCanBeSummarized:
+    """Kept whole in the head or in the tail, an older paste was out of every phase's
+    reach, and the conversation stayed over the limit for good."""
+
+    def test_it_is_not_pulled_into_the_tail(self) -> None:
+        messages = [
+            _msg("system", "sys"),
+            _msg("user", "hello"),
+            _msg("assistant", "hi"),
+            _msg("user", _long(30_000)),
+            _msg("assistant", "read it"),
+            _msg("user", "and now?"),
+        ]
+        split = TokenBudgetSplitter().split(
+            messages,
+            policy=CompactionPolicy(keep_recent_tokens=1_000),
+            estimator=HeuristicEstimator(),
+        )
+        assert split.tail == messages[4:]
+        assert messages[3] in split.middle
+
+    def test_the_last_message_is_kept_whatever_its_size(self) -> None:
+        messages = [_msg("system", "sys"), _msg("user", "hello"), _msg("user", _long(30_000))]
+        split = TokenBudgetSplitter().split(
+            messages,
+            policy=CompactionPolicy(keep_recent_tokens=1_000),
+            estimator=HeuristicEstimator(),
+        )
+        assert split.tail == messages[2:]
+
+    def test_a_large_first_message_is_not_protected(self) -> None:
+        messages = [_msg("system", "sys"), _msg("user", _long(30_000)), _msg("user", "and?")]
+        split = TokenBudgetSplitter().split(
+            messages,
+            policy=CompactionPolicy(keep_recent_tokens=1_000, protect_first_n=1),
+            estimator=HeuristicEstimator(),
+        )
+        assert split.head == messages[:1]

@@ -29,6 +29,7 @@ from domyn.agents.llm.context_window import deployment_key, remember_stated_wind
 from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.context_management.budget import (
     CONTEXT_USAGE_METADATA_KEY,
+    ContextUsage,
     HeuristicEstimator,
     TokenEstimator,
     measure,
@@ -209,6 +210,13 @@ class CompactionRecord(BaseModel):
     pruned_event_ids: list[str] = Field(default_factory=list)
     summary: str | None = None
     summarized_event_ids: list[str] = Field(default_factory=list)
+    excluded: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Messages left out of every request, by event id, with their estimated tokens: "
+            "the model's window could not hold them (`Compactor.leave_out`)."
+        ),
+    )
     generation: int = Field(
         default=0,
         description=(
@@ -275,6 +283,51 @@ def add_to_record(
     record.generation += 1
     state.setdefault(_RECORDS_KEY, {})[agent_name] = record.model_dump()
     return record
+
+
+def record_exclusion(
+    state: dict[str, Any] | None, agent_name: str, excluded: dict[str, int]
+) -> CompactionRecord:
+    """Add messages to those left out of an agent's requests and persist the record."""
+    record = read_record(state, agent_name)
+    if state is None:
+        return record
+    fresh = {
+        event_id: tokens
+        for event_id, tokens in excluded.items()
+        if event_id and event_id not in record.excluded
+    }
+    if not fresh:
+        return record
+    record.excluded.update(fresh)
+    record.generation += 1
+    state.setdefault(_RECORDS_KEY, {})[agent_name] = record.model_dump()
+    return record
+
+
+def _left_out(messages: list[LLMMessage], excluded: dict[str, int]) -> list[LLMMessage]:
+    """``messages`` with each one in ``excluded`` replaced by a line saying it was not sent."""
+    out: list[LLMMessage] = []
+    for message in messages:
+        tokens = excluded.get(message.source_event_id or "")
+        if tokens is None:
+            out.append(message)
+            continue
+        text = (
+            f"[A message from the user was here, about {tokens:,} tokens long. It did not fit "
+            "the model's context window, so it was not sent: only this note is left of it.]"
+        )
+        out.append(message.model_copy(update={"content": text}))
+    return out
+
+
+REQUEST_TOO_LONG = "RequestTooLong"
+"""``error_code`` of a turn ended because its request does not fit the window: it was
+left out of the conversation (``Compactor.leave_out``)."""
+
+CONVERSATION_TOO_LONG = "ConversationTooLong"
+"""``error_code`` of a turn ended because the conversation no longer fits the window
+and cannot be shortened further."""
 
 
 def _rescale(correction: int, base: int, dropped: int) -> tuple[int, int]:
@@ -638,24 +691,34 @@ class TokenBudgetSplitter(BaseModel):
         if not messages:
             return Split([], [], [])
 
-        head_size = self._head_size(messages, policy)
+        if keep_recent_tokens is None:
+            keep_recent_tokens = policy.keep_recent_tokens
+        head_size = self._head_size(messages, policy, estimator, keep_recent_tokens)
         head = messages[:head_size]
         rest = messages[head_size:]
         if not rest:
             return Split(head, [], [])
 
-        if keep_recent_tokens is None:
-            keep_recent_tokens = policy.keep_recent_tokens
         cut = self._cut_point(rest, estimator=estimator, keep_recent_tokens=keep_recent_tokens)
         return Split(head, rest[:cut], rest[cut:])
 
     # --- internals --------------------------------------------------------
 
     @staticmethod
-    def _head_size(messages: list[LLMMessage], policy: CompactionPolicy) -> int:
-        """The system prompt plus the first ``protect_first_n``."""
+    def _head_size(
+        messages: list[LLMMessage],
+        policy: CompactionPolicy,
+        estimator: TokenEstimator,
+        keep_recent_tokens: int,
+    ) -> int:
+        """The system prompt plus the first ``protect_first_n``, up to one larger than the
+        tail: a first message that size is no framing, and is left to the summary."""
         size = 1 if messages and messages[0].role == "system" else 0
-        return min(len(messages), size + policy.protect_first_n)
+        for message in messages[size : size + policy.protect_first_n]:
+            if estimator.estimate_messages([message]) > keep_recent_tokens:
+                break
+            size += 1
+        return size
 
     def _cut_point(
         self,
@@ -671,6 +734,10 @@ class TokenBudgetSplitter(BaseModel):
         by stretching the tail back to it. That stretch put every output of a
         long turn in the tail, and compaction found nothing to do exactly when
         one turn had filled the window.
+
+        Only the last message may be a request larger than the whole tail: an older one
+        that size (a pasted document) kept here could never be summarized, and every
+        later request carried it whole.
         """
         spent = 0
         cut = len(rest)
@@ -678,7 +745,10 @@ class TokenBudgetSplitter(BaseModel):
             # Checked before consuming: the message that crosses the budget is kept.
             if spent > keep_recent_tokens:
                 break
-            spent += estimator.estimate_messages([rest[index]])
+            size = estimator.estimate_messages([rest[index]])
+            if index < len(rest) - 1 and size > keep_recent_tokens and _is_request(rest[index]):
+                break
+            spent += size
             cut = index
         return self._retreat_off_tool_boundary(rest, cut)
 
@@ -1062,7 +1132,7 @@ class Compactor(BaseModel):
         is the common case.
         """
         record = read_record(state, agent_name)
-        if not record.pruned_event_ids and not record.summary:
+        if not record.pruned_event_ids and not record.summary and not record.excluded:
             return messages
 
         out = messages
@@ -1071,6 +1141,9 @@ class Compactor(BaseModel):
             # survives afterwards is both cheaper and correct — pruning messages
             # that are about to disappear would be work thrown away.
             out = _restore_summary(out, record.summary, set(record.summarized_event_ids))
+
+        if record.excluded:
+            out = _left_out(out, record.excluded)
 
         if record.pruned_event_ids:
             # The strategy's own pruner when it has one, so the placeholder text
@@ -1321,6 +1394,138 @@ class Compactor(BaseModel):
             f"{usage.context_window or 'unknown'}"
         )
         return {CONTEXT_USAGE_METADATA_KEY: usage.model_dump()}
+
+    # --- what no request can carry ------------------------------------------
+    #
+    # A message larger than the window is never shortened: it is refused, and left
+    # out of every later request, or the conversation would carry it, and be
+    # rejected, for ever.
+
+    def oversized(
+        self,
+        messages: list[LLMMessage],
+        agent: Any,
+        tool_defs: list[dict[str, Any]] | None = None,
+        turn_context: list[LLMMessage] | None = None,
+        window: int | None = None,
+    ) -> dict[str, int]:
+        """The requests in ``messages`` no request can carry, by event id, with their
+        estimated tokens: alone, with what every request carries (system prompt, tool
+        definitions, turn context), over ``window``, the agent's when not given.
+
+        Empty without a window or a strategy that acts. Estimated without the measured
+        correction, which belongs to text the provider has already counted.
+        """
+        window = window or _context_window(agent)
+        if not self.active or window is None:
+            return {}
+        fixed = int(self.estimator.estimate_messages([m for m in messages if m.role == "system"]))
+        fixed += int(self.estimator.estimate_messages(turn_context or []))
+        fixed += int(self.estimator.estimate_tool_definitions(tool_defs or []))
+        found: dict[str, int] = {}
+        for message in messages:
+            if not message.source_event_id or not _is_request(message):
+                continue
+            tokens = int(self.estimator.estimate_messages([message]))
+            if fixed + tokens > window:
+                found[message.source_event_id] = tokens
+        return found
+
+    def leave_out(
+        self,
+        messages: list[LLMMessage],
+        excluded: dict[str, int],
+        state: dict[str, Any] | None,
+        key: str,
+    ) -> list[LLMMessage]:
+        """Record ``excluded`` for ``key`` and return ``messages`` without their text:
+        every later request replays it (``replay``). The measured correction is retired
+        with the change, as for any change to the record not made by ``run``."""
+        record_exclusion(state, key, excluded)
+        get_logger().info(f"{len(excluded)} message(s) too long for the window left out")
+        return _left_out(messages, excluded)
+
+    def refusal(self, code: str, text: str, author: str) -> BaseEvent:
+        """The event ending a turn whose request cannot be sent (``REQUEST_TOO_LONG``,
+        ``CONVERSATION_TOO_LONG``)."""
+        return BaseEvent(
+            event_type=ExecutionEventType.ERROR_OCCURRED,
+            author=author,
+            content=[Part(text=text)],
+            error_code=code,
+            error_message=text,
+        )
+
+    def message_refusal(self, tokens: int, window: int, author: str) -> BaseEvent:
+        """The request alone is over the window."""
+        return self.refusal(
+            REQUEST_TOO_LONG,
+            f"The message is about {tokens:,} tokens and the model's context window holds "
+            f"{window:,}: it was not sent, and is left out of this conversation. Send a "
+            "shorter version, or a file the agent can read.",
+            author,
+        )
+
+    def left_out_event(self, excluded: dict[str, int], author: str) -> BaseEvent:
+        """Earlier messages were left out and the turn goes on: said, not silent."""
+        sizes = ", ".join(f"~{tokens:,}" for tokens in excluded.values())
+        return BaseEvent(
+            event_type=ExecutionEventType.CONTEXT_COMPACTED,
+            author=author,
+            content=[
+                Part(text=f"an earlier message ({sizes} tokens) does not fit the window: left out")
+            ],
+            metadata={"changed": True, "excluded": dict(excluded)},
+        )
+
+    def refuse_over_window(
+        self,
+        conversation: list[LLMMessage],
+        usage_metadata: dict[str, Any],
+        state: dict[str, Any] | None,
+        key: str,
+        author: str,
+    ) -> BaseEvent | None:
+        """The event ending the turn when the request, compacted, is still over the
+        window, else ``None``: the indicator shows this same total, so no request it
+        would show over 100% goes out.
+
+        The request is left out when it is the last message and the rest fits without
+        it: the request before it fitted, so the conversation stays usable.
+        """
+        raw = (usage_metadata or {}).get(CONTEXT_USAGE_METADATA_KEY)
+        if not self.active or not isinstance(raw, dict):
+            return None
+        usage = ContextUsage.model_validate(raw)
+        window = usage.context_window
+        total = usage.total_tokens
+        if window is None or total <= window:
+            return None
+        last = conversation[-1] if conversation else None
+        if last is not None and last.source_event_id and _is_request(last):
+            tokens = int(self.estimator.estimate_messages([last]))
+            if total - tokens <= window:
+                self.leave_out(conversation, {last.source_event_id: tokens}, state, key)
+                return self.refusal(
+                    REQUEST_TOO_LONG,
+                    "The message does not fit in what is left of the model's context window: "
+                    f"with it the request is about {total:,} tokens of {window:,}. It was not "
+                    "sent, and is left out of this conversation. Send a shorter one, or start "
+                    "a new conversation.",
+                    author,
+                )
+        return self.refusal(
+            CONVERSATION_TOO_LONG,
+            f"The conversation no longer fits the model's context window (about {total:,} "
+            f"tokens of {window:,}) and cannot be shortened further. Start a new conversation.",
+            author,
+        )
+
+
+def current_request_id(messages: list[LLMMessage]) -> str | None:
+    """The event id of the last request in ``messages``, the one the turn answers."""
+    requests = _last_requests(messages, 1)
+    return requests[0].source_event_id if requests else None
 
 
 # ---------------------------------------------------------------------------
@@ -1758,14 +1963,23 @@ class TwoPhaseCompaction(CompactionStrategy):
             get_logger().debug(f"summarization failure detail: {exc}")
             return phase_one
 
+        # Built with the very function `replay` uses, so this request and every
+        # later re-render of it agree by construction. Dropping the middle
+        # wholesale instead looked equivalent and was not: an event rendering
+        # on both sides of the cut is excluded from the record, so replay kept
+        # its messages while this path removed them — and if one of those was
+        # half of a tool-call pair, only the immediate request was malformed.
+        summarized = _restore_summary(after_pruning, summary, set(event_ids))
+        if budget.estimator.estimate_messages(summarized) >= budget.estimator.estimate_messages(
+            after_pruning
+        ):
+            # A one-line greeting came back as a longer paragraph: kept, it grew the context.
+            return phase_one.model_copy(
+                update={"note": "context compacted: the summary was no shorter than the text"}
+            )
+
         return CompactionOutcome(
-            # Built with the very function `replay` uses, so this request and every
-            # later re-render of it agree by construction. Dropping the middle
-            # wholesale instead looked equivalent and was not: an event rendering
-            # on both sides of the cut is excluded from the record, so replay kept
-            # its messages while this path removed them — and if one of those was
-            # half of a tool-call pair, only the immediate request was malformed.
-            messages=_restore_summary(after_pruning, summary, set(event_ids)),
+            messages=summarized,
             changed=True,
             note=f"context compacted: {len(event_ids)} exchanges summarized",
             pruned_event_ids=pruned_ids,
@@ -1832,14 +2046,16 @@ def _last_requests(messages: list[LLMMessage], count: int) -> list[LLMMessage]:
     a summary standing in for older history."""
     if count <= 0:
         return []
-    requests = [
-        message
-        for message in messages
-        if message.role == "user"
+    return [message for message in messages if _is_request(message)][-count:]
+
+
+def _is_request(message: LLMMessage) -> bool:
+    """A user message that asks something: not a tool result, not a summary."""
+    return (
+        message.role == "user"
         and not _is_tool_result(message)
         and not (isinstance(message.content, str) and message.content.startswith(SUMMARY_MARKER))
-    ]
-    return requests[-count:]
+    )
 
 
 def _summarizable_span(

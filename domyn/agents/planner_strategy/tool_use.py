@@ -57,6 +57,7 @@ from domyn.agents.llm.base import (
     LLMToolCall,
     TokenUsage,
     add_token_usage,
+    context_limit_from_error,
     is_context_overflow,
     is_transient,
     token_usage_metadata,
@@ -69,8 +70,10 @@ from domyn.agents.planner_strategy.context_injection import (
     with_skills,
 )
 from domyn.agents.planner_strategy.context_management.compaction import (
+    CONVERSATION_TOO_LONG,
     Compactor,
     compaction_key,
+    current_request_id,
 )
 from domyn.agents.planner_strategy.context_management.tool_use import ToolUseContextManager
 from domyn.agents.planner_strategy.utils import (
@@ -734,6 +737,20 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
             # A copy of the agent called alongside another keeps its own.
             record = compaction_key(agent.name, interaction_context)
             messages = self.compactor.replay(messages, interaction_context.state, record)
+            # A message no window holds is refused before any compaction pays for it, and
+            # an earlier one (a conversation it already broke) is left out.
+            oversized = self.compactor.oversized(messages, agent, tool_defs, turn_context)
+            if oversized:
+                messages = self.compactor.leave_out(
+                    messages, oversized, interaction_context.state, record
+                )
+                current = current_request_id(messages)
+                if current in oversized:
+                    provider = getattr(agent, "llm_provider", None)
+                    window = getattr(provider, "context_window", None) or 0
+                    yield self.compactor.message_refusal(oversized[current], window, agent.name)
+                    break
+                yield self.compactor.left_out_event(oversized, agent.name)
             compaction_plan = self.compactor.assess(
                 messages,
                 agent,
@@ -756,6 +773,12 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
             usage_metadata = self.compactor.usage_metadata(
                 messages, tool_defs, agent, interaction_context.state, turn_context, key=record
             )
+            refusal = self.compactor.refuse_over_window(
+                conversation, usage_metadata, interaction_context.state, record, agent.name
+            )
+            if refusal is not None:
+                yield refusal
+                break
 
             # ── LLM invocation ────────────────────────────────────────────────
             response: LLMResponse | None = None
@@ -990,7 +1013,34 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             conversation, recovery, interaction_context.state, agent.name, record
                         )
                         yield compaction_done
-                        continue
+                        if compaction_done.metadata.get("changed"):
+                            continue
+                        # Nothing compacted: the same request would be rejected again. A
+                        # message the rejection proves too big is left out, or the turn ends.
+                        window = context_limit_from_error(e) or recovery.current_tokens // 2
+                        oversized = self.compactor.oversized(
+                            conversation, agent, tool_defs, turn_context, window
+                        )
+                        if oversized:
+                            self.compactor.leave_out(
+                                conversation, oversized, interaction_context.state, record
+                            )
+                        current = current_request_id(conversation)
+                        if oversized and current not in oversized:
+                            yield self.compactor.left_out_event(oversized, agent.name)
+                            continue
+                        yield (
+                            self.compactor.message_refusal(oversized[current], window, agent.name)
+                            if current in oversized
+                            else self.compactor.refusal(
+                                CONVERSATION_TOO_LONG,
+                                "The model rejected the request as too long, and the "
+                                "conversation cannot be shortened further. Start a new "
+                                "conversation.",
+                                agent.name,
+                            )
+                        )
+                        break
                     logger.error(f"LLM generation failed: {type(e).__name__}")
                     logger.debug(
                         f"LLM generation failed: {e}",

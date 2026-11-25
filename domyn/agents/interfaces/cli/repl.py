@@ -61,6 +61,7 @@ from domyn.agents.interfaces.cli.approval import (
 from domyn.agents.interfaces.cli.attachments import AttachmentContext, Attachments
 from domyn.agents.interfaces.cli.calls import as_written
 from domyn.agents.interfaces.cli.config import (
+    DEFAULT_CONTEXT_WINDOW,
     LOCAL_SKILLS_DIRS,
     apply_context_window,
     approvals_paths,
@@ -104,6 +105,10 @@ from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.context_management.budget import (
     CONTEXT_USAGE_METADATA_KEY,
     ContextUsage,
+)
+from domyn.agents.planner_strategy.context_management.compaction import (
+    CONVERSATION_TOO_LONG,
+    REQUEST_TOO_LONG,
 )
 from domyn.agents.runner import PushResult, Runner
 from domyn.agents.skills import LocalDirSkillSource, SkillNotFoundError, SkillsRuntime
@@ -412,6 +417,8 @@ class Repl:
         # never have to care whether the caller passed a relative path.
         self._config_file = config_file.resolve() if config_file is not None else None
         self._state = SessionState()
+        # A turn ended because its request did not fit the window: say where the window comes from.
+        self._window_refused = False
         # What the last session left, with `-v` set on top like `/verbose` would; saved
         # whole, by `save`, whenever one of them changes.
         self._prefs = CliState.load()
@@ -1385,11 +1392,38 @@ class Repl:
                 style=self._theme.style("accent"),
                 highlight=False,
             )
+        hint = self._window_hint() if self._window_refused else None
+        self._window_refused = False
+        if hint:
+            self._console.print(f"  {hint}", style=self._theme.style("meta"), highlight=False)
         shown = context_view.indicator(self._state.last_usage)
         if shown is None:
             return
         text, style_name = shown
         self._console.print(f"  {text}", style=self._theme.style(style_name), highlight=False)
+
+    def _window_hint(self) -> str | None:
+        """Where the window a turn was refused against comes from, when it can be changed
+        here: declared in the config, or assumed because the endpoint reports none."""
+        provider = getattr(self._agent, "llm_provider", None)
+        window = getattr(provider, "context_window", None)
+        if not isinstance(window, int):
+            return None
+        entries = (self._config or {}).get("llm_providers") or []
+        name = getattr(provider, "name", None)
+        entry = next((e for e in entries if isinstance(e, dict) and e.get("name") == name), {})
+        where = self._config_file or config_path()
+        if entry.get("context_window") or entry.get("max_model_len"):
+            return (
+                f"The window, {window:,} tokens, is `context_window` in {where}: "
+                "if the model takes more, raise it there."
+            )
+        if window == DEFAULT_CONTEXT_WINDOW:
+            return (
+                f"The window, {window:,} tokens, is assumed: the endpoint does not report one. "
+                f"If the model takes more, set `context_window` in {where}."
+            )
+        return None
 
     def _record_usage(self, event: BaseEvent) -> None:
         """Collect the context measurement, or a model call's cost, if the event carries one.
@@ -1406,6 +1440,9 @@ class Repl:
         """
         metadata = event.metadata or {}
         usage = self._state.last_usage
+        if event.error_code in (REQUEST_TOO_LONG, CONVERSATION_TOO_LONG):
+            self._window_refused = True
+            return
         if event.event_type is ExecutionEventType.CONTEXT_COMPACTED:
             saved = metadata.get("tokens_saved")
             if usage is not None and isinstance(saved, int) and saved > 0:

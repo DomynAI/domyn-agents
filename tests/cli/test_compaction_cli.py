@@ -100,12 +100,12 @@ class TestInARealTurn:
         from tests.cli.test_repl_session import _repl
 
         repl, buffer = _repl("hello")
-        # A window so small any conversation exceeds it: the most direct way to
-        # force the trigger without inventing a long session.
-        repl._agent.llm_provider.context_window = 100
+        # A reserve so large any conversation is over the threshold while the window
+        # still holds it: a request over the window is refused, not compacted.
+        repl._agent.llm_provider.context_window = 10_000
         repl._agent.planner.compactor = Compactor(
             strategy=PruneOnlyCompaction(),
-            policy=CompactionPolicy(reserve_tokens=1, keep_recent_tokens=1),
+            policy=CompactionPolicy(reserve_tokens=9_900, keep_recent_tokens=1),
         )
         await repl.run()
 
@@ -199,10 +199,10 @@ class TestBothPlanners:
         by_name = {cls().type: cls for cls in self._planners()}
         repl, buffer = _repl("hello")
         repl._agent.planner = by_name[planner_name]()
-        repl._agent.llm_provider.context_window = 100
+        repl._agent.llm_provider.context_window = 10_000
         repl._agent.planner.compactor = Compactor(
             strategy=PruneOnlyCompaction(),
-            policy=CompactionPolicy(reserve_tokens=1, keep_recent_tokens=1),
+            policy=CompactionPolicy(reserve_tokens=9_900, keep_recent_tokens=1),
         )
         await repl.run()
 
@@ -234,9 +234,10 @@ class TestBothPlanners:
         repl, buffer = _repl("hello")
         repl._agent.planner = by_name[planner_name]()
         repl._agent.tools = [tool]
-        repl._agent.llm_provider.context_window = 3_000
+        # The definitions alone are over the threshold, the request under the window.
+        repl._agent.llm_provider.context_window = 6_000
         repl._agent.planner.compactor = Compactor(
-            strategy=PruneOnlyCompaction(), policy=CompactionPolicy(reserve_tokens=1)
+            strategy=PruneOnlyCompaction(), policy=CompactionPolicy(reserve_tokens=3_500)
         )
         await repl.run()
 
@@ -249,11 +250,16 @@ class TestBothPlanners:
 
 class TestWhenTheProviderRejectsTheRequestAsTooLong:
     """The estimate under-counted and the provider said so. Compacting harder and
-    asking again saves the turn; asking again forever would not end it."""
+    asking again saves the turn; asking again with nothing changed only repeats the
+    rejection, and asking again forever would not end it."""
 
     @staticmethod
     def _repl(
-        planner_name: str, rejections: int, context_window: int | None = 100_000
+        planner_name: str,
+        script: tuple[str, ...],
+        rejected: set[int] | range,
+        context_window: int | None = 100_000,
+        prune_only: bool = False,
     ) -> tuple[Any, io.StringIO, Any]:
         import httpx
 
@@ -264,12 +270,12 @@ class TestWhenTheProviderRejectsTheRequestAsTooLong:
         from tests.cli.test_repl_session import ScriptedProvider, _repl
 
         class Rejecting(ScriptedProvider):
-            rejections: int = 0
+            rejected: Any
             calls: int = 0
 
             async def generate(self, messages: Any, **kwargs: Any) -> Any:
                 self.calls += 1
-                if self.calls <= self.rejections:
+                if self.calls in self.rejected:
                     request = httpx.Request("POST", "http://llm.test/v1/chat/completions")
                     body = "This model's maximum context length is 40960 tokens."
                     response = httpx.Response(400, request=request, text=body)
@@ -280,11 +286,27 @@ class TestWhenTheProviderRejectsTheRequestAsTooLong:
             "tool_use": ToolUsePlannerStrategy,
             "tool_use_thought": ToolUseWithThoughtPlannerStrategy,
         }
-        repl, buffer = _repl("hello")
+        repl, buffer = _repl(*script)
         repl._agent.planner = planners[planner_name]()
-        provider = Rejecting(rejections=rejections, context_window=context_window)
+        if prune_only:
+            repl._agent.planner.compactor = Compactor(strategy=PruneOnlyCompaction())
+        provider = Rejecting(rejected=rejected, context_window=context_window)
         repl._agent.llm_provider = provider
         return repl, buffer, provider
+
+    @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
+    @pytest.mark.asyncio
+    async def test_with_nothing_to_compact_the_request_is_not_sent_again(
+        self, planner_name: str
+    ) -> None:
+        """The same request, rejected twice: what a pasted text larger than the
+        window did, at several megabytes each time."""
+        repl, buffer, provider = self._repl(planner_name, ("hello",), {1})
+        await repl.run()
+
+        assert provider.calls == 1
+        assert "cannot be shortened further" in buffer.getvalue()
+        assert "Hello from the agent." not in buffer.getvalue()
 
     @pytest.mark.parametrize(
         "context_window",
@@ -297,24 +319,140 @@ class TestWhenTheProviderRejectsTheRequestAsTooLong:
     async def test_it_compacts_and_the_retry_answers(
         self, planner_name: str, context_window: int | None
     ) -> None:
+        # ~15k tokens answered, then the next turn is rejected: the summary (call 3)
+        # takes the long message and the retry (call 4) answers.
         repl, buffer, provider = self._repl(
-            planner_name, rejections=1, context_window=context_window
+            planner_name, ("long " * 9_000, "hello"), {2}, context_window=context_window
         )
         await repl.run()
 
-        assert provider.calls == 2
-        assert "compacting context" in buffer.getvalue()
+        assert provider.calls == 4
         assert "rejected the request as too long" in buffer.getvalue(), "the reason went unsaid"
-        assert "Hello from the agent." in buffer.getvalue()
+        assert buffer.getvalue().count("Hello from the agent.") == 2
+
+    @pytest.mark.parametrize(
+        "context_window", [100_000, None], ids=["declared window", "no window"]
+    )
+    @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
+    @pytest.mark.asyncio
+    async def test_an_earlier_message_the_rejection_proves_too_long_is_left_out(
+        self, planner_name: str, context_window: int | None
+    ) -> None:
+        """~50k tokens answered once, then over the 40,960 the rejection states:
+        nothing compacts it, so it is left out and the retry answers."""
+        repl, buffer, provider = self._repl(
+            planner_name,
+            ("long " * 30_000, "hello"),
+            {2},
+            context_window=context_window,
+            prune_only=True,
+        )
+        await repl.run()
+
+        assert provider.calls == 3
+        assert "does not fit the window: left out" in buffer.getvalue()
+        assert buffer.getvalue().count("Hello from the agent.") == 2
 
     @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
     @pytest.mark.asyncio
     async def test_a_second_rejection_ends_the_turn(self, planner_name: str) -> None:
-        repl, buffer, provider = self._repl(planner_name, rejections=99)
+        repl, buffer, provider = self._repl(
+            planner_name, ("long " * 30_000, "hello"), range(2, 99), prune_only=True
+        )
         await repl.run()
 
-        assert provider.calls == 2, "retried more than once"
-        assert "Hello from the agent." not in buffer.getvalue()
+        assert provider.calls == 3, "retried more than once"
+        assert buffer.getvalue().count("Hello from the agent.") == 1
+
+
+class TestAMessageLargerThanTheWindow:
+    """A pasted text the window cannot hold is refused before anything is sent, and
+    left out: it used to go out anyway, be rejected, and be sent again with every
+    later message of the conversation."""
+
+    PASTE = "long " * 30_000  # ~50k tokens
+    HALF = "long " * 9_000  # ~15k tokens
+
+    @staticmethod
+    def _repl(
+        *script: str,
+        window: int = 20_000,
+        prune_only: bool = False,
+        config: dict[str, Any] | None = None,
+    ) -> tuple[Any, io.StringIO, Any, list[Any]]:
+        from tests.cli.test_repl_session import ScriptedProvider, _repl
+
+        class Recording(ScriptedProvider):
+            seen: list[Any]
+
+            async def generate(self, messages: Any, **kwargs: Any) -> Any:
+                self.seen.append(list(messages))
+                return await super().generate(messages, **kwargs)
+
+        repl, buffer = _repl(*script, config=config)
+        repl._agent.llm_provider = Recording(name="main", context_window=window, seen=[])
+        if prune_only:
+            repl._agent.planner.compactor = Compactor(strategy=PruneOnlyCompaction())
+        usages: list[Any] = []
+        record = repl._record_usage
+
+        def spy(event: BaseEvent) -> None:
+            record(event)
+            if event.event_type is ExecutionEventType.LLM_START:
+                usages.append(repl._state.last_usage)
+
+        repl._record_usage = spy  # type: ignore[method-assign]
+        return repl, buffer, repl._agent.llm_provider, usages
+
+    @pytest.mark.asyncio
+    async def test_it_is_refused_unsent_and_the_conversation_goes_on(self) -> None:
+        repl, buffer, provider, _ = self._repl(self.PASTE, "ciao")
+        await repl.run()
+        out = buffer.getvalue()
+
+        assert len(provider.seen) == 1, "only the second message reached the model"
+        assert "it was not sent" in out and "error_occurred" not in out
+        assert "compacting context" not in out, "nothing is compacted around it"
+        assert out.count("Hello from the agent.") == 1
+        sent = " ".join(str(m.content) for m in provider.seen[0])
+        assert "long long" not in sent and "not sent" in sent
+
+    @pytest.mark.asyncio
+    async def test_no_request_over_the_window_goes_out(self) -> None:
+        """What the indicator shows is what went out: never over 100%."""
+        repl, buffer, provider, usages = self._repl(self.HALF, self.HALF, "ciao", prune_only=True)
+        await repl.run()
+
+        assert len(provider.seen) == 2, "the second paste does not fit what is left"
+        assert "does not fit in what is left" in buffer.getvalue()
+        assert usages and all(u.total_tokens <= u.context_window for u in usages)
+
+    @pytest.mark.asyncio
+    async def test_an_older_paste_is_summarized_so_the_next_one_fits(self) -> None:
+        repl, buffer, provider, usages = self._repl(self.HALF, self.HALF)
+        await repl.run()
+
+        # The first paste, the summary that replaces it, the second paste.
+        assert len(provider.seen) == 3
+        assert buffer.getvalue().count("Hello from the agent.") == 2
+        assert all(u.total_tokens <= u.context_window for u in usages)
+
+    @pytest.mark.asyncio
+    async def test_a_declared_window_says_where_to_change_it(self) -> None:
+        config = {"llm_providers": [{"name": "main", "context_window": 20_000}]}
+        repl, buffer, _, _ = self._repl(self.PASTE, config=config)
+        await repl.run()
+        assert "is `context_window` in" in buffer.getvalue()
+
+    @pytest.mark.asyncio
+    async def test_an_assumed_window_says_it_is_assumed(self) -> None:
+        from domyn.agents.interfaces.cli.config import DEFAULT_CONTEXT_WINDOW
+
+        repl, buffer, _, _ = self._repl(
+            "long " * 100_000, window=DEFAULT_CONTEXT_WINDOW, config={"llm_providers": []}
+        )
+        await repl.run()
+        assert "is assumed: the endpoint does not report one" in buffer.getvalue()
 
 
 class TestSayingWhenPruningIsNoLongerEnough:
