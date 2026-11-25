@@ -667,7 +667,9 @@ class Repl:
             content=[Part(text=user_text)],
             metadata={
                 "user_info": {
-                    "datetime": datetime.datetime.now().astimezone().strftime(self._datetime_format),
+                    "datetime": datetime.datetime.now()
+                    .astimezone()
+                    .strftime(self._datetime_format),
                     "datetime_format": self._datetime_format,
                 }
             },
