@@ -96,6 +96,7 @@ Type `/help` in a session for this list. Commands complete with Tab.
 | `/clear` | Starts a new conversation and clears the screen, scrollback included. The previous one stays saved, and `/resume` brings it back. |
 | `/resume [conversation_id]` | Continues a past conversation, redrawing it on a cleared screen. Without an id, shows the recent ones to pick from. |
 | `/verbose` | Turns on or off the display of internal events and library logs. Remembered for the next session |
+| `/update-check [on\|off]` | Shows, or turns on or off, the daily check for a new version. When one is out, `domyn run` says so under the banner with the command that updates your installation. Kept in `~/.domyn/update-check.json` |
 | `/voice` | Turns push-to-talk on or off: hold the space bar to speak, let go to send. See [Talking instead of typing](#talking-instead-of-typing). |
 | **Agent and model** | |
 | `/agent` | Shows the active agent, its tools, its sub-agents, the conversation id and the conversation's working directory |

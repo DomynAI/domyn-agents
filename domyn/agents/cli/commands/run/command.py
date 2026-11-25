@@ -35,6 +35,7 @@ from domyn.agents.interfaces.cli.config import (
 from domyn.agents.interfaces.cli.prompt import interactive_terminal
 from domyn.agents.interfaces.cli.repl import APPLICATION_NAME, USER_ID, Repl
 from domyn.agents.interfaces.cli.setup import run_setup
+from domyn.agents.interfaces.cli.update_check import update_notice
 from domyn.agents.loader import load_application_from_file
 from domyn.agents.logger import get_logger
 from domyn.agents.skills import (
@@ -894,6 +895,9 @@ def run_command(
             subtitle.append(selected.name, style=theme.style("accent_bold"))
             subtitle.append(f" ({project_location(selected)})", style=theme.style("meta"))
         render_banner(console, theme, subtitle=subtitle, animate=True)
+        notice = update_notice()
+        if notice is not None:
+            console.print(f"  {notice}", style=theme.style("warning"), highlight=False)
 
     # Every read on a terminal goes through the line editor, the setup wizard's
     # first field included, so it has to be there before anything is asked. A pipe

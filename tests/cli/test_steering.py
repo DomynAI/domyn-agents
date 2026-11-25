@@ -413,6 +413,8 @@ class TestSlashCommandsTypedMidTurn:
             # Writes the memory file, and `clear` reads the terminal to confirm.
             "/memory": False,
             "/verbose": False,
+            # Only flips a switch in a file read at the next `domyn run`.
+            "/update-check": True,
             "/voice": False,
             # Puts its chip in the next read's field, not the one on screen.
             "/model": False,

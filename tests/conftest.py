@@ -106,6 +106,19 @@ def _state_off_the_real_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.fixture(autouse=True)
+def _no_update_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never ask PyPI for the latest version, nor write the check's file in ``~/.domyn``.
+
+    `domyn run` checks once a day, and a test run on a released version (the release
+    workflow tests the tag) would otherwise reach the network.
+    """
+    from domyn.agents.interfaces.cli import update_check
+
+    monkeypatch.setattr(update_check, "latest_version", lambda: None)
+    monkeypatch.setattr(update_check, "_update_checks_path", lambda: tmp_path / "update-check.json")
+
+
+@pytest.fixture(autouse=True)
 def _no_session_home_from_the_shell(monkeypatch: pytest.MonkeyPatch) -> None:
     """Start every test without ``DOMYN_PROJECT_DIR``.
 
