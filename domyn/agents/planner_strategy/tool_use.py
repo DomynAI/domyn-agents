@@ -878,10 +878,25 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                                 # ask the same model the same thing for ever.
                                 generation_complete = True
                                 continue
+                            # Both ways out, since an empty response is as often a
+                            # tool call the model meant to make as an answer it forgot
+                            # to write. A sub-agent finishes through its stop tool.
+                            finish = (
+                                "call the "
+                                f"`{self.context_manager.stop_tool_name}` tool with your "
+                                "result for the agent that called you"
+                                if self.use_stop
+                                else "write your answer to the user as plain text"
+                            )
                             messages.append(
                                 LLMMessage(
                                     role="system",
-                                    content="LLM response had no content and no tool calls, please generate a response to the final user.",
+                                    content=(
+                                        "Your last response contained neither text nor a "
+                                        f"tool call. If you have finished, {finish}. "
+                                        "Otherwise, call the tool you need next as a tool "
+                                        "call"
+                                    ),
                                 )
                             )
                         else:
