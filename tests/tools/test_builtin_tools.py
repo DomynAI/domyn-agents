@@ -683,6 +683,41 @@ class TestEditingWhatTheModelMeant:
         assert (workspace.root / "app.py").read_text(encoding="utf-8").startswith("print('hello')")
 
 
+class TestTheResultShowsTheChange:
+    """The model cannot see the file it just wrote, so the result carries the change.
+
+    Without it, a match that landed on a fragment of a line is indistinguishable
+    from a match that landed where it meant: both answer "Edited".
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_edit_comes_back_as_a_diff(self, tools: dict, workspace: Workspace) -> None:
+        out = await _call(
+            tools, "edit_file", path="app.py", old="print('hello')", new="print('hi')"
+        )
+        assert out.startswith("Edited app.py")
+        assert "@@ line 1 @@" in out
+        assert "-print('hello')" in out
+        assert "+print('hi')" in out
+
+    @pytest.mark.asyncio
+    async def test_a_fragment_match_shows_what_it_left_behind(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        """The observed failure: an anchor narrowed until it matched a fragment."""
+        path = workspace.root / "units.py"
+        path.write_text('UNIT = "kg\u00a0per\u00a0m3"\nSCALE = 1000\n', encoding="utf-8")
+        out = await _call(tools, "edit_file", path="units.py", old='UNIT = "kg', new="")
+        assert "-UNIT = " in out
+        assert '+\u00a0per\u00a0m3"' in out, "the dangling fragment is in the result"
+
+    @pytest.mark.asyncio
+    async def test_a_refused_edit_shows_no_diff(self, tools: dict, workspace: Workspace) -> None:
+        out = await _call(tools, "edit_file", path="app.py", old="not there", new="x")
+        assert out.startswith("ERROR:")
+        assert "@@" not in out
+
+
 class TestWritingThroughHardLinks:
     """A hard link is a second name for the same file, so it has nothing for
     `Workspace.resolve` to follow: the name is inside the workspace, the file

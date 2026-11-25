@@ -56,7 +56,7 @@ from typing import TYPE_CHECKING, Any
 import anydoc
 
 from domyn.agents.core import ApprovalType, documents
-from domyn.agents.tools.builtin import matching
+from domyn.agents.tools.builtin import diff, matching
 from domyn.agents.tools.builtin.workspace import Workspace, WorkspaceError, is_ignored
 
 if TYPE_CHECKING:
@@ -877,7 +877,12 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
         ending = _ending(region) if "\n" in region else text.ending
         edited = text.stored[:first] + _with_ending(new, ending) + text.stored[last:]
         _write_text(resolved, BOM + edited if text.bom else edited)
-        return f"Edited {workspace.display(resolved)}{_LEVEL_NOTES.get(match.level, '')}."
+        summary = f"Edited {workspace.display(resolved)}{_LEVEL_NOTES.get(match.level, '')}."
+        # The change, not just the fact of it: the model cannot see the file it
+        # just wrote, and a match that landed on a fragment of a line looks
+        # exactly like a match that landed where it meant.
+        shown = diff.changes(text.view, _lf_view(edited))
+        return f"{summary}\n\n{shown}" if shown else summary
 
     return {
         "read_file": read_file,
