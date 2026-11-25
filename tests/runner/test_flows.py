@@ -13,6 +13,7 @@ from domyn.agents.conversation_manager import InMemoryConversationManager, Stack
 from domyn.agents.core import (
     METADATA_CONVERTED_TO_AGENT_END,
     METADATA_FORWARD_VERBATIM,
+    METADATA_INITIAL_PARAMETERS,
     AgentAction,
     ApprovalType,
     BaseAgent,
@@ -1130,9 +1131,8 @@ async def test_flow_user_confirm_executes_tool_start_params_not_feedback_echo(
     assert events[0].event_type == ExecutionEventType.TOOL_END
     assert events[0].action.observation == "ran:SELECT 1"
     assert events[0].action.parameters == {"query": "SELECT 1"}
-    # Parameters match the TOOL_START, so no "user updated tool parameters" nudge.
-    assert events[0].action.observation is not None
-    assert "the user edited this call before approving it" not in str(events[0].action.observation)
+    # Parameters match the TOOL_START, so the result is not marked as edited.
+    assert METADATA_INITIAL_PARAMETERS not in events[0].metadata
 
 
 @pytest.mark.asyncio
@@ -5273,7 +5273,6 @@ class _HitlTransport(RunnerTransport):
 def _make_delegate_agent(
     transport: _HitlTransport,
     approval_type: ApprovalType,
-    *,
     fail_when_b_above: int | None = None,
 ) -> DelegateAgent:
     def add_tool(a: int, b: int) -> int:
