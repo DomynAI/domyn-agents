@@ -522,3 +522,33 @@ def test_the_renderer_is_wired_to_the_editor_for_the_preview() -> None:
     assert repl._reader._preview == repl._renderer.preview
     assert repl._renderer.output is repl._input.output
     assert repl._renderer.on_preview == repl._input.refresh
+
+
+class TestTheDatetimeFormat:
+    def test_a_format_strftime_rejects_stops_the_session_at_startup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Windows' strftime raises on an unknown directive (macOS and Linux print it
+        as written), so the rejection is faked: checked only per turn, a typo in the
+        format would fail every message of a session that had already started."""
+        import types
+
+        from domyn.agents.interfaces.cli import repl as repl_module
+
+        class RejectingNow:
+            def strftime(self, fmt: str) -> str:
+                raise ValueError("Invalid format string")
+
+        fake_datetime = types.SimpleNamespace(
+            datetime=types.SimpleNamespace(now=lambda: RejectingNow())
+        )
+        monkeypatch.setattr(repl_module, "datetime", fake_datetime)
+
+        with pytest.raises(ValueError, match=r"Invalid datetime_format '%Y-%Q'"):
+            Repl(
+                _agent(),
+                Console(file=io.StringIO()),
+                Theme.build(allow_animation=False),
+                enable_enhanced_input=False,
+                datetime_format="%Y-%Q",
+            )

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime
 import os
 import time
 import uuid
@@ -380,6 +381,7 @@ class Repl:
         reload: Callable[[], Awaitable[tuple[Any, dict[str, Any]]]] | None = None,
         auto_approve: bool = False,
         single_turn: bool = False,
+        datetime_format: str = "%Y-%m-%dT%H:%M:%S [%A]",
     ) -> None:
         """``auto_approve`` starts the session with auto-approve on whatever
         ``state.yaml`` says, without remembering it there: for a session nobody is at
@@ -490,6 +492,13 @@ class Repl:
         # Built on the first /voice, not before: it reads the configuration and
         # may load a speech model, which a session that never talks should not pay.
         self._voice: VoiceInput | None = None
+        # Checked once here, so a bad format stops the session at startup rather than
+        # failing every turn: Windows' strftime raises on an unknown directive.
+        try:
+            datetime.datetime.now().strftime(datetime_format)
+        except ValueError as e:
+            raise ValueError(f"Invalid datetime_format {datetime_format!r}: {e}") from e
+        self._datetime_format = datetime_format
         # `domyn run -v` (or a `/verbose` left on) starts with the logs already on,
         # the same ones `/verbose` toggles later.
         _set_log_level(self._prefs.verbose)
@@ -656,6 +665,14 @@ class Repl:
             event_type=ExecutionEventType.USER_INPUT,
             author="user",
             content=[Part(text=user_text)],
+            metadata={
+                "user_info": {
+                    "datetime": datetime.datetime.now()
+                    .astimezone()
+                    .strftime(self._datetime_format),
+                    "datetime_format": self._datetime_format,
+                }
+            },
         )
         self._state.turns += 1
         self._renderer.begin_turn()
