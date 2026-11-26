@@ -19,9 +19,10 @@ import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from domyn.agents.core import METADATA_TOOL_BATCH, BaseEvent, ExecutionEventType, Part
 from domyn.agents.llm.base import LLMMessage, context_limit_from_error, reported_prompt_tokens
@@ -153,6 +154,18 @@ class CompactionPolicy(BaseModel):
             "the window at least (`_threshold_floor`), with a warning."
         ),
     )
+    max_context_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "The most a request may reach before it is compacted, whatever the "
+            "window holds: the threshold is `min(window - reserve, max_context_tokens)`. "
+            "`None`, the default, leaves it to the window. A model with a window far "
+            "larger than the context it works well in, or is cheap to send, compacts "
+            "where this says. It applies only when the window is known: without one "
+            "nothing is compacted before a rejection, as before."
+        ),
+    )
     keep_recent_tokens: int = Field(
         default=20_000,
         gt=0,
@@ -209,6 +222,14 @@ class CompactionRecord(BaseModel):
     pruned_event_ids: list[str] = Field(default_factory=list)
     summary: str | None = None
     summarized_event_ids: list[str] = Field(default_factory=list)
+    reasoning_summary: str | None = Field(
+        default=None,
+        description=(
+            "The summary of the agent's own reasoning in the summarized stretch, put "
+            "before the reasoning of the first assistant message after the summary "
+            "(`SummaryReasoning.CARRY`). `None` when none was asked for or written."
+        ),
+    )
     generation: int = Field(
         default=0,
         description=(
@@ -239,13 +260,18 @@ def read_record(state: dict[str, Any] | None, agent_name: str) -> CompactionReco
 
 
 def record_summary(
-    state: dict[str, Any] | None, agent_name: str, summary: str, event_ids: Iterable[str]
+    state: dict[str, Any] | None,
+    agent_name: str,
+    summary: str,
+    event_ids: Iterable[str],
+    reasoning: str | None = None,
 ) -> CompactionRecord:
-    """Store a summary and what it stands for.
+    """Store a summary, the summary of the reasoning, and what they stand for.
 
     Replaces any previous summary rather than accumulating one: the new summary
     was produced from a stretch that already contained the old one, so keeping
-    both would state the same history twice.
+    both would state the same history twice. The reasoning summary is replaced
+    with it, ``None`` included: the old one was read as part of the stretch.
     """
     record = read_record(state, agent_name)
     if state is None:
@@ -254,6 +280,7 @@ def record_summary(
     if not covered:
         return record
     record.summary = summary
+    record.reasoning_summary = reasoning
     record.summarized_event_ids = covered
     record.generation += 1
     state.setdefault(_RECORDS_KEY, {})[agent_name] = record.model_dump()
@@ -332,11 +359,18 @@ class Budget(BaseModel):
     """The least the threshold may be: a tenth of the model's window
     (``_threshold_floor``), none on the stand-in window a rejection is measured against,
     whose threshold is half the request whatever the reserve."""
+    max_context_tokens: int | None = None
+    """The most the threshold may be (``CompactionPolicy.max_context_tokens``)."""
     estimator: Any
 
     @property
     def threshold_tokens(self) -> int:
-        return _threshold(self.context_window, self.reserve_tokens, self.threshold_floor_tokens)
+        return _threshold(
+            self.context_window,
+            self.reserve_tokens,
+            self.threshold_floor_tokens,
+            self.max_context_tokens,
+        )
 
     @property
     def over_threshold(self) -> bool:
@@ -386,6 +420,13 @@ class CompactionOutcome(BaseModel):
     summary: str | None = Field(
         default=None,
         description="Text standing in for the events named in `summarized_event_ids`.",
+    )
+    reasoning_summary: str | None = Field(
+        default=None,
+        description=(
+            "The agent's reasoning in those events, summarized, for the reasoning of "
+            "the first assistant message after the summary (`SummaryReasoning.CARRY`)."
+        ),
     )
     summarized_event_ids: list[str] = Field(
         default_factory=list,
@@ -572,10 +613,18 @@ def _adopt_window(agent: Any, window: int | None) -> None:
     )
 
 
-def _threshold(context_window: int, reserve_tokens: int, floor_tokens: int = 0) -> int:
+def _threshold(
+    context_window: int,
+    reserve_tokens: int,
+    floor_tokens: int = 0,
+    max_tokens: int | None = None,
+) -> int:
     """Request size beyond which we act: the window less the reserve, never below
-    ``floor_tokens`` (``_threshold_floor`` on the model's window) and never negative."""
-    return max(0, floor_tokens, context_window - reserve_tokens)
+    ``floor_tokens`` (``_threshold_floor`` on the model's window) and never negative,
+    and never above ``max_tokens`` (``CompactionPolicy.max_context_tokens``) when set:
+    the cap is a choice, so it wins over the floor."""
+    threshold = max(0, floor_tokens, context_window - reserve_tokens)
+    return threshold if max_tokens is None else min(threshold, max_tokens)
 
 
 def _history_text_size(event: Any) -> int:
@@ -915,6 +964,7 @@ class Compactor(BaseModel):
             threshold_floor_tokens=(
                 _threshold_floor(self.policy, agent, window, reserve) if window is not None else 0
             ),
+            max_context_tokens=self.policy.max_context_tokens,
             estimator=self.estimator,
         )
 
@@ -1070,7 +1120,12 @@ class Compactor(BaseModel):
             # The summary goes back first. It removes messages, so pruning what
             # survives afterwards is both cheaper and correct — pruning messages
             # that are about to disappear would be work thrown away.
-            out = _restore_summary(out, record.summary, set(record.summarized_event_ids))
+            out = _restore_summary(
+                out,
+                record.summary,
+                set(record.summarized_event_ids),
+                record.reasoning_summary,
+            )
 
         if record.pruned_event_ids:
             # The strategy's own pruner when it has one, so the placeholder text
@@ -1222,7 +1277,13 @@ class Compactor(BaseModel):
             # The expensive one. Recorded so it is paid for once: re-summarizing
             # every render would cost a request per turn and hand the model a
             # different context each time for the same history.
-            record_summary(state, key, outcome.summary, outcome.summarized_event_ids)
+            record_summary(
+                state,
+                key,
+                outcome.summary,
+                outcome.summarized_event_ids,
+                outcome.reasoning_summary,
+            )
         if plan.budget is not None:
             # The next request is measured on the rendering this produced: carried,
             # the count keeps the share of its correction that belongs to the text
@@ -1296,7 +1357,7 @@ class Compactor(BaseModel):
         if self.active and window is not None:
             reserve = _reserve(self.policy, agent)
             floor = _threshold_floor(self.policy, agent, window, reserve)
-            threshold = _threshold(window, reserve, floor)
+            threshold = _threshold(window, reserve, floor, self.policy.max_context_tokens)
         usage = measure(
             messages,
             tool_defs,
@@ -1499,6 +1560,55 @@ to subsume it, and the record keeps a single summary rather than a chain.
 """
 
 
+REASONING_SUMMARY_MARKER = "[summary of earlier reasoning]"
+"""Opens the summarized reasoning put before an assistant message's own reasoning."""
+
+REASONING_SUMMARY_END = "[end of summary of earlier reasoning]"
+"""Closes it, so the model can tell where the summary stops and its own reasoning
+starts, and a later compaction can replace it rather than stack a second one."""
+
+_REASONING_SUMMARY_BLOCK = re.compile(
+    re.escape(REASONING_SUMMARY_MARKER) + r".*?" + re.escape(REASONING_SUMMARY_END) + r"\s*",
+    re.DOTALL,
+)
+
+_SUMMARY_TAG = re.compile(r"<summary>(.*?)(?:</summary>|<reasoning>|\Z)", re.DOTALL)
+_REASONING_TAG = re.compile(r"<reasoning>(.*?)(?:</reasoning>|\Z)", re.DOTALL)
+
+
+class SummaryReasoning(StrEnum):
+    """What the summarizer does with the model's reasoning (`reasoning_content`).
+
+    Only reasoning the provider sends back is on the messages (`send_reasoning`,
+    `reasoning_key_in_use`); without it the three read the same. The short thought
+    of each call is not this reasoning: it is the call's own `reasoning` argument,
+    read in every mode when a message has no text of its own.
+    """
+
+    IGNORE = "ignore"
+    """Not read: the summary is written from the messages' text, calls and short
+    thoughts."""
+
+    READ = "read"
+    """Read in place of the short thoughts, for a fuller account of why; the summary
+    is still the one user message."""
+
+    CARRY = "carry"
+    """Read, and summarized in a part of its own, which is put before the reasoning of
+    the first assistant message after the summary: the line of thought the model
+    continues from. Only when the agent's provider sends reasoning back; otherwise
+    as `READ`."""
+
+
+class Summary(BaseModel):
+    """What the summarizer wrote."""
+
+    text: str
+    """The summary of the conversation: the user message standing in for it."""
+    reasoning: str | None = None
+    """The summary of the agent's reasoning, when it was asked for and written."""
+
+
 class ConversationSummarizer(BaseModel):
     """Turns a stretch of conversation into one paragraph, by asking a model.
 
@@ -1524,15 +1634,24 @@ class ConversationSummarizer(BaseModel):
         "not add advice, opinions or a preamble. Do not invent anything that is "
         "not in the text. Write prose, not a transcript."
     )
+    reasoning_prompt: str = (
+        "\n\nAnswer in two parts, each inside its tags, with nothing outside them:\n"
+        "<summary>\nThe summary described above.\n</summary>\n"
+        "<reasoning>\nThe agent's own line of thought in this stretch, as its notes "
+        "to itself, in the first person: the plan it was following, what it had "
+        "concluded and why, the hypotheses it had not settled, and what it meant to "
+        "do next. Only what its reasoning and actions show; do not repeat the facts "
+        "the summary already states.\n</reasoning>"
+    )
+    """Appended to the system prompt when the reasoning is summarized too
+    (`SummaryReasoning.CARRY`)."""
     user_preamble: str = "Summarize this conversation:\n\n"
-    read_full_reasoning: bool = Field(
-        default=False,
+    reasoning: SummaryReasoning = Field(
+        default=SummaryReasoning.CARRY,
         description=(
-            "Read the model's whole reasoning on an assistant message that carries "
-            "it, instead of each call's short thought: a fuller account of why, at "
-            "many more characters, cut first by `max_chars_per_message`. Only "
-            "reasoning that is sent back is on the messages (`send_reasoning`): "
-            "without it, the short thoughts are read either way."
+            "What to do with the model's whole reasoning on the messages summarized "
+            "(`SummaryReasoning`). Read, it takes the place of each call's short "
+            "thought, at many more characters, cut first by `max_chars_per_message`."
         ),
     )
     max_chars_per_message: int = Field(
@@ -1553,19 +1672,30 @@ class ConversationSummarizer(BaseModel):
         ),
     )
 
-    async def summarize(self, messages: list[LLMMessage], *, llm_provider: Any) -> str:
-        """Ask for the summary. Returns the text, or raises for the caller to handle."""
-        transcript = self._transcript(messages)
+    async def summarize(
+        self, messages: list[LLMMessage], *, llm_provider: Any, carry_reasoning: bool = False
+    ) -> Summary:
+        """Ask for the summary, or raise for the caller to handle.
+
+        ``carry_reasoning`` asks for the reasoning's own summary as well, in the same
+        request, when the mode is `CARRY`: the caller says whether the agent's
+        provider takes reasoning back, as only then is there a place to put it. One
+        request for both, so the two are written from the same reading and cannot
+        contradict each other.
+        """
+        carry = carry_reasoning and self.reasoning is SummaryReasoning.CARRY
+        system = self.system_prompt + (self.reasoning_prompt if carry else "")
         response = await llm_provider.generate(
             [
-                LLMMessage(role="system", content=self.system_prompt),
-                LLMMessage(role="user", content=self.user_preamble + transcript),
+                LLMMessage(role="system", content=system),
+                LLMMessage(role="user", content=self.user_preamble + self._transcript(messages)),
             ]
         )
         text = (getattr(response, "content", "") or "").strip()
-        if not text:
+        summary = _parse_summary(text) if carry else Summary(text=text)
+        if not summary.text:
             raise ValueError("the summarizer returned nothing")
-        return text
+        return summary
 
     def _transcript(self, messages: list[LLMMessage]) -> str:
         """The stretch as text, kept under the cap by dropping the *oldest* part.
@@ -1596,15 +1726,15 @@ class ConversationSummarizer(BaseModel):
     def _render(self, message: LLMMessage) -> str:
         """One message as plain text, for the summarizer to read."""
         body = message.content if isinstance(message.content, str) else ""
-        reasoning = (message.reasoning_content or "").strip() if self.read_full_reasoning else ""
+        reads = self.reasoning is not SummaryReasoning.IGNORE
+        reasoning = (message.reasoning_content or "").strip() if reads else ""
         if message.tool_calls:
             names = ", ".join(call.function.name for call in message.tool_calls)
             # The short thoughts are never a message's text: they are only in each
             # call's `reasoning` argument, and without them a call reaches the
             # summary with no reason behind it. They are read when the message
-            # has no text of its own; the whole reasoning only with
-            # `read_full_reasoning`, as the thoughts say why in a fraction of the
-            # characters.
+            # has no text of its own and the whole reasoning is not: it is read
+            # unless the mode is `IGNORE`, and only reasoning sent back is here.
             if not body.strip() and not reasoning:
                 thoughts = []
                 for call in message.tool_calls:
@@ -1747,8 +1877,14 @@ class TwoPhaseCompaction(CompactionStrategy):
             note="context compacted, but the summary failed",
             pruned_event_ids=pruned_ids,
         )
+        # The reasoning's summary needs somewhere to go: the agent's provider has to
+        # send reasoning back, or it would be written and never reach the model.
+        agent_provider = kwargs.get("llm_provider")
+        carry_reasoning = isinstance(getattr(agent_provider, "reasoning_key_in_use", None), str)
         try:
-            summary = await self.summarizer.summarize(pruned_middle, llm_provider=provider)
+            summary = await self.summarizer.summarize(
+                pruned_middle, llm_provider=provider, carry_reasoning=carry_reasoning
+            )
         except Exception as exc:
             # Caught here rather than left to `Compactor.apply`, which discards
             # the whole outcome on an exception: that would throw away the space
@@ -1765,23 +1901,37 @@ class TwoPhaseCompaction(CompactionStrategy):
             # on both sides of the cut is excluded from the record, so replay kept
             # its messages while this path removed them — and if one of those was
             # half of a tool-call pair, only the immediate request was malformed.
-            messages=_restore_summary(after_pruning, summary, set(event_ids)),
+            messages=_restore_summary(
+                after_pruning, summary.text, set(event_ids), summary.reasoning
+            ),
             changed=True,
             note=f"context compacted: {len(event_ids)} exchanges summarized",
             pruned_event_ids=pruned_ids,
-            summary=summary,
+            summary=summary.text,
+            reasoning_summary=summary.reasoning,
             summarized_event_ids=event_ids,
         )
 
 
 def _restore_summary(
-    messages: list[LLMMessage], summary: str, event_ids: set[str]
+    messages: list[LLMMessage],
+    summary: str,
+    event_ids: set[str],
+    reasoning: str | None = None,
 ) -> list[LLMMessage]:
-    """Put the summary back where the events it replaced used to be.
+    """Put the summary back where the events it replaced used to be, and the
+    summary of their reasoning before the reasoning of the first assistant message
+    after it.
 
     In their place rather than at the front: order is what tells the model what
     came before what, and a summary of the middle parked above the system prompt
     would read as instructions.
+
+    The reasoning goes on the first assistant message after the summary, the first
+    whose reasoning is still sent: the line of thought it continues. When there is
+    none yet (the summary is followed by the request alone), nothing is attached
+    now; the record keeps it, and the next rendering puts it on the reply that
+    follows.
 
     Messages carrying no `source_event_id` are always kept. The system prompt is
     the one that matters — it has no originating event, and dropping it would be
@@ -1789,6 +1939,7 @@ def _restore_summary(
     """
     out: list[LLMMessage] = []
     inserted = False
+    pending = reasoning
     for message in messages:
         source = message.source_event_id
         if source and source in event_ids:
@@ -1796,8 +1947,38 @@ def _restore_summary(
                 out.append(_summary_message(summary))
                 inserted = True
             continue
+        if inserted and pending and message.role == "assistant":
+            message = _with_reasoning_summary(message, pending)
+            pending = None
         out.append(message)
     return out
+
+
+def _with_reasoning_summary(message: LLMMessage, reasoning: str) -> LLMMessage:
+    """A copy of ``message`` whose reasoning starts with ``reasoning``, marked as a
+    summary. One already there is replaced, never stacked: a message that followed
+    an earlier summary can follow the next one too."""
+    own = _REASONING_SUMMARY_BLOCK.sub("", message.reasoning_content or "", count=1).strip()
+    block = f"{REASONING_SUMMARY_MARKER}\n{reasoning.strip()}\n{REASONING_SUMMARY_END}"
+    return message.model_copy(update={"reasoning_content": f"{block}\n\n{own}" if own else block})
+
+
+def _parse_summary(text: str) -> Summary:
+    """The two parts of a summary written with `reasoning_prompt`.
+
+    Forgiving, since this is a model's output: a missing closing tag ends a part
+    at the next one or at the end, and an answer with no `<summary>` tag is the
+    summary whole, less any `<reasoning>` part. A reasoning part that is missing or
+    empty is ``None``: the conversation's summary is still there to use.
+    """
+    found = _REASONING_TAG.search(text)
+    reasoning = found.group(1).strip() if found else ""
+    tagged = _SUMMARY_TAG.search(text)
+    if tagged:
+        body = tagged.group(1)
+    else:
+        body = text[: found.start()] + text[found.end() :] if found else text
+    return Summary(text=body.strip(), reasoning=reasoning or None)
 
 
 def _summary_message(summary: str) -> LLMMessage:
@@ -1959,14 +2140,35 @@ class CompactionConfig(BaseModel):
         default=None,
         description="Recent conversation left untouched. `None` uses the framework default.",
     )
-    read_full_reasoning: bool | None = Field(
+    max_context_tokens: int | None = Field(
         default=None,
+        gt=0,
         description=(
-            "Summarize from the model's whole reasoning instead of the short "
-            "thoughts of its calls (`ConversationSummarizer.read_full_reasoning`). Only "
-            "`two_phase` summarizes. `None` uses the framework default, off."
+            "Compact once a request passes this many tokens, even when the window "
+            "holds more. `None` leaves it to the window."
         ),
     )
+    reasoning: SummaryReasoning | None = Field(
+        default=None,
+        description=(
+            "What a summary does with the model's reasoning: `ignore`, `read`, or "
+            "`carry` (read it, and put its own summary before the reasoning of the "
+            "next assistant message) — `ConversationSummarizer.reasoning`. Only "
+            "`two_phase` summarizes. `None` uses the framework default, `carry`."
+        ),
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _replaced_keys(cls, data: Any) -> Any:
+        """Refuse the key `reasoning` replaced rather than ignore it: read silently
+        as nothing, it would change what a configuration does without a word."""
+        if isinstance(data, dict) and "read_full_reasoning" in data:
+            raise ValueError(
+                "`read_full_reasoning` was replaced by `reasoning`: `ignore` for false, "
+                "`read` for true, or `carry`"
+            )
+        return data
 
 
 def build_compactor(config: CompactionConfig) -> Compactor:
@@ -1990,8 +2192,8 @@ def build_compactor(config: CompactionConfig) -> Compactor:
         policy.reserve_tokens = config.reserve_tokens
     if config.keep_recent_tokens is not None:
         policy.keep_recent_tokens = config.keep_recent_tokens
-    if config.read_full_reasoning is not None and isinstance(strategy, TwoPhaseCompaction):
-        strategy.summarizer = strategy.summarizer.model_copy(
-            update={"read_full_reasoning": config.read_full_reasoning}
-        )
+    if config.max_context_tokens is not None:
+        policy.max_context_tokens = config.max_context_tokens
+    if config.reasoning is not None and isinstance(strategy, TwoPhaseCompaction):
+        strategy.summarizer = strategy.summarizer.model_copy(update={"reasoning": config.reasoning})
     return Compactor(strategy=strategy, policy=policy)

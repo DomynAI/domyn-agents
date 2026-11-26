@@ -42,6 +42,7 @@ from domyn.agents.planner_strategy.context_management.compaction import (
     Compactor,
     ConversationSummarizer,
     PruneOnlyCompaction,
+    SummaryReasoning,
     TwoPhaseCompaction,
     build_compactor,
 )
@@ -457,7 +458,7 @@ def test_reasoning_brings_compaction_to_its_threshold() -> None:
 class TestTheSummarizer:
     """No message has the short thoughts as its text: the summarizer reads them
     from the calls' arguments, or the calls reach it with no reason behind them.
-    The whole reasoning is not read."""
+    With `ignore`, the whole reasoning is not read."""
 
     @pytest.mark.asyncio
     async def test_reads_the_short_thoughts_not_the_reasoning(self) -> None:
@@ -468,7 +469,9 @@ class TestTheSummarizer:
             reasoning_content=REASONING,
         )
 
-        await ConversationSummarizer().summarize([calls], llm_provider=provider)
+        await ConversationSummarizer(reasoning=SummaryReasoning.IGNORE).summarize(
+            [calls], llm_provider=provider
+        )
 
         transcript = provider.requests[0][-1].content or ""
         assert "assistant: look at a\nlook at b (calls: look, look)" in transcript
@@ -484,14 +487,16 @@ class TestTheSummarizer:
         (calls,) = _assistants_with_calls(provider.requests[1])
         summarizer = _Script(replies=[_answer("summary")])
 
-        await ConversationSummarizer().summarize([calls], llm_provider=summarizer)
+        await ConversationSummarizer(reasoning=SummaryReasoning.IGNORE).summarize(
+            [calls], llm_provider=summarizer
+        )
 
         transcript = summarizer.requests[0][-1].content or ""
         assert transcript.endswith("assistant: look at a\nlook at b (calls: look, look)")
 
 
 class TestTheSummarizerReadingTheReasoning:
-    """`read_full_reasoning` reads the whole reasoning in place of the short thoughts."""
+    """`read` and `carry` read the whole reasoning in place of the short thoughts."""
 
     @pytest.mark.asyncio
     async def test_reads_it_in_place_of_the_thoughts(self) -> None:
@@ -502,7 +507,7 @@ class TestTheSummarizerReadingTheReasoning:
             reasoning_content=REASONING,
         )
 
-        await ConversationSummarizer(read_full_reasoning=True).summarize(
+        await ConversationSummarizer(reasoning=SummaryReasoning.READ).summarize(
             [calls], llm_provider=provider
         )
 
@@ -515,7 +520,7 @@ class TestTheSummarizerReadingTheReasoning:
         provider = _Script(replies=[_answer("summary")])
         calls = LLMMessage(role="assistant", tool_calls=[_call(0, "a", "look at a")])
 
-        await ConversationSummarizer(read_full_reasoning=True).summarize(
+        await ConversationSummarizer(reasoning=SummaryReasoning.READ).summarize(
             [calls], llm_provider=provider
         )
 
@@ -526,24 +531,28 @@ class TestTheSummarizerReadingTheReasoning:
         provider = _Script(replies=[_answer("summary")])
         answer = LLMMessage(role="assistant", content="the answer", reasoning_content="x" * 500)
 
-        await ConversationSummarizer(read_full_reasoning=True, max_chars_per_message=100).summarize(
-            [answer], llm_provider=provider
-        )
+        await ConversationSummarizer(
+            reasoning=SummaryReasoning.READ, max_chars_per_message=100
+        ).summarize([answer], llm_provider=provider)
 
         transcript = provider.requests[0][-1].content or ""
         assert "assistant: the answer\n(reasoning: xxx" in transcript
         assert transcript.endswith("…(truncated)")
 
-    @pytest.mark.parametrize("value", [True, False])
-    def test_it_is_read_from_a_compactor_config(self, value: bool) -> None:
-        compactor = build_compactor(CompactionConfig(read_full_reasoning=value))
+    @pytest.mark.parametrize("value", list(SummaryReasoning))
+    def test_it_is_read_from_a_compactor_config(self, value: SummaryReasoning) -> None:
+        compactor = build_compactor(CompactionConfig.model_validate({"reasoning": value.value}))
 
         assert isinstance(compactor.strategy, TwoPhaseCompaction)
-        assert compactor.strategy.summarizer.read_full_reasoning is value
+        assert compactor.strategy.summarizer.reasoning is value
 
-    def test_off_by_default(self) -> None:
+    def test_carried_by_default(self) -> None:
         compactor = build_compactor(CompactionConfig())
 
         assert isinstance(compactor.strategy, TwoPhaseCompaction)
-        assert compactor.strategy.summarizer.read_full_reasoning is False
-        assert "read_full_reasoning" not in CompactionConfig().model_dump(exclude_none=True)
+        assert compactor.strategy.summarizer.reasoning is SummaryReasoning.CARRY
+        assert "reasoning" not in CompactionConfig().model_dump(exclude_none=True)
+
+    def test_the_key_it_replaced_is_refused_with_its_replacement(self) -> None:
+        with pytest.raises(ValueError, match="replaced by `reasoning`"):
+            CompactionConfig.model_validate({"read_full_reasoning": True})

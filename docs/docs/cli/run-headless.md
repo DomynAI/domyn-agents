@@ -54,6 +54,7 @@ The model's limits are left to the endpoint unless you give them:
 |---|---|
 | `--context-window` | asked of the endpoint when the session starts, as for any [provider](../guides/llm-providers.md); [compaction](../guides/context-compaction.md) uses it |
 | `--max-tokens` | the endpoint's own limit on a reply. When given, compaction keeps that much room under the window for the reply |
+| `--compaction-max-tokens` | 128,000: a request past it is [compacted](../guides/context-compaction.md) even when the window holds more. A smaller window compacts earlier, as usual |
 | `--temperature` | the endpoint's default |
 | `--reasoning-effort` | `default`: no `reasoning_effort` is sent and the endpoint's default applies. Give `low`, `medium` or `high` (or whatever the endpoint accepts) to send one |
 

@@ -36,6 +36,7 @@ from domyn.agents.planner_strategy.context_management.compaction import (
     CONTEXT_USAGE_METADATA_KEY,
     DEFAULT_RESERVE_TOKENS,
     Budget,
+    CompactionConfig,
     CompactionOutcome,
     CompactionPolicy,
     CompactionStrategy,
@@ -46,6 +47,7 @@ from domyn.agents.planner_strategy.context_management.compaction import (
     ToolResultPruner,
     _adopt_window,
     add_to_record,
+    build_compactor,
     build_strategy,
     compaction_strategy,
 )
@@ -550,6 +552,50 @@ class TestTheThresholdFloor:
         with caplog.at_level("WARNING", logger="domyn.agents"):
             _active().assess([_msg("user", "hi")], self._agent(100_000, max_tokens=32_000))
         assert not any("reply reserve" in r.message for r in caplog.records)
+
+
+class TestTheThresholdCap:
+    """`max_context_tokens` compacts a request past it, however large the window."""
+
+    _agent = staticmethod(TestTheThresholdFloor._agent)
+
+    def test_a_larger_window_compacts_at_the_cap(self) -> None:
+        plan = _active(max_context_tokens=128_000).assess(
+            [_msg("user", "hi")], self._agent(1_048_576, max_tokens=32_000)
+        )
+        assert plan.threshold_tokens == 128_000
+
+    def test_a_smaller_window_keeps_its_own_threshold(self) -> None:
+        plan = _active(max_context_tokens=128_000).assess(
+            [_msg("user", "hi")], self._agent(100_000, max_tokens=16_000)
+        )
+        assert plan.threshold_tokens == 84_000
+
+    def test_a_request_over_the_cap_is_compacted(self) -> None:
+        messages = _conversation(30)
+        agent = self._agent(1_048_576, max_tokens=1_000)
+        assert _active().assess(messages, agent).needed is False
+        plan = _active(max_context_tokens=10_000).assess(messages, agent)
+        assert plan.needed is True
+        assert plan.threshold_tokens == 10_000
+
+    def test_the_cap_wins_over_the_floor(self) -> None:
+        """The floor stops an accident; the cap is a choice."""
+        plan = _active(max_context_tokens=5_000).assess(
+            [_msg("user", "hi")], self._agent(1_048_576, max_tokens=1_000)
+        )
+        assert plan.threshold_tokens == 5_000
+
+    def test_the_threshold_shown_is_the_one_checked(self) -> None:
+        usage = _active(max_context_tokens=128_000).usage_metadata(
+            [_msg("user", "hi")], None, self._agent(1_048_576, max_tokens=32_000)
+        )
+        assert usage[CONTEXT_USAGE_METADATA_KEY]["threshold_tokens"] == 128_000
+
+    def test_the_configuration_sets_it(self) -> None:
+        compactor = build_compactor(CompactionConfig(max_context_tokens=128_000))
+        assert compactor.policy.max_context_tokens == 128_000
+        assert build_compactor(CompactionConfig()).policy.max_context_tokens is None
 
 
 class TestDoNotTrustTheWindowValue:

@@ -13,7 +13,11 @@ from typer.testing import CliRunner
 from domyn.agents import BaseEvent, ExecutionEventType, Part, Runner
 from domyn.agents.cli.cli import app
 from domyn.agents.cli.commands.run_headless import command as run_headless
-from domyn.agents.cli.commands.run_headless.command import DEFAULT_INSTRUCTIONS, run_headless_config
+from domyn.agents.cli.commands.run_headless.command import (
+    DEFAULT_COMPACTION_MAX_TOKENS,
+    DEFAULT_INSTRUCTIONS,
+    run_headless_config,
+)
 from domyn.agents.instructions import load_declared
 from domyn.agents.interfaces.cli import config as cli_config
 from domyn.agents.interfaces.cli.state import CliState
@@ -52,7 +56,20 @@ class TestTheConfiguration:
         assert "context_window" not in provider
         assert "api_key" not in provider
         assert provider["generation_params"] == {"max_tokens": None, "temperature": None}
-        assert _config()["planner_strategies"][0]["compactor"] == {"strategy": "two_phase"}
+        assert _config()["planner_strategies"][0]["compactor"] == {
+            "strategy": "two_phase",
+            "max_context_tokens": DEFAULT_COMPACTION_MAX_TOKENS,
+        }
+
+    def test_compaction_starts_at_128k_unless_told_otherwise(self) -> None:
+        compactor = _config()["planner_strategies"][0]["compactor"]
+        assert compactor["max_context_tokens"] == DEFAULT_COMPACTION_MAX_TOKENS == 128_000
+        lowered = _config(compaction_max_tokens=64_000)["planner_strategies"][0]["compactor"]
+        assert lowered["max_context_tokens"] == 64_000
+        assert (
+            "max_context_tokens"
+            not in (_config(compaction_max_tokens=None)["planner_strategies"][0]["compactor"])
+        )
 
     def test_the_model_limits_and_effort_are_passed_in(self) -> None:
         config = _config(
@@ -95,6 +112,8 @@ class TestTheConfiguration:
         # Passed explicitly as None, so the provider's 0.7 is not merged in: sent as null.
         assert agent.llm_provider.generation_params["temperature"] is None
         assert agent.planner.max_iterations == 1000  # type: ignore[attr-defined]
+        policy = agent.planner.compactor.policy  # type: ignore[attr-defined]
+        assert policy.max_context_tokens == DEFAULT_COMPACTION_MAX_TOKENS
         loaded = await load_declared(agent)
         assert loaded is not None
         assert "Do not ask questions." in loaded.agent[0].text
@@ -227,6 +246,18 @@ class TestTheCommand:
         written = yaml.safe_load((state / "config.yaml").read_text())
         assert written["llm_providers"][0]["api_key"] == "${RUN_HEADLESS_TEST_KEY}"
         assert written["llm_providers"][0]["url"] == f"{ENDPOINT}/chat/completions"
+
+    @pytest.mark.parametrize(
+        ("given", "cap"), [([], 128_000), (["--compaction-max-tokens", "50000"], 50_000)]
+    )
+    def test_the_compaction_cap_is_written(
+        self, tmp_path: Path, started: dict[str, Any], given: list[str], cap: int
+    ) -> None:
+        state = tmp_path / "state"
+        result = _invoke("--model_name", "m", "--state-dir", str(state), *given, "x")
+        assert result.exit_code == 0, result.output
+        written = yaml.safe_load((state / "config.yaml").read_text())
+        assert written["planner_strategies"][0]["compactor"]["max_context_tokens"] == cap
 
     def test_no_reasoning_effort_is_sent_unless_given(
         self, tmp_path: Path, started: dict[str, Any]
@@ -366,6 +397,7 @@ class TestAConfigFile:
             ["--model_name", "m"],
             ["--model_url", ENDPOINT],
             ["--workspace", "/tmp"],
+            ["--compaction-max-tokens", "64000"],
             # An option's default given explicitly is still an option given.
             ["--reasoning-effort", "default"],
         ],

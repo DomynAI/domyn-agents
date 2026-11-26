@@ -91,6 +91,7 @@ Carries out one task with nobody to answer and no follow-up, then exits: every t
 | `--api-key-env` | `str` | | The environment variable holding the endpoint's key. Without it no key is sent; a variable that is not set is an error. |
 | `--context-window` | `int` | asked of the endpoint | The model's context window in tokens. |
 | `--max-tokens` | `int` | the endpoint's | The longest reply to ask for. Compaction keeps that much room for it under the window. |
+| `--compaction-max-tokens` | `int` | `128000` | Compact once a request passes this many tokens, even when the window holds more. |
 | `--temperature` | `float` | the endpoint's | Sampling temperature. |
 | `--reasoning-effort` | `str` | `default` | Sent as `reasoning_effort` on every call, such as `low`, `medium` or `high`. `default` sends none. |
 | `--max-iterations` | `int` | `1000` | The most model calls in the turn. |

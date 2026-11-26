@@ -96,12 +96,16 @@ nobody to answer needs: without them a model tends to describe the steps and off
 carry them out, and the session ends on the offer."""
 
 DEFAULT_MAX_ITERATIONS = 1000
+DEFAULT_COMPACTION_MAX_TOKENS = 128_000
+"""The most a request reaches before it is compacted, unless ``--compaction-max-tokens``
+says otherwise: a model with a larger window compacts here all the same."""
 BUILD_OPTIONS = {
     "base_url": "--model_url",
     "model": "--model_name",
     "api_key_env": "--api-key-env",
     "context_window": "--context-window",
     "max_tokens": "--max-tokens",
+    "compaction_max_tokens": "--compaction-max-tokens",
     "temperature": "--temperature",
     "reasoning_effort": "--reasoning-effort",
     "max_iterations": "--max-iterations",
@@ -127,6 +131,7 @@ def run_headless_config(
     temperature: float | None,
     reasoning_effort: str | None,
     max_iterations: int,
+    compaction_max_tokens: int | None = DEFAULT_COMPACTION_MAX_TOKENS,
     instructions: str | None,
     workspace: str,
 ) -> dict[str, Any]:
@@ -142,7 +147,8 @@ def run_headless_config(
     reply ceiling (``max_reply_tokens``), which is ``max_tokens`` after
     ``max_tokens_share`` has lowered it, so a ``max_tokens`` as large as the window
     leaves the prompt half of it rather than the tenth floor; with no ``max_tokens``,
-    its own default.
+    its own default. It compacts a request past ``compaction_max_tokens`` even when
+    the window holds more (``None``: the window alone decides).
     """
     generation_params: dict[str, Any] = {"max_tokens": max_tokens, "temperature": temperature}
     if reasoning_effort is not None:
@@ -162,6 +168,8 @@ def run_headless_config(
         provider["context_window"] = context_window
 
     compactor: dict[str, Any] = {"strategy": "two_phase"}
+    if compaction_max_tokens is not None:
+        compactor["max_context_tokens"] = compaction_max_tokens
 
     agent: dict[str, Any] = {
         "name": AGENT_NAME,
@@ -301,6 +309,15 @@ def run_headless_command(
         min=1,
         help="The longest reply to ask for (default: null, the endpoint decides)",
     ),
+    compaction_max_tokens: int = typer.Option(
+        DEFAULT_COMPACTION_MAX_TOKENS,
+        "--compaction-max-tokens",
+        min=1,
+        help=(
+            "Compact once a request passes this many tokens, even when the window "
+            f"holds more (default: {DEFAULT_COMPACTION_MAX_TOKENS})"
+        ),
+    ),
     temperature: float | None = typer.Option(
         None, "--temperature", help="Sampling temperature (default: null, the endpoint's)"
     ),
@@ -390,6 +407,7 @@ def run_headless_command(
             api_key_env=api_key_env,
             context_window=context_window,
             max_tokens=max_tokens,
+            compaction_max_tokens=compaction_max_tokens,
             temperature=temperature,
             reasoning_effort=None if reasoning_effort == NO_REASONING_EFFORT else reasoning_effort,
             max_iterations=max_iterations,
