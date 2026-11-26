@@ -26,21 +26,21 @@ package: decoding the animation happens here, once, not on every startup.
 import argparse
 import gzip
 import io
+import math
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 ASSETS = Path(__file__).resolve().parent.parent / "domyn/agents/interfaces/cli/assets"
 
 # Must match ``_LOGO_WIDTHS`` in banner.py — anything else ships art the CLI
 # never looks for.
 #
-# Widest first, and 100 is the floor. 150 needs a window most people do not run:
-# at 120 and 100 the lettering still reads, but by 80 the letterforms collapse
-# into texture and the hand-drawn ASCII wordmark is genuinely the better
-# fallback. Each extra size costs ~60-80 KB gzipped, which is nothing next to a
-# banner nobody sees.
-WIDTHS = (150, 120, 100)
+# Widest first. 150 is the lockup as the animation draws it, for a large window;
+# the two cuts below it are baked separately, from a chosen geometry rather than a
+# width (COMPACT_CUTS). Each extra size costs ~50-120 KB gzipped, which is nothing
+# next to a banner nobody sees.
+WIDTHS = (150,)
 
 # Every frame of the source, no subsampling. Dropping frames means either
 # playing the reveal faster than it was designed to run or holding each frame
@@ -253,6 +253,421 @@ def to_half_blocks(img: Image.Image, width: int) -> str:
     return "\n".join(lines)
 
 
+# The compact cut. Shrinking the frames to a width gives letters whose x-height
+# and baseline fall between pixel rows: an "o" a pixel below the other letters.
+# So its geometry is chosen, not derived from a width:
+#
+# * the scale makes the cap height of the cut (its COMPACT_CUTS value) pixels (CAP_SRC is the source's,
+#   measured on the GIF this was made for; x-height is 0.768 of it, which at 10
+#   is within a quarter of a pixel of a whole number), the lettering keeps the
+#   font's own proportions,
+# * the baseline (BASELINE_SRC) is moved onto a cell boundary,
+# * the area filter (BOX) averages coverage honestly, and the alpha cut is low
+#   enough to keep the weight of the strokes but above the o's overshoot of the
+#   baseline, which would otherwise be drawn as a row of its own,
+# * the canvas starts at the left edge of the finished lockup, so the glyph is
+#   whole when the slide ends, and is as many columns wide as the cut is named,
+#   which must hold the lockup where the slide starts (checked).
+# Canvas width in columns -> cap height in pixels. 98 is the finished one (the
+# stems come out three whole pixels, 12 rows); 80 is for windows narrower than
+# that and is rougher: the "o" and "m" touch at the top.
+COMPACT_CUTS = {98: 13.0, 80: 10.0}
+COMPACT_ALPHA = 70
+CAP_SRC = 198.0
+BASELINE_SRC = 635.0
+
+
+
+# Letters of the compact cuts, redrawn on the pixel grid once the word is whole.
+# A filter cannot give a stroke that is 2.4 source pixels wide the same width in
+# every letter: the "o" came out lopsided with a hole missing in its bottom, the
+# legs of the "m" and "n" differed, the counters had square inner corners. These
+# keep the font's own structure (the notch above a counter, the arch that ends one
+# column short of its stem, the D's counter measured on the source) with the
+# strokes made even. The "y" is left as rendered.
+#
+# Per cut: ``cap`` is the cap height in pixels; ``letters`` are
+# (column, row below the cap line, rows) with the column counted from the first
+# column of the D's stem; ``stems`` are the runs of ink across the x-height, from
+# that column, once the word is whole (the letters spread apart while it is
+# revealed, so nothing is redrawn before that); ``clear`` are the column ranges the
+# redrawn letters replace, which leave the y alone; ``stem_row`` is how many rows
+# above the baseline that run is read.
+TIDY: dict[int, dict] = {
+    98: {
+        "cap": 13,
+        "letters": (
+            # D: closed by a two-row bar, 3 wide on its first counter row, then 4
+            # until it narrows the same way at the bottom; the stem side is straight.
+            # Stem and right wall are 3 wide, like the legs of the m and n. (The
+            # font's D is a column wider, with a 5-wide counter.)
+            (0, 0, (
+                "#######...",
+                "########..",
+                "###...###.",
+                "###....###",
+                "###....###",
+                "###....###",
+                "###....###",
+                "###....###",
+                "###....###",
+                "###....###",
+                "###...###.",
+                "########..",
+                "#######...",
+            )),
+            # o: symmetric in both directions; 10 wide, the font's (counter 4). Its
+            # bars are two rows at the centre: the font's are 2.4 pixels, like the
+            # stems, and a solid third row made it heavy. The outline runs 4, 8, 10 wide, as
+            # a circle of that diameter does, so it reads round.
+            (11, 3, (
+                "...####...",
+                ".########.",
+                "####..####",
+                "###....###",
+                "###....###",
+                "###....###",
+                "###....###",
+                "####..####",
+                ".########.",
+                "...####...",
+            )),
+            # m: three equal stems, two equal counters, rounded like the n's. 15
+            # wide, so that it keeps the column the font leaves between it and the y.
+            (22, 3, (
+                "###.#####.####.",
+                "###############",
+                "###############",
+                "####.#####.####",
+                "###...###...###",
+                "###...###...###",
+                "###...###...###",
+                "###...###...###",
+                "###...###...###",
+                "###...###...###",
+            )),
+            # n
+            (50, 3, (
+                "###.#####.",
+                "##########",
+                "##########",
+                "####..####",
+                "###....###",
+                "###....###",
+                "###....###",
+                "###....###",
+                "###....###",
+                "###....###",
+            )),
+        ),
+        "stems": (
+            (0, 2), (8, 10), (12, 14), (20, 22), (24, 26), (30, 32), (37, 39), (42, 44),
+            (46, 48), (52, 54), (59, 61),
+        ),
+        "clear": ((-1, 39), (52, 61)),
+        "stem_row": 6,
+        # The y's tail, from the baseline down: one stroke of constant width that
+        # steps left once per cell row (two pixel rows), so every cell row is flat
+        # and the line stays straight. (first column, last column per row; the
+        # columns cleared before drawing.)
+        "tail": ((42, 44), (42, 44), (41, 43), (41, 43)),
+        "tail_clear": (36, 48),
+        # The y is the filter's, not drawn here: its pixels move left with the o, m
+        # and n, which sit two columns closer than the filter put them.
+        "shift": (40, 51, -2),
+    },
+    80: {
+        "cap": 10,
+        "letters": (
+            # D: the outer curve is the font's, scaled: of its width the edge has
+            # 74%, 91%, 96% at the first rows, then all of it.
+            (0, 0, (
+                "#####..",
+                "######.",
+                "##..###",
+                "##...##",
+                "##...##",
+                "##...##",
+                "##...##",
+                "##..###",
+                "######.",
+                "#####..",
+            )),
+            (8, 2, (
+                "..####..",
+                ".######.",
+                "###..###",
+                "##....##",
+                "##....##",
+                "###..###",
+                ".######.",
+                "..####..",
+            )),
+            (17, 2, (
+                "##.####.###.",
+                "############",
+                "###.####.###",
+                "##...##...##",
+                "##...##...##",
+                "##...##...##",
+                "##...##...##",
+                "##...##...##",
+            )),
+            (38, 2, (
+                "##.###.",
+                "#######",
+                "###.###",
+                "##...##",
+                "##...##",
+                "##...##",
+                "##...##",
+                "##...##",
+            )),
+        ),
+        "stems": (
+            (0, 2), (7, 8), (10, 12), (14, 16), (18, 21), (23, 26), (28, 30), (32, 34),
+            (36, 38), (40, 42), (45, 47),
+        ),
+        "clear": ((-1, 30), (40, 47)),
+        "stem_row": 6,
+        "tail": ((32, 34), (32, 34), (31, 33), (31, 33)),
+        "tail_clear": (28, 36),
+        # The y is the filter's, not drawn here: its pixels move two columns left
+        # with the letters after the D, which is one column narrower.
+        "shift": (31, 39, -2),
+    },
+}
+
+
+def tidy_word(px: Image.Image, baseline_row: int, cut: int) -> None:
+    """Redraw the letters of ``TIDY[cut]`` on a rendered compact frame.
+
+    Only when the whole word is there; while it is being revealed the frame is
+    left as the filter made it. ``baseline_row`` is the pixel row just below the
+    baseline.
+    """
+    cfg = TIDY[cut]
+    pix = px.load()
+    assert pix is not None
+
+    def inked(x: int, y: int) -> bool:
+        r, g, b, a = pix[x, y]
+        return a >= COMPACT_ALPHA and min(r, g, b) >= 200
+
+    cap_top = baseline_row - cfg["cap"]
+    first = None
+    for x in range(px.width):
+        if any(inked(x, y) for y in range(max(0, cap_top), baseline_row)):
+            first = x
+            break
+    if first is None:
+        return
+    row = baseline_row - cfg["stem_row"]
+    found: list[tuple[int, int]] = []
+    start = None
+    for x in range(px.width + 1):
+        if x < px.width and inked(x, row):
+            if start is None:
+                start = x
+        elif start is not None:
+            found.append((start - first, x - 1 - first))
+            start = None
+    stems = cfg["stems"]
+    if len(found) != len(stems) or any(
+        abs(a - ra) > 1 or abs(b - rb) > 1 for (a, b), (ra, rb) in zip(found, stems)
+    ):
+        return
+    moved: list[tuple[int, int, tuple[int, int, int, int]]] = []
+    if "shift" in cfg:
+        lo, hi, dx = cfg["shift"]
+        for y in range(max(0, cap_top - 1), px.height):
+            for x in range(max(0, first + lo), min(px.width, first + hi + 1)):
+                if pix[x, y][3] > 0 and min(pix[x, y][:3]) >= 200:
+                    moved.append((x + dx, y, pix[x, y]))
+                    pix[x, y] = (0, 0, 0, 0)
+    for lo, hi in cfg["clear"]:
+        for y in range(max(0, cap_top - 1), baseline_row + 1):
+            for x in range(max(0, first + lo), min(px.width, first + hi + 1)):
+                r, g, b, a = pix[x, y]
+                if min(r, g, b) >= 200:
+                    pix[x, y] = (0, 0, 0, 0)
+    for x, y, value in moved:
+        if 0 <= x < px.width:
+            pix[x, y] = value
+    lo_clear, hi_clear = cfg["tail_clear"]
+    for dy, (lo, hi) in enumerate(cfg["tail"]):
+        y = baseline_row + dy
+        if y >= px.height:
+            break
+        for x in range(max(0, first + lo_clear), min(px.width, first + hi_clear + 1)):
+            if min(pix[x, y][:3]) >= 200:
+                pix[x, y] = (0, 0, 0, 0)
+        for x in range(first + lo, first + hi + 1):
+            if 0 <= x < px.width:
+                pix[x, y] = (255, 255, 255, 255)
+    for col, row_offset, rows in cfg["letters"]:
+        top = cap_top + row_offset
+        for dy, line in enumerate(rows):
+            for dx, c in enumerate(line):
+                if c == "#":
+                    x, y = first + col + dx, top + dy
+                    if 0 <= x < px.width and 0 <= y < px.height:
+                        pix[x, y] = (255, 255, 255, 255)
+
+
+# Cuts whose glyph is snapped to a circle on the outside (see round_glyph).
+ROUND_GLYPH = (80,)
+# A glyph counts as fully drawn from this size on (source pixels): while it draws
+# itself the circle would complete it.
+GLYPH_DRAWN = 245
+
+
+def glyph_box(img: Image.Image) -> tuple[int, int, int, int] | None:
+    """Bounding box of the mark: opaque pixels that are not the white word."""
+    r, g, b, a = img.split()
+    dark = ImageChops.darker(ImageChops.darker(r, g), b).point(lambda v: 255 if v < 200 else 0)
+    solid = a.point(lambda v: 255 if v >= 128 else 0)
+    return ImageChops.multiply(dark, solid).getbbox()
+
+
+def round_glyph(px: Image.Image, cx: float, cy: float, radius: float) -> None:
+    """Make the outside of the mark a circle, on a rendered frame.
+
+    At a few pixels across, the mark's edge is a stairway of whatever the filter
+    left on each pixel: gaps in the rim, a stray pixel outside it. The disc the
+    mark fills is measured on the source; a pixel with under a third of its area
+    inside is cleared, and an empty one on the rim with over half of it inside is
+    given the colour of the nearest ink, so the outline is the circle's. ``cx``,
+    ``cy`` and ``radius`` are in pixels of ``px``.
+    """
+    pix = px.load()
+    assert pix is not None
+
+    def inside(x: int, y: int) -> float:
+        hits = 0
+        for i in range(4):
+            for j in range(4):
+                dx = x + (i + 0.5) / 4 - cx
+                dy = y + (j + 0.5) / 4 - cy
+                hits += dx * dx + dy * dy <= radius * radius
+        return hits / 16
+
+    def is_ink(x: int, y: int) -> bool:
+        r, g, b, a = pix[x, y]
+        return a >= COMPACT_ALPHA and min(r, g, b) < 200
+
+    reach = int(radius) + 3
+    x0, y0 = int(cx) - reach, int(cy) - reach
+    for y in range(max(0, y0), min(px.height, y0 + 2 * reach + 1)):
+        for x in range(max(0, x0), min(px.width, x0 + 2 * reach + 1)):
+            area = inside(x, y)
+            r, g, b, a = pix[x, y]
+            white = min(r, g, b) >= 200 and a > 0
+            if white:
+                continue
+            if area < 1 / 3 and a > 0:
+                pix[x, y] = (0, 0, 0, 0)
+            elif area > 0.5 and not is_ink(x, y):
+                dist = math.hypot(x + 0.5 - cx, y + 0.5 - cy)
+                if dist < radius - 1.5:
+                    continue
+                best = None
+                for ny in range(y - 2, y + 3):
+                    for nx in range(x - 2, x + 3):
+                        if 0 <= nx < px.width and 0 <= ny < px.height and is_ink(nx, ny):
+                            d = (nx - x) ** 2 + (ny - y) ** 2
+                            if best is None or d < best[0]:
+                                best = (d, pix[nx, ny])
+                if best is not None:
+                    pix[x, y] = (*best[1][:3], 255)
+
+
+def place_glyph(
+    px: Image.Image,
+    padded: Image.Image,
+    render_box: tuple[float, float, float, float],
+    mark: tuple[int, int, int, int],
+    scale: float,
+    top: float,
+    margin: int,
+) -> None:
+    """Redraw the mark with its centre on the middle of a pixel, then round it.
+
+    A mark whose centre falls a quarter of a pixel off the grid gives its top row
+    a different coverage from its bottom one: one pixel up, six down. It is
+    rendered again, shifted by that quarter, so the two ends match, and its
+    pixels replace the frame's own.
+    """
+    cx = (mark[0] + mark[2]) / 2 * scale
+    cy = ((mark[1] + mark[3]) / 2 - top) * scale
+    radius = min(mark[2] - mark[0], mark[3] - mark[1]) / 2 * scale
+    tx, ty = math.floor(cx) + 0.5, math.floor(cy) + 0.5
+    dx, dy = tx - cx, ty - cy
+    left, up, right, down = render_box
+    moved = padded.resize(
+        px.size,
+        Image.BOX,
+        box=(left - dx / scale, up - dy / scale, right - dx / scale, down - dy / scale),
+    )
+    src, dst = moved.load(), px.load()
+    assert src is not None and dst is not None
+    reach = int(radius) + 3
+    for y in range(max(0, int(ty) - reach), min(px.height, int(ty) + reach + 1)):
+        for x in range(max(0, int(tx) - reach), min(px.width, int(tx) + reach + 1)):
+            if min(dst[x, y][:3]) >= 200 and dst[x, y][3] > 0:
+                continue  # the word is not the mark's
+            r, g, b, a = src[x, y]
+            dst[x, y] = (0, 0, 0, 0) if (min(r, g, b) >= 200 and a > 0) else src[x, y]
+    round_glyph(px, tx, ty, radius)
+
+
+def to_half_blocks_compact(img: Image.Image, crop_top: int, width: int) -> str:
+    """Render one cropped frame at the compact geometry (see ``COMPACT_CAP``).
+
+    ``crop_top`` is the top of the crop in source pixels, to find the baseline;
+    ``width`` names the cut in ``COMPACT_CUTS``.
+    """
+    global ALPHA_THRESHOLD
+    scale = COMPACT_CUTS[width] / CAP_SRC
+    box = content_bbox(img)
+    if box is not None and box[2] * scale > width:
+        raise ValueError(
+            f"compact banner: content reaches column {box[2] * scale:.1f}, past {width}"
+        )
+    base = BASELINE_SRC - crop_top
+    rows_above = math.ceil(base * scale)
+    rows_above += rows_above % 2
+    top = base - rows_above / scale
+    height = 2 * math.ceil((img.height - top) * scale / 2)
+    margin = 160
+    padded = Image.new("RGBA", (img.width + 2 * margin, img.height + 2 * margin), (0, 0, 0, 0))
+    padded.paste(img, (margin, margin))
+    px = padded.resize(
+        (width, height),
+        Image.BOX,
+        box=(margin, top + margin, margin + width / scale, top + margin + height / scale),
+    )
+    saved, ALPHA_THRESHOLD = ALPHA_THRESHOLD, COMPACT_ALPHA
+    try:
+        if width in ROUND_GLYPH:
+            mark = glyph_box(img)
+            if mark and mark[2] - mark[0] >= GLYPH_DRAWN and mark[3] - mark[1] >= GLYPH_DRAWN:
+                place_glyph(
+                    px,
+                    padded,
+                    (margin, top + margin, margin + width / scale, top + margin + height / scale),
+                    (mark[0], mark[1], mark[2], mark[3]),
+                    scale,
+                    top,
+                    margin,
+                )
+        if width in TIDY:
+            tidy_word(px, round((base - top) * scale), width)
+        return to_half_blocks(px, width)
+    finally:
+        ALPHA_THRESHOLD = saved
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("gif", type=Path, help="source logo animation")
@@ -276,8 +691,12 @@ def main() -> None:
     print(f"{len(frames)} reveal + {len(full) - len(frames)} slide -> {len(keyframes)} keyframes")
 
     args.out.mkdir(parents=True, exist_ok=True)
-    for width in WIDTHS:
-        rendered = [to_half_blocks(img, width) for img in keyframes]
+    for width in (*WIDTHS, *COMPACT_CUTS):
+        if width in COMPACT_CUTS:
+            top = box[1] if box is not None else 0
+            rendered = [to_half_blocks_compact(img, top, width) for img in keyframes]
+        else:
+            rendered = [to_half_blocks(img, width) for img in keyframes]
         (args.out / f"logo_{width}.ans").write_text(rendered[-1] + "\n", encoding="utf-8")
         durations = [source_ms] * len(frames) + [SLIDE_FRAME_MS] * (len(keyframes) - len(frames))
         blob = "\f".join([",".join(str(d) for d in durations), *rendered]).encode("utf-8")
