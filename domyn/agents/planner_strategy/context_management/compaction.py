@@ -1550,20 +1550,25 @@ class PruneOnlyCompaction(CompactionStrategy):
         )
 
 
-SUMMARY_MARKER = "[conversation summary]"
+SUMMARY_MARKER = (
+    "[The earlier conversation has been summarized to save context. "
+    "This summary replaces it; it was written automatically, not by the user.]"
+)
 """Prefix identifying an injected summary.
 
 So the model, and anyone reading a request, can tell a reconstruction from
-something that was actually said. It carries no logic — a later summarization
+something that was actually said: it says what happened, why, and, since the
+message has the `user` role, that the user did not write it. It carries no logic — a later summarization
 folds an earlier summary into the new one on purpose, since the new one is meant
 to subsume it, and the record keeps a single summary rather than a chain.
 """
 
 
-REASONING_SUMMARY_MARKER = "[summary of earlier reasoning]"
-"""Opens the summarized reasoning put before an assistant message's own reasoning."""
+REASONING_SUMMARY_MARKER = "[My earlier reasoning has been summarized to save context. Summary:]"
+"""Opens the summarized reasoning put before an assistant message's own reasoning.
+In the first person, as the summary itself is: it is read as the model's own notes."""
 
-REASONING_SUMMARY_END = "[end of summary of earlier reasoning]"
+REASONING_SUMMARY_END = "[End of the summary of my earlier reasoning. My reasoning continues here.]"
 """Closes it, so the model can tell where the summary stops and its own reasoning
 starts, and a later compaction can replace it rather than stack a second one."""
 
