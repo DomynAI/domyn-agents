@@ -150,18 +150,35 @@ class TestTurningItOff:
 
 
 class TestTheCommand:
-    def test_standalone(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def _notice(self) -> str:
+        update_check.update_notice()
+        notice = update_check.update_notice()
+        assert notice is not None
+        return notice
+
+    def test_standalone(
+        self, calls: list[int], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         (tmp_path / ".domyn-runtime").write_text("domyn 1.0.0, installed by install.sh")
         monkeypatch.setattr(sys, "prefix", str(tmp_path / "python"))
         monkeypatch.setattr(sys, "platform", "darwin")
-        assert update_check.update_command().endswith("install.sh | sh")
+        assert self._notice().endswith(
+            f"update with: curl -fsSL {update_check.RELEASES_URL}/install.sh | sh"
+        )
         monkeypatch.setattr(sys, "platform", "win32")
-        assert update_check.update_command().endswith("install.ps1 | iex")
+        assert self._notice().endswith("install.ps1 | iex")
 
-    def test_uv_tool(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_uv_tool(
+        self, calls: list[int], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         (tmp_path / "uv-receipt.toml").write_text("")
         monkeypatch.setattr(sys, "prefix", str(tmp_path))
-        assert update_check.update_command() == "uv tool upgrade domyn"
+        assert self._notice().endswith("in your Python environment run: uv tool upgrade domyn")
+
+    def test_pip(self, calls: list[int]) -> None:
+        assert self._notice().endswith(
+            'in your Python environment run: pip install -U "domyn[cli]"'
+        )
 
 
 class TestAskingPyPI:

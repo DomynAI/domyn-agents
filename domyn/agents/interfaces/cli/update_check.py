@@ -82,18 +82,6 @@ def latest_version() -> str | None:
     return latest if isinstance(latest, str) else None
 
 
-def update_command() -> str:
-    """The command that updates domyn the way it was installed."""
-    runtime = Path(sys.prefix)
-    if (runtime.parent / STANDALONE_MARKER).is_file():
-        if sys.platform == "win32":
-            return f"irm {RELEASES_URL}/install.ps1 | iex"
-        return f"curl -fsSL {RELEASES_URL}/install.sh | sh"
-    if (runtime / "uv-receipt.toml").is_file():
-        return "uv tool upgrade domyn"
-    return 'pip install -U "domyn[cli]"'
-
-
 def _refresh_latest() -> None:
     """Ask PyPI and save the answer, for the next run to show."""
     latest = latest_version()
@@ -135,4 +123,16 @@ def update_notice() -> str | None:
             return None
     except InvalidVersion:
         return None
-    return f"A new version of domyn ({latest}) is available, update with: {update_command()}"
+
+    # The command that updates domyn the way it was installed.
+    runtime = Path(sys.prefix)
+    if (runtime.parent / STANDALONE_MARKER).is_file():
+        if sys.platform == "win32":
+            how = f"update with: irm {RELEASES_URL}/install.ps1 | iex"
+        else:
+            how = f"update with: curl -fsSL {RELEASES_URL}/install.sh | sh"
+    elif (runtime / "uv-receipt.toml").is_file():
+        how = "in your Python environment run: uv tool upgrade domyn"
+    else:
+        how = 'in your Python environment run: pip install -U "domyn[cli]"'
+    return f"A new version of domyn ({latest}) is available, {how}"
