@@ -27,14 +27,14 @@ The estimate counts three characters per token, rounding up, plus a small allowa
 The conversation is split in three parts:
 
 - **The head**: the system prompt and the conversation's first message. Never summarized, since it frames the whole conversation.
-- **The tail**: the most recent messages, about `keep_recent_tokens` (20,000 by default) worth, and never more than half the room the conversation has under the threshold, so that a small window can still be compacted. Never compacted, since it is what the agent is working on.
+- **The tail**: the most recent messages, about `keep_recent_tokens` (20,000 by default) worth, and never more than half the room the conversation has under the threshold, so that a small window can still be compacted. Never compacted, since it is what the agent is working on. A tool output stays in the tail however large it is. An earlier reply of the model larger than the whole tail goes to the middle with its tool results, so that one reply with a very long reasoning cannot fill the window on its own.
 - **The middle**: everything in between, which is what gets shortened.
 
 The cut never separates a tool call from its result, which providers would reject.
 
 Compaction happens in two phases:
 
-1. **Pruning.** Each tool output before the tail longer than 200 characters is replaced with a note saying what it was, such as `[fetch_report output dropped to save context — 3 lines. Read it again with read_tool_result(result_id="event_…")]`, with the exit code when the output had one. The agent can read the output again with that call, since the conversation keeps it whole. A sub-agent's task or report, pruned the same way, has no tool output to read and its note gives no call. It needs no model call, and in an agent conversation tool outputs are usually most of the text.
+1. **Pruning.** Each tool output before the tail longer than 200 characters is replaced with a note saying what it was, such as `[fetch_report output dropped to save context — 3 lines. Read it again with read_tool_result(result_id="event_…")]`, with the exit code when the output had one. The agent can read the output again with that call, since the conversation keeps it whole. A sub-agent's task or report, pruned the same way, has no tool output to read and its note gives no call. The reasoning sent back with each reply of the model before the tail (`send_reasoning`) is dropped too when it is longer than 200 characters; the reply's text and tool calls are kept. It needs no model call, and in an agent conversation tool outputs and reasoning are usually most of the text.
 2. **Summarizing.** If the conversation is still over the threshold, the agent's model is asked to summarize the middle: what the user asked for, what was established, what was tried and failed, and what is still open. The summary replaces the middle, as one message starting with `[conversation summary]`. The user's latest message is never summarized, wherever the tail begins. If the summary fails, the pruning is kept.
 
 The conversation itself is never rewritten: every event stays in the history. What was dropped and the summary are recorded in the conversation's state, for each agent, and applied again on every later request, so a compaction lasts and a summary is paid for once. When a later compaction summarizes again, the previous summary is part of what it summarizes.
@@ -113,7 +113,7 @@ An unknown `strategy` name falls back to `two_phase`, with a warning in the log.
 | `enabled` | `bool` | `True` | `False` turns automatic compaction off. |
 | `protect_first_n` | `int` | `1` | Messages after the system prompt that are never compacted. |
 | `keep_last_user_messages` | `int` | `1` | The latest user messages a summary never replaces. |
-| `prune_tool_results_over_chars` | `int` | `200` | Tool outputs at or below this length are never pruned. |
+| `prune_tool_results_over_chars` | `int` | `200` | Tool outputs and reasoning at or below this length are never pruned. |
 | `keep_recent_tool_results` | `int` | `3` | For a [compaction on request](#compacting-on-request): how many of the latest results it leaves alone. |
 
 ## Compacting on request
