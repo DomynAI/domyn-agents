@@ -25,6 +25,7 @@ What differs from an interactive session, because nobody answers:
   do not ask. Given inline, so no file is needed; ``--instructions`` replaces them.
 * **No step cap** to speak of (``--max-iterations``, 1000 by default against the
   planner's 25), and no temperature unless one is given: the server's default.
+* **No streaming.** Each reply is asked for whole and printed when it arrives.
 
 ``--config <file>`` runs a configuration file instead (the format of
 ``~/.domyn/config.yaml``), as written: it is copied unchanged into the state folder as
@@ -168,7 +169,8 @@ def run_headless_config(
         "instruction": "",
         "llm_provider": CLI_DEFAULT_PROVIDER_NAME,
         "planner_strategy": CLI_PLANNER,
-        "stream": True,
+        # Nobody watches the answer being written: each reply is asked for whole.
+        "stream": False,
         "tool_bundles": [CLI_DEFAULT_TOOL_BUNDLE_NAME],
     }
     if instructions:

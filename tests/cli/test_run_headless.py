@@ -123,6 +123,8 @@ class TestTheCommand:
         assert started["auto_approve"] is True
         assert started["single_turn"] is True
         assert started["steering"] is False
+        # Nobody watches the answer being written.
+        assert started["agent"].stream is False
         # The state folder plays ~/.domyn: nothing of a setup is read.
         assert started["home"] == state.resolve()
         written = yaml.safe_load((state / "config.yaml").read_text())
