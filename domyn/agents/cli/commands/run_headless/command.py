@@ -31,8 +31,8 @@ What differs from an interactive session, because nobody answers:
 ``~/.domyn/config.yaml``), as written: it is copied unchanged into the state folder as
 its ``config.yaml``, the options that build the configuration (`BUILD_OPTIONS`) are
 refused with it, and the session still behaves as above, the standing instructions
-aside, which are the file's. ``${DOMYN_PROJECT_DIR}`` in it is the state folder. Its
-``${VAR}`` references are read from the environment, a ``.env`` and
+and streaming aside, which are the file's. ``${DOMYN_PROJECT_DIR}`` in it is the state
+folder. Its ``${VAR}`` references are read from the environment, a ``.env`` and
 ``~/.domyn/credentials``: the file names the variables it uses, so a key loaded for some
 other tool cannot reach it unasked.
 """

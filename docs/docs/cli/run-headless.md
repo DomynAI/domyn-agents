@@ -75,7 +75,7 @@ Without `--config`, the session runs with the following.
 domyn run-headless --config my-agent.yaml --prompt-file task.md
 ```
 
-- The session is still unattended: every tool call approved, one turn, no follow-up. The standing instructions are the file's own, so the text above is not added: declare it in the file if you want it (a session without it tends to stop at a plan).
+- The session is still unattended: every tool call approved, one turn, no follow-up. The standing instructions are the file's own, so the text above is not added: declare it in the file if you want it (a session without it tends to stop at a plan). Whether replies are streamed is the file's too: `stream` on the agent.
 - The options that build the configuration (`--model_url`, `--model_name`, `--api-key-env`, `--context-window`, `--max-tokens`, `--temperature`, `--reasoning-effort`, `--max-iterations`, `--instructions`, `--no-instructions`, `--workspace`) cannot be given with it: set them in the file. `--prompt-file`, `--state-dir` and `--verbose` work as without it.
 - The file's `${VAR}` references are read from the environment, a `.env` and `~/.domyn/credentials`, so a configuration `domyn setup` wrote finds the key it saved.
 - The file is copied unchanged into the state folder as its `config.yaml`, and the session runs that copy. `${DOMYN_PROJECT_DIR}` in it means the state folder; relative paths mean the folder you run `domyn run-headless` from, as everywhere.
