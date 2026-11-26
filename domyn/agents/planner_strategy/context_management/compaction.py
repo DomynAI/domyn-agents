@@ -671,6 +671,14 @@ class TokenBudgetSplitter(BaseModel):
         by stretching the tail back to it. That stretch put every output of a
         long turn in the tail, and compaction found nothing to do exactly when
         one turn had filled the window.
+
+        The message that crosses the budget is kept, unless it is a reply larger
+        than the whole budget on its own and a later turn is already kept: then
+        it goes to the middle with its tool results, where its reasoning can be
+        dropped or the reply summarized. Kept, one reply with 108k tokens of
+        reasoning made the tail the whole context, and every compaction after it
+        found nothing to do. A tool result is kept whatever its size: when the
+        budget is squeezed it can be the latest output, which pruning would lose.
         """
         spent = 0
         cut = len(rest)
@@ -678,9 +686,22 @@ class TokenBudgetSplitter(BaseModel):
             # Checked before consuming: the message that crosses the budget is kept.
             if spent > keep_recent_tokens:
                 break
-            spent += estimator.estimate_messages([rest[index]])
+            size = estimator.estimate_messages([rest[index]])
+            if rest[index].role == "assistant" and size > keep_recent_tokens and cut < len(rest):
+                past = self._advance_past_results(rest, cut)
+                if past < len(rest):
+                    return self._retreat_off_tool_boundary(rest, past)
+            spent += size
             cut = index
         return self._retreat_off_tool_boundary(rest, cut)
+
+    @staticmethod
+    def _advance_past_results(rest: list[LLMMessage], cut: int) -> int:
+        """Move the cut past the tool results it starts with, so they stay in the
+        middle with the call they answer."""
+        while cut < len(rest) and _is_tool_result(rest[cut]):
+            cut += 1
+        return cut
 
     @staticmethod
     def _retreat_off_tool_boundary(rest: list[LLMMessage], cut: int) -> int:
@@ -1083,7 +1104,7 @@ class Compactor(BaseModel):
             out, pruned, _ = pruner.prune_recorded(out, set(record.pruned_event_ids))
             if pruned:
                 get_logger().debug(
-                    f"replayed {pruned} previously dropped tool outputs for {agent_name}"
+                    f"replayed {pruned} previously dropped tool outputs and reasoning for {agent_name}"
                 )
         return out
 
@@ -1331,11 +1352,15 @@ _EXIT_CODE = re.compile(r"exit code:\s*(-?\d+)", re.IGNORECASE)
 
 
 class ToolResultPruner(BaseModel):
-    """Replaces old tool results with a line saying what they were.
+    """Replaces old tool results with a line saying what they were, and drops the
+    reasoning of earlier assistant messages (`drop_reasoning`).
 
     This is the phase that recovers most of the space in all three harnesses we
     compared against, and it costs no model call. In an agent it is tool output
-    that inflates the context: the conversation text is comparatively small.
+    that inflates the context: the conversation text is comparatively small —
+    except the reasoning sent back with each reply (``send_reasoning``), which a
+    single reply can make larger than everything else together (108k tokens of
+    it, on one call).
 
     The placeholder is **not** a bare `[removed]`. Without knowing what was there
     and how it went, the model would re-run the command — and the pruning would
@@ -1364,7 +1389,28 @@ class ToolResultPruner(BaseModel):
         Returning both keeps that difference visible instead of implying the
         record covers everything.
         """
-        return self._apply(messages, keep=lambda message: len(str(message.content)) <= over_chars)
+        return self._apply(
+            messages,
+            keep=lambda message: len(str(message.content)) <= over_chars,
+            outputs=True,
+            reasoning=False,
+        )
+
+    def drop_reasoning(
+        self, messages: list[LLMMessage], *, over_chars: int
+    ) -> tuple[list[LLMMessage], int, list[str]]:
+        """Drop the reasoning of the assistant messages given, longer than ``over_chars``.
+
+        For the earlier part of a conversation only: the reasoning of a reply the
+        model has acted on is spent, while the calls it made stay, each with its
+        short thought. Recorded by event id like a dropped output, so `prune_recorded`
+        drops it again on every later render."""
+        return self._apply(
+            messages,
+            keep=lambda message: len(message.reasoning_content or "") <= over_chars,
+            outputs=False,
+            reasoning=True,
+        )
 
     def prune_recorded(
         self, messages: list[LLMMessage], event_ids: set[str]
@@ -1378,25 +1424,42 @@ class ToolResultPruner(BaseModel):
         return self._apply(
             messages,
             keep=lambda message: getattr(message, "source_event_id", None) not in event_ids,
+            outputs=True,
+            reasoning=True,
         )
 
     def _apply(
-        self, messages: list[LLMMessage], *, keep: Callable[[LLMMessage], bool]
+        self,
+        messages: list[LLMMessage],
+        *,
+        keep: Callable[[LLMMessage], bool],
+        outputs: bool,
+        reasoning: bool,
     ) -> tuple[list[LLMMessage], int, list[str]]:
         pruned = 0
         event_ids: list[str] = []
         out: list[LLMMessage] = []
         for message in messages:
             if (
-                not _is_tool_result(message)
-                or not isinstance(message.content, str)
-                or _already_dropped(message)
-                or keep(message)
+                outputs
+                and _is_tool_result(message)
+                and isinstance(message.content, str)
+                and not _already_dropped(message)
+                and not keep(message)
             ):
+                replacement = message.model_copy(deep=True)
+                replacement.content = self._placeholder(message)
+            elif (
+                reasoning
+                and not _is_tool_result(message)
+                and message.reasoning_content
+                and not keep(message)
+            ):
+                replacement = message.model_copy(deep=True)
+                replacement.reasoning_content = None
+            else:
                 out.append(message)
                 continue
-            replacement = message.model_copy(deep=True)
-            replacement.content = self._placeholder(message)
             out.append(replacement)
             pruned += 1
             source = getattr(message, "source_event_id", None)
@@ -1437,6 +1500,25 @@ def _prune_irrelevant_first(
     return pruner.prune_recorded(messages, ids)
 
 
+def _phase_one(
+    pruner: ToolResultPruner, messages: list[LLMMessage], state: dict[str, Any], over_chars: int
+) -> tuple[list[LLMMessage], int, int, list[str]]:
+    """The deterministic phase on the head and middle: what a decision model judged
+    irrelevant, then the tool outputs and the reasoning longer than ``over_chars``.
+    Returns ``(messages, outputs dropped, reasonings dropped, event ids to record)``."""
+    earlier, by_relevance, relevance_ids = _prune_irrelevant_first(pruner, messages, state)
+    without_outputs, by_size, size_ids = pruner.prune_reporting(earlier, over_chars=over_chars)
+    out, reasonings, reasoning_ids = pruner.drop_reasoning(without_outputs, over_chars=over_chars)
+    return out, by_relevance + by_size, reasonings, relevance_ids + size_ids + reasoning_ids
+
+
+def _dropped_note(outputs: int, reasonings: int) -> str:
+    dropped = [f"{outputs} old tool outputs"] if outputs else []
+    if reasonings:
+        dropped.append(f"the reasoning of {reasonings} earlier replies")
+    return f"context compacted: {' and '.join(dropped)} dropped"
+
+
 class PruneOnlyCompaction(CompactionStrategy):
     """The deterministic phase only: no model call.
 
@@ -1470,21 +1552,16 @@ class PruneOnlyCompaction(CompactionStrategy):
             # saying so beats returning a "changed" list identical to the input.
             return CompactionOutcome(messages=messages, changed=False)
 
-        earlier, by_relevance, relevance_ids = _prune_irrelevant_first(
-            self.pruner, split.head + split.middle, state
+        head_and_middle, outputs, reasonings, event_ids = _phase_one(
+            self.pruner, split.head + split.middle, state, policy.prune_tool_results_over_chars
         )
-        head_and_middle, by_size, size_ids = self.pruner.prune_reporting(
-            earlier, over_chars=policy.prune_tool_results_over_chars
-        )
-        pruned = by_relevance + by_size
-        event_ids = relevance_ids + size_ids
-        if not pruned:
+        if not (outputs or reasonings):
             return CompactionOutcome(messages=messages, changed=False)
 
         return CompactionOutcome(
             messages=head_and_middle + split.tail,
             changed=True,
-            note=f"context compacted: {pruned} old tool outputs dropped",
+            note=_dropped_note(outputs, reasonings),
             pruned_event_ids=event_ids,
         )
 
@@ -1676,14 +1753,10 @@ class TwoPhaseCompaction(CompactionStrategy):
             return CompactionOutcome(messages=messages, changed=False)
 
         # --- phase one: deterministic, free -------------------------------
-        earlier, by_relevance, relevance_ids = _prune_irrelevant_first(
-            self.pruner, split.head + split.middle, state
+        head_and_middle, outputs, reasonings, pruned_ids = _phase_one(
+            self.pruner, split.head + split.middle, state, policy.prune_tool_results_over_chars
         )
-        head_and_middle, by_size, size_ids = self.pruner.prune_reporting(
-            earlier, over_chars=policy.prune_tool_results_over_chars
-        )
-        pruned = by_relevance + by_size
-        pruned_ids = relevance_ids + size_ids
+        pruned = outputs + reasonings
         after_pruning = head_and_middle + split.tail
         if budget.fits(after_pruning):
             if not pruned:
@@ -1691,7 +1764,7 @@ class TwoPhaseCompaction(CompactionStrategy):
             return CompactionOutcome(
                 messages=after_pruning,
                 changed=True,
-                note=f"context compacted: {pruned} old tool outputs dropped",
+                note=_dropped_note(outputs, reasonings),
                 pruned_event_ids=pruned_ids,
             )
 

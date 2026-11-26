@@ -96,6 +96,45 @@ def _tool_heavy(turns: int = 8) -> list[LLMMessage]:
     return messages
 
 
+def _huge_reasoning_then_turns(later_turns: int) -> list[LLMMessage]:
+    """The task, one reply whose reasoning outweighs the whole window, then
+    ordinary short turns."""
+
+    def call(event: str, reasoning: str) -> LLMMessage:
+        return LLMMessage(
+            role="assistant",
+            content=None,
+            reasoning_content=reasoning,
+            source_event_id=event,
+            tool_calls=[
+                LLMToolCall(
+                    id=f"c_{event}",
+                    type="function",
+                    function=ToolCallFunction(name="run_command", arguments="{}"),
+                )
+            ],
+        )
+
+    def result(event: str, text: str) -> LLMMessage:
+        return LLMMessage(
+            role="tool",
+            tool_call_id=f"c_{event}",
+            name="run_command",
+            source_event_id=f"{event}_result",
+            content=f"exit code: 0\n{text}",
+        )
+
+    messages = [
+        LLMMessage(role="system", content="sys"),
+        LLMMessage(role="user", content="THE TASK", source_event_id="task"),
+        call("huge", "every regex against every board. " * 1_200),
+        result("huge", "ok"),
+    ]
+    for index in range(later_turns):
+        messages += [call(f"t{index}", f"why {index}"), result(f"t{index}", "y" * 300)]
+    return messages
+
+
 def _prose_heavy(turns: int = 30) -> list[LLMMessage]:
     """Little tool output, lots of conversation — pruning cannot be enough."""
     messages = [LLMMessage(role="system", content="sys")]
@@ -218,6 +257,37 @@ class TestPhaseTwoWhenItIsNeeded:
 
         assert provider.seen, "the fixture must need a summary"
         assert any(m.role == "user" and m.content == "THE REQUEST" for m in out)
+
+    @pytest.mark.parametrize("path", ["threshold", "rejection"])
+    @pytest.mark.asyncio
+    async def test_one_reply_with_huge_reasoning_is_shrunk_without_a_summary(
+        self, path: str
+    ) -> None:
+        """The session that died: one reply reasoned for 108k tokens, more than the
+        tail budget, so it was kept verbatim and every attempt reported "no complete
+        block to summarize" until the provider refused twice. Dropping that old
+        reasoning is enough, and it costs no request."""
+        provider = _Provider()
+        compactor = _compactor()
+        messages = _huge_reasoning_then_turns(later_turns=6)
+        agent = _agent(provider)
+        plan = (
+            compactor.assess(messages, agent)
+            if path == "threshold"
+            else compactor.overflow_plan(messages, agent)
+        )
+        assert plan is not None and plan.needed, "the fixture must be over the limit"
+
+        out, done = await compactor.run(messages, plan, {}, AGENT)
+
+        sizes = [(m.source_event_id, len(m.reasoning_content or "")) for m in out]
+        assert provider.seen == [], f"a summary was requested for {sizes}"
+        assert ("huge", 0) in sizes, f"the huge reasoning is still sent: {sizes}"
+        assert any(m.content == "THE TASK" for m in out), "the task was lost"
+        after = compactor.tokens_after(out)
+        assert after <= plan.threshold_tokens, f"{after} tokens over {plan.threshold_tokens}"
+        note = str(done.content[0].text)
+        assert "the reasoning of 1 earlier replies" in note, note
 
     @pytest.mark.asyncio
     async def test_the_summary_is_in_the_messages_and_marked(self) -> None:

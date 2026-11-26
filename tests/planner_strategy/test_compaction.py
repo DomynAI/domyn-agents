@@ -670,6 +670,173 @@ class TestOneLongTurnStillCompacts:
         assert any(m.content == "THE REQUEST" for m in outcome.messages)
 
 
+HUGE_REASONING = "weighing every regex against every board. " * 1_000  # ~43k chars
+
+
+def _huge_reply_session(later_turns: int) -> list[LLMMessage]:
+    """The shape of a session that died on a rejected request: the task, one reply
+    whose reasoning alone outweighs everything else, then ordinary turns after it."""
+    messages = [
+        _msg("system", "sys"),
+        _msg("user", "THE TASK"),
+        LLMMessage(
+            role="assistant",
+            content=None,
+            reasoning_content=HUGE_REASONING,
+            source_event_id="evt_huge_call",
+            tool_calls=[
+                LLMToolCall(
+                    id="call_huge",
+                    type="function",
+                    function=ToolCallFunction(name="run_command", arguments="{}"),
+                )
+            ],
+        ),
+        LLMMessage(
+            role="tool",
+            content="exit code: 0\nok",
+            tool_call_id="call_huge",
+            name="run_command",
+            source_event_id="evt_huge_result",
+        ),
+    ]
+    for index in range(later_turns):
+        messages.append(
+            LLMMessage(
+                role="assistant",
+                content=None,
+                reasoning_content=f"short why {index}",
+                source_event_id=f"evt_call_{index}",
+                tool_calls=[
+                    LLMToolCall(
+                        id=f"call_{index}",
+                        type="function",
+                        function=ToolCallFunction(name="run_command", arguments="{}"),
+                    )
+                ],
+            )
+        )
+        messages.append(
+            LLMMessage(
+                role="tool",
+                content=f"exit code: 0\n{_long(400)}",
+                tool_call_id=f"call_{index}",
+                name="run_command",
+                source_event_id=f"evt_result_{index}",
+            )
+        )
+    return messages
+
+
+def _describe(messages: list[LLMMessage]) -> list[str]:
+    return [
+        f"{m.role}:{m.source_event_id}:{len(m.reasoning_content or '')}r:{len(str(m.content))}c"
+        for m in messages
+    ]
+
+
+class TestOneHugeReplyStillCompacts:
+    """One reply with 108k tokens of reasoning, sent back with every request: it
+    crossed the tail budget, so the splitter kept it in the tail, nothing was left
+    to compact, and the session died on two rejected requests in a row."""
+
+    def test_the_huge_reply_goes_to_the_middle_with_its_result(self) -> None:
+        split = TokenBudgetSplitter().split(
+            _huge_reply_session(later_turns=6),
+            policy=CompactionPolicy(keep_recent_tokens=2_000),
+            estimator=HeuristicEstimator(),
+        )
+        middle_ids = [m.source_event_id for m in split.middle]
+        assert "evt_huge_call" in middle_ids, f"kept verbatim: tail {_describe(split.tail)}"
+        assert "evt_huge_result" in middle_ids, f"its result was separated: {_describe(split.tail)}"
+        assert split.tail[0].role == "assistant", f"tail starts badly: {_describe(split.tail)}"
+        assert [m.source_event_id for m in split.tail][-2:] == ["evt_call_5", "evt_result_5"]
+
+    def test_the_latest_reply_stays_in_the_tail_however_large(self) -> None:
+        """Nothing more recent to keep: moving it out would leave no tail at all."""
+        split = TokenBudgetSplitter().split(
+            _huge_reply_session(later_turns=0),
+            policy=CompactionPolicy(keep_recent_tokens=2_000),
+            estimator=HeuristicEstimator(),
+        )
+        tail_ids = [m.source_event_id for m in split.tail]
+        assert tail_ids == ["evt_huge_call", "evt_huge_result"], _describe(split.tail)
+
+    def test_a_reply_within_the_budget_that_crosses_it_is_still_kept(self) -> None:
+        """Only a message larger than the whole budget is left out: the usual
+        crossing message stays, as before."""
+        messages = _huge_reply_session(later_turns=6)
+        messages[2] = messages[2].model_copy(update={"reasoning_content": _long(2_000)})
+        split = TokenBudgetSplitter().split(
+            messages,
+            policy=CompactionPolicy(keep_recent_tokens=2_000),
+            estimator=HeuristicEstimator(),
+        )
+        assert "evt_huge_call" in [m.source_event_id for m in split.tail], _describe(split.tail)
+
+    def test_a_tool_result_larger_than_the_budget_stays_in_the_tail(self) -> None:
+        """A budget squeezed by large tool definitions can be smaller than the
+        latest output: moved to the middle, it would be pruned before the model
+        ever read it."""
+        messages = _huge_reply_session(later_turns=2)
+        messages[-1] = messages[-1].model_copy(update={"content": _long(9_000)})
+        split = TokenBudgetSplitter().split(
+            messages,
+            policy=CompactionPolicy(keep_recent_tokens=2_000),
+            estimator=HeuristicEstimator(),
+        )
+        tail_ids = [m.source_event_id for m in split.tail]
+        assert tail_ids == ["evt_call_1", "evt_result_1"], _describe(split.tail)
+
+    @pytest.mark.asyncio
+    async def test_phase_one_drops_its_reasoning_and_keeps_its_call(self) -> None:
+        messages = _huge_reply_session(later_turns=6)
+        compactor = _active(reserve_tokens=1_000, keep_recent_tokens=2_000)
+        plan = compactor.assess(messages, _Agent(12_000))
+        assert plan.needed, f"{plan.current_tokens} tokens did not cross {plan.threshold_tokens}"
+
+        outcome = await compactor.apply(messages, plan)
+
+        huge = next(m for m in outcome.messages if m.source_event_id == "evt_huge_call")
+        assert huge.reasoning_content is None, "the huge reasoning is still sent"
+        assert huge.tool_calls and huge.tool_calls[0].id == "call_huge", "its call was lost"
+        assert any(m.content == "THE TASK" for m in outcome.messages), "the task was lost"
+        last_call = next(m for m in outcome.messages if m.source_event_id == "evt_call_5")
+        assert last_call.reasoning_content == "short why 5", "the tail's reasoning was touched"
+        assert "the reasoning of 1 earlier replies" in str(outcome.note), outcome.note
+        after = compactor.tokens_after(outcome.messages)
+        assert after <= plan.threshold_tokens, f"{after} tokens still over {plan.threshold_tokens}"
+        assert messages[2].reasoning_content == HUGE_REASONING, "the original was modified"
+
+    @pytest.mark.asyncio
+    async def test_the_dropped_reasoning_stays_dropped_on_the_next_render(self) -> None:
+        messages = _huge_reply_session(later_turns=6)
+        compactor = _active(reserve_tokens=1_000, keep_recent_tokens=2_000)
+        state: dict[str, Any] = {}
+        await compactor.run(
+            messages, compactor.assess(messages, _Agent(12_000)), state, "Assistant"
+        )
+
+        rendered_again = compactor.replay(_huge_reply_session(later_turns=6), state, "Assistant")
+
+        huge = next(m for m in rendered_again if m.source_event_id == "evt_huge_call")
+        assert huge.reasoning_content is None, f"restored on re-render: {_describe(rendered_again)}"
+        result = next(m for m in rendered_again if m.source_event_id == "evt_huge_result")
+        assert result.content == "exit code: 0\nok", "a short result was dropped with the reasoning"
+
+    def test_short_reasoning_is_not_worth_dropping(self) -> None:
+        message = LLMMessage(role="assistant", content="done", reasoning_content="because")
+        kept, count, ids = ToolResultPruner().drop_reasoning([message], over_chars=200)
+        assert (count, ids, kept[0].reasoning_content) == (0, [], "because")
+
+    def test_dropping_reasoning_leaves_tool_outputs_to_their_own_rule(self) -> None:
+        result = LLMMessage(
+            role="tool", content=_long(5_000), tool_call_id="c", name="t", source_event_id="r"
+        )
+        kept, count, _ = ToolResultPruner().drop_reasoning([result], over_chars=200)
+        assert count == 0 and kept[0].content == result.content
+
+
 class TestPruningDoesNotEatItsOwnPlaceholder:
     def test_a_second_pass_leaves_the_placeholder_intact(self) -> None:
         """Otherwise it writes a placeholder *about* the placeholder — "1 lines",
