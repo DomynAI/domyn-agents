@@ -43,6 +43,8 @@ dependencies = [
     # installed as a dependency of rich; declared because it is imported directly.
     "markdown-it-py>=2.2.0",
     "tomlkit>=0.15.1",
+    # Compares the installed version with the latest release (interfaces/cli/update_check.py).
+    "packaging>=23.0",
     "websockets>=13.0",
     "cashews>=3.0.0",
     "python-dotenv>=1.0.0",

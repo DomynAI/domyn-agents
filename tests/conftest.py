@@ -5,8 +5,9 @@ import os
 import shlex
 import signal
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -103,6 +104,34 @@ def _state_off_the_real_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     from domyn.agents.interfaces.cli.state import CliState
 
     monkeypatch.setattr(CliState, "path", classmethod(lambda cls: tmp_path / "state.yaml"))
+
+
+@pytest.fixture(autouse=True)
+def _no_update_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never ask PyPI for the latest version, nor write the check's file in ``~/.domyn``.
+
+    `domyn run` checks once a day, and a test run on a released version (the release
+    workflow tests the tag) would otherwise reach the network.
+
+    The background thread is never started: it looks the two functions up when it
+    runs, so one still running after the test would find them restored, ask PyPI and
+    write the real ``~/.domyn/update-check.json``.
+    """
+    from domyn.agents.interfaces.cli import update_check
+
+    monkeypatch.setattr(update_check, "latest_version", lambda: None)
+    monkeypatch.setattr(update_check, "_update_checks_path", lambda: tmp_path / "update-check.json")
+    monkeypatch.setattr(update_check, "threading", SimpleNamespace(Thread=_NeverStarted))
+
+
+class _NeverStarted:
+    """A thread whose ``start`` does nothing."""
+
+    def __init__(self, target: Callable[[], None], daemon: bool) -> None:
+        pass
+
+    def start(self) -> None:
+        pass
 
 
 @pytest.fixture(autouse=True)

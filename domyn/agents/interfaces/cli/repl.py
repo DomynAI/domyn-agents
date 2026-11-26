@@ -52,6 +52,7 @@ from domyn.agents.interfaces.cli import (
     grants,
     memory_view,
     processes_view,
+    update_check,
 )
 from domyn.agents.interfaces.cli.approval import (
     begin_approval,
@@ -1250,6 +1251,15 @@ class Repl:
             context_view.render(self._console, self._theme, self._state.last_usage)
         elif name == "/model":
             await self._change_model()
+        elif name == "/update-check":
+            choice = argument.strip().lower()
+            if choice in ("on", "off"):
+                update_check.set_enabled(choice == "on")
+            elif choice:
+                self._say("Usage: /update-check [on|off]")
+                return True
+            state = "on" if update_check.is_enabled() else "off"
+            self._say(f"Update check {state}. `/update-check on|off` to change it.")
         elif name == "/skills-autodiscover":
             await self._set_autodiscovery(argument)
         elif name == "/export":

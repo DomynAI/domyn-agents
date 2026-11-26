@@ -63,6 +63,12 @@ COMMANDS: tuple[SlashCommand, ...] = (
         usage="/memory [list [n] | add <text> | forget <id> | clear [all]]",
     ),
     SlashCommand("/verbose", "Toggle internal events and library logs"),
+    SlashCommand(
+        "/update-check",
+        "Show, or turn on or off, the daily check for a new version",
+        usage="/update-check [on|off]",
+        mid_turn=True,
+    ),
     SlashCommand("/voice", "Talk instead of typing: hold space to speak, let go to send"),
     SlashCommand("/model", "Change provider and model"),
     SlashCommand("/config", "Show the config file backing this session", mid_turn=True),
