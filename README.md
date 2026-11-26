@@ -25,6 +25,12 @@ Domyn Agents is a powerful and extensible agent harness. It works with any model
 
 Domyn Agents also allows to build your own agents. Define them with the Python library or a YAML config, give them tools, let them hand work to each other, and require a person's approval for any tool that should not run unsupervised. `domyn run` runs the agents you build too.
 
+<br>
+
+<div align="center">
+  <img src="docs/static/img/demo.gif" alt="Domyn Agents running in the terminal" width="640">
+</div>
+
 ## Installation
 
 Domyn Agents is published on PyPI as part of `domyn` (the GitHub repository is `domyn-agents`).

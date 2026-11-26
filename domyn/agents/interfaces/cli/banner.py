@@ -52,11 +52,13 @@ if TYPE_CHECKING:
 
 _ASSETS = Path(__file__).parent / "assets"
 
-# Baked widths, widest first: the picker takes the first that fits. 150 is the
-# full lockup but needs a window wider than most people run, so narrower cuts
-# exist to keep the art from being something only a maximised terminal ever
-# sees. Nothing below 100 — see WIDTHS in scripts/bake_banner_assets.py.
-_LOGO_WIDTHS = (150, 120, 100)
+# Baked widths, widest first: the picker takes the first that fits, so the size
+# follows the terminal. 150 is the full lockup as the animation draws it, for a
+# large window. 98 (12 rows) and 80 (9 rows) are for the windows below it: cuts
+# with their geometry chosen so every stroke lands on whole pixels and the
+# letters redrawn on the pixel grid, which a plain shrink does not give. See
+# COMPACT_CUTS and TIDY in scripts/bake_banner_assets.py.
+_LOGO_WIDTHS = (150, 98, 80)
 
 # Rows kept free below the banner for the subtitle, the hint line and the first
 # exchange. Without this the logo technically "fits" and still pushes everything
