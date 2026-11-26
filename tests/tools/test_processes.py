@@ -977,12 +977,29 @@ class TestTheFilesystemIsTheTruth:
     store trimmed, a front-end keeping its own — used to orphan it permanently.
     """
 
+    def test_an_exit_code_ends_it_while_the_wrapper_tidies_up(self) -> None:
+        """The wrapper lives on after the command, to compact the log once more:
+        its pid alive with an exit code written is a command that has finished."""
+        found = processes.parse_discover(
+            "\n".join(
+                [
+                    "P abcd1234 1 0 0 1700000000 1700000001",
+                    "C abcd1234 echo done",
+                    "P 0123abcd 1 - 0 1700000000 1700000001",
+                    "C 0123abcd sleep 30",
+                ]
+            )
+        )
+        assert {h: (v["running"], v["exit_code"]) for h, v in found.items()} == {
+            "abcd1234": (False, 0),
+            "0123abcd": (True, None),
+        }
+
     @pytest.mark.asyncio
     async def test_processes_are_found_with_no_state_at_all(self, backend: LocalBackend) -> None:
         # `echo` is waited for until it has ended, which the wait returns on at
-        # once: given 0.15 s like the sleep, it was still starting on a busy
-        # machine, and was found finished only because the report after the wait
-        # used to take longer than the command.
+        # once: given 0.15 s like the sleep, on a busy machine it could still be
+        # starting when the listing looked.
         for command, yield_s in (("sleep 30", 0.15), ("echo done", 30)):
             record = processes.new_record(command, "conv-x")
             await backend.run(processes.build_launch(record, yield_s=yield_s), timeout=60)

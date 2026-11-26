@@ -797,7 +797,11 @@ def parse_sweep(output: str) -> dict[str, dict[str, Any]]:
         handle, alive, exit_code, killed, started, now, mtime, out_bytes = bits
         began, clock, touched = _as_int(started) or 0, _as_int(now) or 0, _as_int(mtime) or 0
         found[handle] = {
-            "running": alive == "1",
+            # Alive *and* no exit code, as in `parse_report`: the wrapper outlives
+            # the command while it compacts the log one last time, under Git Bash
+            # for a few hundred milliseconds, and its pid alone called a finished
+            # command running.
+            "running": alive == "1" and exit_code == "-",
             "exit_code": None if exit_code == "-" else _as_int(exit_code),
             "killed": killed == "1",
             "elapsed_s": max(0, clock - began) if began else 0,
