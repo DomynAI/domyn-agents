@@ -245,6 +245,89 @@ def _bytes_of(path: str) -> str:
     return f'(wc -c < {path} 2>/dev/null | tr -d " " || echo 0)'
 
 
+# Every program a report starts is a process, and under Git Bash a process costs
+# tens of milliseconds (MSYS emulates fork): a report written with a `cat`, a
+# `stat` or a `date` per fact took two seconds to say that `true` had finished.
+# So what the shell can do itself, it does, and what it cannot is asked once.
+
+
+def _read(var: str, path: str, default: str) -> str:
+    """Set ``var`` to the first line of ``path``, or ``default`` without the file.
+
+    `read` is a builtin: no process, where `$(cat …)` was one. A file that exists
+    but is empty gives an empty value, as `cat` did.
+    """
+    return f"{var}={default}; {{ read -r {var} < {path}; }} 2>/dev/null; "
+
+
+# The current time in epoch seconds: bash 5's own, `date` only on an older bash
+# (macOS ships 3.2).
+_NOW = "${EPOCHSECONDS:-$(date +%s)}"
+
+
+def _log_stats(out: str, err: str) -> str:
+    """Set OM, OUTB, EM and ERRB, both logs' modification time and size, with one
+    `stat` for the two.
+
+    GNU's flags first, then BSD's when GNU's said nothing. A `stat` that could not
+    read both files (one removed under it) leaves fewer than four values, and then
+    each fact is asked on its own, as before. A size `wc` could not read is 0:
+    left empty, the comparisons with the cursors below failed with an error.
+    """
+    slow = (
+        f"OM=${_stat_mtime(out)}; OUTB=$( {_bytes_of(out)} 2>/dev/null); "
+        f"EM=${_stat_mtime(err)}; ERRB=$( {_bytes_of(err)} 2>/dev/null); "
+        "OUTB=${OUTB:-0}; ERRB=${ERRB:-0}; "
+    )
+    return (
+        f"S=$(stat -c '%Y %s' {out} {err} 2>/dev/null); "
+        f"[ -n \"$S\" ] || S=$(stat -f '%m %z' {out} {err} 2>/dev/null); "
+        "OM= OUTB= EM= ERRB= X=; "
+        "read -r -d '' OM OUTB EM ERRB X <<< \"$S\"; "
+        f'if [ -z "$ERRB" ] || [ -n "$X" ]; then {slow}fi; '
+    )
+
+
+def _head(log: str, size: str) -> str:
+    """The first bytes of a log, at most ``HEAD_BYTES`` of the ``size`` measured."""
+    return (
+        f"if [ -s {log}.head ]; then head -c {HEAD_BYTES} {log}.head; "
+        f'elif [ "${size}" -gt 0 ]; then '
+        f"head -c $(( {size} < {HEAD_BYTES} ? {size} : {HEAD_BYTES} )) {log} 2>/dev/null; fi"
+    )
+
+
+def _tail(log: str, size: str) -> str:
+    """The last ``TAIL_BYTES`` of the ``size`` measured.
+
+    Not read when the head already holds the whole log (no head set aside, and
+    no more than ``HEAD_BYTES``): the caller then keeps the head and drops the
+    tail anyway (`_stitch`).
+    """
+    return (
+        f'if [ "${size}" -gt 0 ] && {{ [ -s {log}.head ] || [ "${size}" -gt {HEAD_BYTES} ]; }}; '
+        f'then if [ "${size}" -le {TAIL_BYTES} ]; then head -c ${size} {log} 2>/dev/null; '
+        f"else head -c ${size} {log} 2>/dev/null | tail -c {TAIL_BYTES}; fi; fi"
+    )
+
+
+def _new_bytes(log: str, size: str, cursor: str) -> str:
+    """What was written past ``cursor``, up to the ``size`` measured, its last
+    ``TAIL_BYTES`` at most.
+
+    Past the cursor and no larger than the chunk: from the cursor to the size
+    (`tail -c +N` is 1-based: +1 is the whole file). Larger: the last bytes of
+    the size, which all lie past the cursor.
+    """
+    new = f"$(( {size} - {cursor} ))"
+    return (
+        f'if [ "${size}" -gt "${cursor}" ]; then '
+        f"if [ {new} -le {TAIL_BYTES} ]; then "
+        f"tail -c +$(( {cursor} + 1 )) {log} 2>/dev/null | head -c {new}; "
+        f"else head -c ${size} {log} 2>/dev/null | tail -c {TAIL_BYTES}; fi; fi"
+    )
+
+
 def _report(record: ProcessRecord, *, from_cursor: bool) -> str:
     """The shell that emits one observation.
 
@@ -269,33 +352,22 @@ def _report(record: ProcessRecord, *, from_cursor: bool) -> str:
     # advances its cursor to the smaller number and the next poll repeats what
     # it has already shown. Bounding only the tail left the head doing exactly
     # that, and it took a CI run on a small file to show it.
+    # Each read below starts a process only when there is something to read: an
+    # empty log, or no bytes past the cursor, reads nothing either way. A read no
+    # larger than the chunk is one `head` rather than a `head` piped into another.
     if from_cursor:
-        # `tail -c +N` is 1-based: +1 is the whole file.
-        head_cmd_out = "true"
-        tail_cmd_out = (
-            f"tail -c +$((CURSOR + 1)) {out} 2>/dev/null "
-            f"| head -c $((OUTB - CURSOR)) | tail -c {TAIL_BYTES}"
-        )
-        head_cmd_err = "true"
-        tail_cmd_err = (
-            f"tail -c +$((ERRCURSOR + 1)) {err} 2>/dev/null "
-            f"| head -c $((ERRB - ERRCURSOR)) | tail -c {TAIL_BYTES}"
-        )
+        head_cmd_out = head_cmd_err = "true"
+        tail_cmd_out = _new_bytes(out, "OUTB", "CURSOR")
+        tail_cmd_err = _new_bytes(err, "ERRB", "ERRCURSOR")
     else:
         # The head comes from the file the compactor set aside, when there is
         # one: the live log no longer starts where the run did. That file never
         # changes once written, so it needs no bound; the live log does — see
         # the note above about every read being bounded by the measured size.
-        head_cmd_out = (
-            f"if [ -s {out}.head ]; then head -c {HEAD_BYTES} {out}.head; "
-            f"else head -c $OUTB {out} 2>/dev/null | head -c {HEAD_BYTES}; fi"
-        )
-        tail_cmd_out = f"head -c $OUTB {out} 2>/dev/null | tail -c {TAIL_BYTES}"
-        head_cmd_err = (
-            f"if [ -s {err}.head ]; then head -c {HEAD_BYTES} {err}.head; "
-            f"else head -c $ERRB {err} 2>/dev/null | head -c {HEAD_BYTES}; fi"
-        )
-        tail_cmd_err = f"head -c $ERRB {err} 2>/dev/null | tail -c {TAIL_BYTES}"
+        head_cmd_out = _head(out, "OUTB")
+        tail_cmd_out = _tail(out, "OUTB")
+        head_cmd_err = _head(err, "ERRB")
+        tail_cmd_err = _tail(err, "ERRB")
 
     return (
         f'echo "{m["META"]}"; '
@@ -303,16 +375,19 @@ def _report(record: ProcessRecord, *, from_cursor: bool) -> str:
         # watchdog never gets to write its exit code — it is killed *before*
         # that line — so a report that trusted the file alone would call it
         # "still running" forever.
-        f"PID=$(cat {d}/run.pid 2>/dev/null); "
+        f"{_read('PID', f'{d}/run.pid', '')}"
         f'if kill -0 "$PID" 2>/dev/null; then echo "alive=1"; else echo "alive=0"; fi; '
-        f'if [ -f {exit_file} ]; then echo "exit_code=$(cat {exit_file})"; fi; '
-        f'echo "killed=$([ -f {d}/run.killed ] && echo 1 || echo 0)"; '
-        f'echo "reason=$(cat {d}/run.killed 2>/dev/null || echo none)"; '
-        f'echo "now=$(date +%s)"; '
-        f'echo "started_at=$(cat {d}/run.started 2>/dev/null || echo 0)"; '
-        f'echo "out_mtime=${_stat_mtime(out)}"; '
-        f'echo "err_mtime=${_stat_mtime(err)}"; '
-        f"OUTB=${_bytes_of(out)}; ERRB=${_bytes_of(err)}; "
+        f"if [ -f {exit_file} ]; then {_read('E', exit_file, '')}"
+        'echo "exit_code=$E"; fi; '
+        f'if [ -f {d}/run.killed ]; then echo "killed=1"; else echo "killed=0"; fi; '
+        f"{_read('R', f'{d}/run.killed', 'none')}"
+        'echo "reason=${R:-none}"; '
+        f'echo "now={_NOW}"; '
+        f"{_read('T', f'{d}/run.started', '0')}"
+        'echo "started_at=$T"; '
+        f"{_log_stats(out, err)}"
+        'echo "out_mtime=$OM"; '
+        'echo "err_mtime=$EM"; '
         # A compaction rewrites the log shorter, and a cursor is an offset
         # into it — so afterwards the caller points past the end and would
         # read nothing at all, silently, for the rest of the run.
@@ -320,8 +395,10 @@ def _report(record: ProcessRecord, *, from_cursor: bool) -> str:
         '[ "${ERRCURSOR:-0}" -gt "$ERRB" ] && ERRCURSOR=0; '
         f'echo "out_bytes=$OUTB"; '
         f'echo "err_bytes=$ERRB"; '
-        f'echo "out_cut=$(cat {out}.cut 2>/dev/null || echo 0)"; '
-        f'echo "err_cut=$(cat {err}.cut 2>/dev/null || echo 0)"; '
+        f"{_read('C', f'{out}.cut', '0')}"
+        'echo "out_cut=$C"; '
+        f"{_read('C', f'{err}.cut', '0')}"
+        'echo "err_cut=$C"; '
         f'echo "{m["OUT_HEAD"]}"; {head_cmd_out}; echo; '
         f'echo "{m["OUT_TAIL"]}"; {tail_cmd_out}; echo; '
         f'echo "{m["ERR_HEAD"]}"; {head_cmd_err}; echo; '
@@ -344,7 +421,9 @@ D={dir}
 echo $$ > "$D/run.pid"
 # Git Bash's ps has no -o: there the group is in /proc/<pid>/pgid, which Linux
 # does not have and macOS has no /proc for, so those fall through to ps.
-{{ cat /proc/$$/pgid 2>/dev/null || ps -o pgid= -p $$; }} | tr -d ' ' > "$D/run.pgid"
+# Read by the shell itself where it can: every process here delays the command.
+if [ -r /proc/$$/pgid ]; then read -r G < /proc/$$/pgid; else G=$(ps -o pgid= -p $$); fi
+echo "${{G// /}}" > "$D/run.pgid"
 
 # The backstop for the guarantee detaching gives up, inside the group it
 # polices: when it fires, the session that started it may be long closed.
@@ -460,7 +539,7 @@ compact_once() {{
     compact_once
   done ) &
 
-{stdin_open}env PYTHONUNBUFFERED=1 TERM=dumb COLORTERM= \
+{stdin_open}PYTHONUNBUFFERED=1 TERM=dumb COLORTERM= \
     bash "$D/cmd.sh" >> "$D/out.log" 2>> "$D/err.log" {stdin_redirect}
 echo $? > "$D/run.exit"
 
@@ -559,7 +638,7 @@ def build_launch(
         f"mkdir -p {d} && "
         f"printf '%s' {cmd} > {d}/cmd.sh && "
         f"printf '%s' {shlex.quote(wrapper)} > {d}/run.sh && "
-        f"date +%s > {d}/run.started && "
+        f"echo {_NOW} > {d}/run.started && "
         f": > {d}/out.log && : > {d}/err.log"
     )
     if stdin is not None:
@@ -570,7 +649,7 @@ def build_launch(
     # the first attempt failed *silently* there, the error landing in the log
     # with an exit status of 0 — so its absence is expected, not an error.
     launch = (
-        f"SETSID=$(command -v setsid || true); "
+        "SETSID=; command -v setsid > /dev/null 2>&1 && SETSID=setsid; "
         f"nohup $SETSID bash {d}/run.sh > /dev/null 2>&1 < /dev/null &"
     )
 
@@ -618,12 +697,13 @@ def build_sweep(records: list[ProcessRecord]) -> str:
     for record in records:
         d = shlex.quote(record.dir)
         parts.append(
-            f"P=$(cat {d}/run.pid 2>/dev/null); "
+            f"{_read('P', f'{d}/run.pid', '')}"
             f'if kill -0 "$P" 2>/dev/null; then A=1; else A=0; fi; '
-            f'echo "{record.handle} $A $(cat {d}/run.exit 2>/dev/null || echo -) '
-            f"$([ -f {d}/run.killed ] && echo 1 || echo 0) "
-            f"$(cat {d}/run.started 2>/dev/null || echo 0) $(date +%s) "
-            f'${_stat_mtime(f"{d}/out.log")} ${_bytes_of(f"{d}/out.log")}"'
+            f"{_read('E', f'{d}/run.exit', '-')}"
+            f"if [ -f {d}/run.killed ]; then K=1; else K=0; fi; "
+            f"{_read('T', f'{d}/run.started', '0')}"
+            f"{_log_stats(f'{d}/out.log', f'{d}/err.log')}"
+            f'echo "{record.handle} $A ${{E:--}} $K $T {_NOW} $OM $OUTB"'
         )
     return "; ".join(parts)
 

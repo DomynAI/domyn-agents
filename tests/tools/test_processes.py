@@ -979,9 +979,13 @@ class TestTheFilesystemIsTheTruth:
 
     @pytest.mark.asyncio
     async def test_processes_are_found_with_no_state_at_all(self, backend: LocalBackend) -> None:
-        for command in ("sleep 30", "echo done"):
+        # `echo` is waited for until it has ended, which the wait returns on at
+        # once: given 0.15 s like the sleep, it was still starting on a busy
+        # machine, and was found finished only because the report after the wait
+        # used to take longer than the command.
+        for command, yield_s in (("sleep 30", 0.15), ("echo done", 30)):
             record = processes.new_record(command, "conv-x")
-            await backend.run(processes.build_launch(record, yield_s=0.15), timeout=60)
+            await backend.run(processes.build_launch(record, yield_s=yield_s), timeout=60)
 
         found = processes.parse_discover(
             (await backend.run(processes.build_discover("conv-x"), timeout=60)).stdout
