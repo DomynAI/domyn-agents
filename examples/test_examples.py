@@ -145,3 +145,57 @@ def test_guardrail_ends_the_turn_on_the_blocked_phrase(guardrail: TestClient):
     body = guardrail.post("/input-guardrail", json=_event("user_input", text)).json()
     assert body["modified_event"]["event_type"] == "response"
     assert body["emitted_content"]["passed"] is False
+
+
+_KYC = pytest.mark.parametrize(
+    "example", [EXAMPLES / "kyc-onboarding"], ids=["kyc-onboarding"], indirect=True
+)
+
+
+@pytest.fixture
+def kyc_policy(example: Path, monkeypatch):
+    # The fictional lists only: the official ones are downloaded, and change every day.
+    monkeypatch.setenv("SANCTIONS_LISTS", "fictional")
+    return _import(example / "policy.py")
+
+
+def _verdict(policy, company: str, decision: str):
+    from types import SimpleNamespace
+
+    tool = SimpleNamespace(name="save_memo")
+    return policy.kyc_policy(tool, {"company": company, "decision": decision})
+
+
+@_KYC
+def test_kyc_a_clean_company_is_left_to_the_analyst(kyc_policy):
+    assert _verdict(kyc_policy, "Lanterna Meccanica Srl", "approve") is None
+
+
+@_KYC
+def test_kyc_a_namesake_must_be_cleared_before_approving(kyc_policy):
+    verdict = _verdict(kyc_policy, "Velarte Design Srl", "approve")
+    assert verdict.decision == "ask"
+    assert "Lorenzo Vartani" in verdict.reason
+
+
+@_KYC
+def test_kyc_a_listed_party_cannot_be_approved(kyc_policy):
+    verdict = _verdict(kyc_policy, "Nordavia Logistics Srl", "approve")
+    assert verdict.decision == "deny"
+    for party in ("Halvern Trade Holdings Ltd", "Ardan Velys", "Tarkenvale Maritime Group LLC"):
+        assert party in verdict.reason
+    assert _verdict(kyc_policy, "Nordavia Logistics Srl", "reject") is None
+
+
+@_KYC
+def test_kyc_screening_compares_names_not_spellings(example: Path, monkeypatch):
+    monkeypatch.setenv("SANCTIONS_LISTS", "fictional")
+    screening = _import(example / "screening.py")
+
+    assert screening.tokens("Marbello Import-Export S.r.l.") == ["export", "import", "marbello"]
+    [hit] = screening.screen_name("Vartani, Lorenzo", "person", "1988-03-14", "IT")["candidates"]
+    assert hit["birth_date_agrees"] is False
+    assert hit["country_agrees"] is False
+    assert screening.screen_name("Giada Ferlandi", "person")["candidates"] == []
+    # A country the list names in words is not compared with a code.
+    assert screening._agrees("RU", {"Russia"}) is None

@@ -1,0 +1,3 @@
+memos/
+# The file tools keep their state here when the agent runs outside the CLI.
+cases/.domyn/
