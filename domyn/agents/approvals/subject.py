@@ -62,11 +62,16 @@ def user_edit_note(tool_result_event: BaseEvent, has_result: bool) -> str:
     if initial_parameters is None or final_action is None:
         return ""
 
-    def format_call(parameters: dict[str, Any]) -> str:
-        arguments = json.dumps(visible_parameters(parameters), ensure_ascii=False, default=str)
-        return f"{final_action.name}({arguments})"
-
-    final_call = format_call(final_action.parameters or {})
+    final_parameters = visible_parameters(final_action.parameters or {})
+    initial_parameters = visible_parameters(initial_parameters)
+    edits = [
+        f"{key} to {json.dumps(_shortened(value), ensure_ascii=False, default=str)}"
+        for key, value in final_parameters.items()
+        if initial_parameters.get(key) != value
+    ]
+    edits += [f"no {key}" for key in initial_parameters if key not in final_parameters]
+    arguments = {key: _shortened(value) for key, value in final_parameters.items()}
+    final_call = f"{final_action.name}({json.dumps(arguments, ensure_ascii=False, default=str)})"
     failed = tool_result_event.event_type == ExecutionEventType.TOOL_ERROR
     if has_result:
         outcome = f", and the {'error' if failed else 'result'} below is for them."
@@ -75,18 +80,32 @@ def user_edit_note(tool_result_event: BaseEvent, has_result: bool) -> str:
     # Before the result, saying the edit is the request now: after it, or without that, models
     # read the edit as a mistake and made the call again with the values of the user's message.
     note = (
-        f"Note: the user edited this call before approving it. You proposed "
-        f"{format_call(initial_parameters)}; the user replaced it with {final_call}, so this call "
-        f"ran with the user's arguments, not yours{outcome} By editing it the user changed their "
-        "request: where the edit differs from their earlier message or your task, the edit is "
-        "what they want now, not a mistake, so do not go back to the earlier values."
+        f"Note: the user edited this call before approving it, setting {' and '.join(edits)}, so "
+        f"it ran as {final_call}, with the user's arguments, not yours{outcome} By editing it the "
+        "user changed their request: where the edit differs from their earlier message or your "
+        "task, the edit is what they want now, not a mistake, so do not go back to the values "
+        "they replaced."
     )
-    if not failed:
-        note += " The call is done: do not make it again."
-    note += " Use the user's arguments from now on, in related calls too."
     if failed:
-        note += f" To retry, call exactly {final_call}."
+        # Told to retry with the user's arguments, models fell back to their own instead.
+        note += (
+            " Do not call the tool again with the values they replaced, not even to work around "
+            "this error: tell the user the call with their values failed and ask what to do."
+        )
+    else:
+        note += (
+            " The call is done: do not make it again. Use the user's arguments from now on, in "
+            "related calls too."
+        )
     return note
+
+
+def _shortened(value: Any) -> Any:
+    """*value*, or its start and end when long: the whole of it is in the call the model sees."""
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    if len(text) <= 2_000:
+        return value
+    return f"{text[:1_000]}…[{len(text) - 2_000} characters not shown]…{text[-1_000:]}"
 
 
 def with_user_edit_note(tool_result: Any, tool_result_event: BaseEvent) -> Any:

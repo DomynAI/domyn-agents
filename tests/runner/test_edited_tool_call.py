@@ -151,7 +151,8 @@ async def test_tool_use_shows_the_edited_call_as_it_ran(planner: str) -> None:
     assert request[-1].role == "tool"
     assert "20" in str(request[-1].content)
     assert USER_EDIT_NOTE in str(request[-1].content)
-    assert '"a": 3' in str(request[-1].content), "the note names the initial arguments"
+    assert "setting a to 4 and b to 5" in str(request[-1].content)
+    assert '"a": 3' not in str(request[-1].content), "the model needs only the user's arguments"
     # Without it, a sub-agent went back to the value its task named.
     assert "differs from their earlier message or your task" in str(request[-1].content)
 
@@ -193,8 +194,8 @@ async def test_tool_use_shows_an_edited_call_that_failed_as_it_ran(planner: str)
     assert "a=4 is not allowed" in str(request[-1].content)
     assert _joined_contents(request).count(USER_EDIT_NOTE) == 1
     assert "the error below" in str(request[-1].content)
-    # Told only to start from "the user's values", models retried with the rejected ones.
-    assert 'To retry, call exactly multiply({"a": 4, "b": 5})' in str(request[-1].content)
+    # Told how to retry, models fell back to the values the user had replaced.
+    assert "tell the user the call with their values failed" in str(request[-1].content)
     assert "The call is done" not in _joined_contents(request)
 
 
@@ -442,6 +443,79 @@ def test_a_missing_result_is_the_user_edit_note_alone(
     assert rendered_result.startswith("Note: ")
     assert f"not yours, and {outcome}" in rendered_result
     assert "below" not in rendered_result
+
+
+def test_the_user_edit_note_names_a_removed_argument() -> None:
+    event = _user_edited_tool_end(20)
+    event.action.parameters = {"a": 3}
+
+    assert "setting no b, so it ran as multiply" in user_edit_note(event, has_result=True)
+
+
+def _edited_email(event_type: ExecutionEventType, body: str) -> BaseEvent:
+    return BaseEvent(
+        event_type=event_type,
+        event_id="edited_email",
+        author="Calc",
+        action=ToolAction(
+            call_id="call_1",
+            name="send_email",
+            parameters={"to": "luigi@example.com", "body": body},
+            observation="sent",
+        ),
+        metadata={METADATA_INITIAL_PARAMETERS: {"to": "mario@example.com", "body": body}},
+    )
+
+
+def test_the_user_edit_note_shortens_a_long_value() -> None:
+    body = "start of the body " + "x" * 10_000 + " end of the body"
+
+    note = user_edit_note(_edited_email(ExecutionEventType.TOOL_END, body), has_result=True)
+
+    assert len(note) < 3_000
+    assert "start of the body" in note and "end of the body" in note
+    assert f"[{len(body) - 2_000} characters not shown]" in note
+    assert 'setting to to "luigi@example.com", so' in note
+    assert "mario@example.com" not in note
+
+
+def test_the_user_edit_note_keeps_a_value_of_2000_characters_whole() -> None:
+    note = user_edit_note(_edited_email(ExecutionEventType.TOOL_END, "b" * 2_000), has_result=True)
+
+    assert "b" * 2_000 in note
+    assert "characters not shown" not in note
+
+
+@pytest.mark.asyncio
+async def test_a_long_edited_value_leaves_room_for_the_result() -> None:
+    planner = PlannerStrategyFactory.from_config(
+        {"type": "tool_use_thought", "context_manager": {"max_tool_result_chars": 5_000}},
+        save_in_registry=False,
+    )
+    agent = Agent(
+        name="Calc",
+        description="Sends.",
+        instruction="Use the tools.",
+        llm_provider=_ScriptedProvider(),
+        planner=planner,
+        tools=[FunctionTool(func=multiply, approval_type=ApprovalType.PARAMS_UPDATE)],
+    )
+    events = [
+        _edited_email(event_type, "y" * 10_000)
+        for event_type in (ExecutionEventType.TOOL_START, ExecutionEventType.TOOL_END)
+    ]
+    events[0].event_id = "start"
+    events[0].metadata = {}
+    context = InteractionContext(
+        conversation_id="c1", user_id="u", agent_input=events[0], conversation_history=events
+    )
+
+    messages = await planner.context_manager.get_context(context, agent)
+    shown_result = next(m.content for m in messages if m.role == "tool")
+
+    assert len(shown_result) <= 5_000
+    assert shown_result.endswith("\n\nsent"), "the result is still there"
+    assert USER_EDIT_NOTE in shown_result
 
 
 def test_a_result_of_a_call_not_edited_is_left_as_it_is() -> None:
