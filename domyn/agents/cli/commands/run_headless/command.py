@@ -19,8 +19,10 @@ the endpoint's own applies, so an endpoint that refuses the field still works.
 What differs from an interactive session, because nobody answers:
 
 * **Auto-approve is on** for every tool call. The hardline rules still apply.
-* **One turn.** The task is the only message; the session ends when the agent ends
-  its turn, without reading the input.
+* **One task, then a review.** The task is the only message the user writes. When the
+  agent ends its turn, `REVIEW_PROMPT` asks it once (``--review-turns``) to check its work
+  against the task sentence by sentence and fix what falls short; the session ends when
+  that turn ends, without reading the input.
 * **Standing instructions** say so (`DEFAULT_INSTRUCTIONS`): work alone, do the work,
   do not ask. Given inline, so no file is needed; ``--instructions`` replaces them.
 * **No step cap** to speak of (``--max-iterations``, 1000 by default against the
@@ -94,6 +96,30 @@ question, and the session ends when you stop.
 What the built-in prompts of other coding agents run without a user say, and what a session with
 nobody to answer needs: without them a model tends to describe the steps and offer to
 carry them out, and the session ends on the offer."""
+
+REVIEW_PROMPT = """\
+Before you stop, review your work against the task with fresh eyes, as whoever checks it will.
+
+Re-read the task message and every spec, design or policy file it points to, sentence by sentence.
+For each requirement, say where your work meets it and how you know: a command you ran, or a check
+that would fail without your change. Look hardest at reported symptoms, written rules with a
+condition, what the system *may* do, ordering and concurrency, and exact names, paths and formats.
+Where you settled a doubt by assumption, check it again against the written sources: a reported
+symptom or a written rule outranks a guess about how the work will be checked.
+
+Fix whatever falls short and verify it again. Remove scratch files you left in the project. End
+with what this review changed, or "No changes" if everything already held.
+"""
+"""What `domyn run-headless` sends as a user turn when the agent ends its turn on the task.
+
+Models stop when a first version works, typically with most of their time left: on
+Terminal-Bench 4.1 domyn ended every task in under 2 % of its budget, each failure a requirement
+it had read and then argued away. Rules to the same end added to the standing instructions, read
+before tens of thousands of tokens of work, did not change that in those trials; a turn that asks
+for the check after the work does it with the work in front of it."""
+
+DEFAULT_REVIEW_TURNS = 1
+
 
 DEFAULT_MAX_ITERATIONS = 1000
 BUILD_OPTIONS = {
@@ -323,6 +349,12 @@ def run_headless_command(
     no_instructions: bool = typer.Option(
         False, "--no-instructions", help="Run with no standing instructions"
     ),
+    review_turns: int = typer.Option(
+        DEFAULT_REVIEW_TURNS,
+        "--review-turns",
+        min=0,
+        help="Review turns after the task's turn (REVIEW_PROMPT); 0 ends with the task's turn",
+    ),
     workspace: str = typer.Option(
         "/",
         "--workspace",
@@ -421,6 +453,7 @@ def run_headless_command(
             auto_approve=True,
             single_turn=True,
             steering=False,
+            follow_ups=[REVIEW_PROMPT] * review_turns,
         )
     )
     raise typer.Exit(exit_code)
