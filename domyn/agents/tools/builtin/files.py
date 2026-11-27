@@ -13,11 +13,14 @@ to escape every quote and newline in it, and over a few thousand characters it
 misses one. Splitting the write into several smaller calls is the only route
 out that does not depend on the model getting a long escape right.
 
-``edit_file`` replaces an exact string rather than taking a diff or a line
-range. Line numbers go stale between the read and the write, and a diff is a
-format the model gets subtly wrong. An exact match that must occur exactly once
-fails loudly when the file is not what the model thought it was, which is the
-failure you want.
+``edit_file`` replaces a string rather than taking a diff or a line range. Line
+numbers go stale between the read and the write, and a diff is a format the
+model gets subtly wrong. The string must occur exactly once, which fails loudly
+when the file is not what the model thought it was — the failure you want. What
+it does forgive is a difference that cannot change the meaning: a typographic
+quote where the file has the plain character, and whitespace at the ends of the
+lines of a block (see ``matching``). Forgiving those costs nothing. Forgiving a
+merely *similar* block would mean choosing one, and choosing wrong is silent.
 
 Documents — PDF, Word, Excel, PowerPoint, OpenDocument, RTF, EPUB — are read by
 converting them to markdown first, because a model handed the bytes of a PDF
@@ -38,6 +41,7 @@ be windows away.
 
 import asyncio
 import base64
+import bisect
 import inspect
 import io
 import json
@@ -52,6 +56,7 @@ from typing import TYPE_CHECKING, Any
 import anydoc
 
 from domyn.agents.core import ApprovalType, documents
+from domyn.agents.tools.builtin import diff, matching
 from domyn.agents.tools.builtin.workspace import Workspace, WorkspaceError, is_ignored
 
 if TYPE_CHECKING:
@@ -97,20 +102,131 @@ def _positive_int(value: object, fallback: int) -> int:
     return number if number > 0 else fallback
 
 
-def _read_text(path: str, workspace: Workspace) -> str:
-    """The whole file, for callers that need it — ``edit_file`` matching.
+BOM = "\ufeff"
+"""A byte-order mark, as the character it decodes to.
+
+Invisible in what ``read_file`` shows, so it must not be part of what an edit
+matches against: a file that starts with one would otherwise have a first line
+no model could ever quote.
+"""
+
+
+@dataclass(frozen=True)
+class _Text:
+    r"""A file as it is stored, and as the model was shown it.
+
+    ``view`` is what ``read_file`` returned: no BOM, ``\n`` line endings, so an
+    edit copied out of a read matches it. ``stored`` keeps the endings the file
+    actually has, because writing the view back turns one changed line of a
+    CRLF file into a whole-file diff — the edit would be right and the diff
+    unreadable.
+    """
+
+    stored: str
+    view: str
+    ending: str
+    bom: bool
+
+
+def _read_text(path: str, workspace: Workspace) -> _Text:
+    r"""The whole file, for callers that need it — ``edit_file`` matching.
 
     Not what the model gets: see ``read_file``, which reads a window.
+
+    Opened with ``newline=""`` so the file's own line endings survive the read.
+    The default translates ``\r\n`` to ``\n`` on the way in and writes ``\n``
+    back, which is how an edit of one line becomes a rewrite of the file.
     """
     resolved = workspace.resolve(path, must_exist=True)
     if resolved.is_dir():
         raise WorkspaceError(f"'{path}' is a directory. Use list_dir for that.")
     try:
-        return resolved.read_text(encoding="utf-8")
+        with resolved.open("r", encoding="utf-8", newline="") as handle:
+            stored = handle.read()
     except UnicodeDecodeError:
         raise WorkspaceError(
             f"'{path}' is not UTF-8 text. Binary files cannot be read here."
         ) from None
+    bom = stored.startswith(BOM)
+    if bom:
+        stored = stored[len(BOM) :]
+    return _Text(stored, _lf_view(stored), _ending(stored), bom)
+
+
+def _lf_view(text: str) -> str:
+    """``text`` with CRLF turned into LF: the view ``read_file`` showed it in."""
+    return text.replace("\r\n", "\n") if "\r\n" in text else text
+
+
+def _ending(text: str) -> str:
+    """The line ending ``text`` mostly uses. LF when there is nothing to count."""
+    crlf = text.count("\r\n")
+    return "\r\n" if crlf > text.count("\n") - crlf else "\n"
+
+
+def _with_ending(text: str, ending: str) -> str:
+    """``text`` with its LF line breaks written as ``ending``.
+
+    Text that already carries a carriage return is left alone: it was written
+    with endings of its own, and converting it would double them.
+    """
+    if ending == "\n" or "\r" in text:
+        return text
+    return text.replace("\n", ending)
+
+
+def _dropped(stored: str) -> list[int]:
+    r"""Where each removed ``\r`` sat in the LF view, for ``_stored_offset``."""
+    positions: list[int] = []
+    found = stored.find("\r\n")
+    while found != -1:
+        positions.append(found - len(positions))
+        found = stored.find("\r\n", found + 2)
+    return positions
+
+
+def _stored_offset(dropped: Sequence[int], index: int, *, end: bool = False) -> int:
+    r"""``index`` in the LF view, as an index into the stored text.
+
+    ``end`` is an exclusive bound: a CRLF that starts exactly there belongs to
+    the text after the region, not inside it. Counting it in would leave the
+    region ending with a bare ``\r``.
+    """
+    skipped = bisect.bisect_left(dropped, index) if end else bisect.bisect_right(dropped, index)
+    return index + skipped
+
+
+def _write_text(resolved: Path, text: str) -> None:
+    r"""Write ``text`` as given, with no line-ending translation anywhere.
+
+    ``Path.write_text`` opens with ``newline=None``, which on Windows turns
+    every ``\n`` into ``\r\n``: a CRLF file written back through it would come
+    out with ``\r\r\n``. Exact bytes are the whole point here.
+    """
+    with resolved.open("w", encoding="utf-8", newline="") as handle:
+        handle.write(text)
+
+
+_ENDING_TAIL = 8192
+"""Bytes at the end of a file that decide which line ending it uses."""
+
+
+def _existing_form(resolved: Path) -> tuple[str, bool]:
+    """The line ending and BOM an existing file already uses.
+
+    Read from the two ends rather than the whole file: an overwrite or an
+    append needs the file's shape, not its contents.
+    """
+    try:
+        with resolved.open("rb") as handle:
+            head = handle.read(len(BOM.encode("utf-8")))
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - _ENDING_TAIL))
+            tail = handle.read().decode("utf-8", "ignore")
+    except OSError:
+        return "\n", False
+    return _ending(tail), head == BOM.encode("utf-8")
 
 
 def _contained(workspace: Workspace, found: Path) -> bool:
@@ -478,6 +594,18 @@ def _megabytes(size: int) -> str:
     return f"{size / (1024 * 1024):.1f} MB"
 
 
+_LEVEL_NOTES = {
+    matching.PUNCTUATION: " (matched ignoring quote and dash variants)",
+    matching.TRAILING: " (matched ignoring whitespace at the ends of lines)",
+}
+"""What an edit says when the match was not exact.
+
+Said out loud because it is information about the file — there was a curly quote
+there, or a trailing space — and because a tolerance nobody mentions is a
+tolerance the model never learns to stop relying on.
+"""
+
+
 def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
     """Build every file callable bound to one workspace."""
 
@@ -661,9 +789,18 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
         _refuse_text_over_document(path, resolved)
         resolved.parent.mkdir(parents=True, exist_ok=True)
         existed = resolved.exists()
-        resolved.write_text(content, encoding="utf-8")
+        written = len(content)
+        stored = content
+        if existed:
+            # An overwrite keeps the file's shape — its line ending and its BOM
+            # — so replacing the contents does not also rewrite every line.
+            ending, bom = _existing_form(resolved)
+            stored = _with_ending(content.removeprefix(BOM), ending)
+            if bom:
+                stored = BOM + stored
+        _write_text(resolved, stored)
         verb = "Overwrote" if existed else "Created"
-        return f"{verb} {workspace.display(resolved)} ({len(content)} characters)."
+        return f"{verb} {workspace.display(resolved)} ({written} characters)."
 
     def append_file(path: str, content: str) -> str:
         """Add text to the end of a file, creating it if needed.
@@ -679,38 +816,73 @@ def build_tools(workspace: Workspace) -> dict[str, Callable[..., str]]:
         _refuse_hard_link(path, resolved)
         _refuse_text_over_document(path, resolved)
         resolved.parent.mkdir(parents=True, exist_ok=True)
-        with resolved.open("a", encoding="utf-8") as handle:
-            handle.write(content)
-        return f"Appended {len(content)} characters to {workspace.display(resolved)}."
+        written = len(content)
+        stored = content
+        if resolved.exists():
+            # Appending LF lines to a CRLF file leaves it with two kinds of
+            # ending, and the next diff blames the append for all of them.
+            stored = _with_ending(content, _existing_form(resolved)[0])
+        with resolved.open("a", encoding="utf-8", newline="") as handle:
+            handle.write(stored)
+        return f"Appended {written} characters to {workspace.display(resolved)}."
 
-    def edit_file(path: str, old: str, new: str) -> str:
-        """Replace an exact piece of text in a file, once.
+    def edit_file(path: str, old: str, new: str, loose: bool = True) -> str:
+        r"""Replace a piece of text in a file, once.
 
-        The old text must appear exactly once, so include enough surrounding
-        context to make it unique.
+        The text is matched exactly first. If that finds nothing, a difference
+        that cannot change the meaning is forgiven: a typographic quote or dash
+        where the file has the plain character, and — unless ``loose`` is false
+        — whitespace at the end of a line. The match must still be unique, so
+        include enough surrounding context to make it so.
+
+        Line endings are the file's business: write ``\n`` in both arguments and
+        a CRLF file stays CRLF.
 
         Args:
             path: File to edit, relative to the workspace root.
-            old: Exact text to replace.
+            old: Text to replace.
             new: Text to put in its place.
+            loose: Also accept a match that differs only in whitespace at the
+                ends of lines. Defaults to true; false requires an exact match.
         """
         resolved = workspace.resolve(path, must_exist=True)
         _refuse_hard_link(path, resolved)
         _refuse_text_over_document(path, resolved)
-        content = _read_text(path, workspace)
-        occurrences = content.count(old)
-        if occurrences == 0:
+        text = _read_text(path, workspace)
+        old = _lf_view(old.removeprefix(BOM))
+        new = _lf_view(new.removeprefix(BOM))
+        if not old:
+            raise WorkspaceError(
+                "old must not be empty. Use write_file to create or replace a file."
+            )
+        matches = matching.find(text.view, old, loose=loose)
+        if not matches:
             raise WorkspaceError(
                 f"That text does not appear in {workspace.display(resolved)}. "
                 "Read the file again — it may not be what you expect."
             )
-        if occurrences > 1:
+        if len(matches) > 1:
             raise WorkspaceError(
-                f"That text appears {occurrences} times in {workspace.display(resolved)}. "
+                f"That text appears {len(matches)} times in {workspace.display(resolved)}. "
                 "Include more surrounding context so the match is unique."
             )
-        resolved.write_text(content.replace(old, new, 1), encoding="utf-8")
-        return f"Edited {workspace.display(resolved)}."
+        match = matches[0]
+        dropped = _dropped(text.stored)
+        first = _stored_offset(dropped, match.start)
+        last = _stored_offset(dropped, match.end, end=True)
+        region = text.stored[first:last]
+        # The replacement takes the ending of what it replaces: a file with
+        # mixed endings keeps them outside the edited region and gains no third
+        # kind inside it.
+        ending = _ending(region) if "\n" in region else text.ending
+        edited = text.stored[:first] + _with_ending(new, ending) + text.stored[last:]
+        _write_text(resolved, BOM + edited if text.bom else edited)
+        summary = f"Edited {workspace.display(resolved)}{_LEVEL_NOTES.get(match.level, '')}."
+        # The change, not just the fact of it: the model cannot see the file it
+        # just wrote, and a match that landed on a fragment of a line looks
+        # exactly like a match that landed where it meant.
+        shown = diff.changes(text.view, _lf_view(edited))
+        return f"{summary}\n\n{shown}" if shown else summary
 
     return {
         "read_file": read_file,

@@ -509,6 +509,215 @@ class TestWriting:
         )
 
 
+class TestLineEndingsAndBom:
+    """A file's line endings are its own.
+
+    Reading a CRLF file and writing it back as LF turns an edit of one line
+    into a diff of every line: the edit is right and the review is impossible.
+    A BOM read as ordinary text is worse — the first line can never be matched,
+    and a write can duplicate it.
+    """
+
+    @pytest.fixture
+    def crlf(self, workspace: Workspace) -> Path:
+        path = workspace.root / "win.txt"
+        path.write_bytes(b"one\r\ntwo\r\nthree\r\n")
+        return path
+
+    @pytest.mark.asyncio
+    async def test_edit_keeps_crlf(self, tools: dict, crlf: Path) -> None:
+        await _call(tools, "edit_file", path="win.txt", old="two", new="TWO")
+        assert crlf.read_bytes() == b"one\r\nTWO\r\nthree\r\n"
+
+    @pytest.mark.asyncio
+    async def test_edit_matches_text_copied_from_a_read(self, tools: dict, crlf: Path) -> None:
+        """`read_file` shows LF, so the model quotes LF even in a CRLF file."""
+        seen = await _call(tools, "read_file", path="win.txt")
+        assert "\r" not in seen
+        await _call(tools, "edit_file", path="win.txt", old="one\ntwo", new="one\n2")
+        assert crlf.read_bytes() == b"one\r\n2\r\nthree\r\n"
+
+    @pytest.mark.asyncio
+    async def test_edit_accepts_crlf_in_the_arguments(self, tools: dict, crlf: Path) -> None:
+        await _call(tools, "edit_file", path="win.txt", old="one\r\ntwo", new="1\r\n2")
+        assert crlf.read_bytes() == b"1\r\n2\r\nthree\r\n"
+
+    @pytest.mark.asyncio
+    async def test_edit_leaves_the_other_lines_bytes_alone(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        """A file with mixed endings keeps them: only the region moves."""
+        path = workspace.root / "mixed.txt"
+        path.write_bytes(b"a\r\nb\nc\r\n")
+        await _call(tools, "edit_file", path="mixed.txt", old="b", new="B")
+        assert path.read_bytes() == b"a\r\nB\nc\r\n"
+
+    @pytest.mark.asyncio
+    async def test_edit_keeps_the_bom(self, tools: dict, workspace: Workspace) -> None:
+        path = workspace.root / "bom.txt"
+        path.write_bytes(b"\xef\xbb\xbfone\ntwo\n")
+        await _call(tools, "edit_file", path="bom.txt", old="one", new="1")
+        assert path.read_bytes() == b"\xef\xbb\xbf1\ntwo\n"
+
+    @pytest.mark.asyncio
+    async def test_edit_of_the_first_line_ignores_a_quoted_bom(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        """A model that copies the first line of the read gets the BOM with it."""
+        path = workspace.root / "quoted.txt"
+        path.write_bytes(b"\xef\xbb\xbfone\ntwo\n")
+        await _call(tools, "edit_file", path="quoted.txt", old="\ufeffone", new="1")
+        assert path.read_bytes() == b"\xef\xbb\xbf1\ntwo\n"
+
+    @pytest.mark.asyncio
+    async def test_write_keeps_the_files_ending(self, tools: dict, crlf: Path) -> None:
+        await _call(tools, "write_file", path="win.txt", content="a\nb\n")
+        assert crlf.read_bytes() == b"a\r\nb\r\n"
+
+    @pytest.mark.asyncio
+    async def test_write_of_a_new_file_is_written_as_given(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        await _call(tools, "write_file", path="new.txt", content="a\nb\n")
+        assert (workspace.root / "new.txt").read_bytes() == b"a\nb\n"
+
+    @pytest.mark.asyncio
+    async def test_append_keeps_the_files_ending(self, tools: dict, crlf: Path) -> None:
+        await _call(tools, "append_file", path="win.txt", content="four\n")
+        assert crlf.read_bytes() == b"one\r\ntwo\r\nthree\r\nfour\r\n"
+
+    @pytest.mark.asyncio
+    async def test_an_lf_file_gains_no_carriage_return(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        path = workspace.root / "unix.txt"
+        path.write_bytes(b"a\nb\n")
+        await _call(tools, "edit_file", path="unix.txt", old="a", new="A")
+        assert path.read_bytes() == b"A\nb\n"
+
+
+class TestEditingWhatTheModelMeant:
+    """An edit that names the right text but retypes it slightly wrong.
+
+    The model read the file, then wrote the block out again from memory: a
+    curly quote where the file has a straight one, a space at the end of a line
+    it dropped. Neither is a mistake about *what* to change, and both used to
+    cost a turn — the edit failed, the file was read again, and the second
+    attempt was the first one with a character taken out.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_typographic_quote_in_the_old_text_still_matches(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        path = workspace.root / "quote.py"
+        path.write_text("# don't touch\nx = 1\n", encoding="utf-8")
+        out = await _call(
+            tools, "edit_file", path="quote.py", old="# don\u2019t touch", new="# leave"
+        )
+        assert path.read_text(encoding="utf-8") == "# leave\nx = 1\n"
+        assert "quote" in out, "the model is told which tolerance was used"
+
+    @pytest.mark.asyncio
+    async def test_trailing_whitespace_in_the_old_text_still_matches(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        path = workspace.root / "block.py"
+        path.write_text("def f():\n    a = 1\n    b = 2  \n    return a\n", encoding="utf-8")
+        out = await _call(
+            tools,
+            "edit_file",
+            path="block.py",
+            old="def f():\n    a = 1\n    b = 2\n    return a",
+            new="def f():\n    a = 1\n    b = 3\n    return a",
+        )
+        assert path.read_text(encoding="utf-8") == "def f():\n    a = 1\n    b = 3\n    return a\n"
+        assert "whitespace" in out
+        # The tolerance decides *where* the edit goes; `new` decides what is
+        # there afterwards, so the trailing space the model did not write is
+        # gone from the region it replaced.
+        assert "  \n" not in path.read_text(encoding="utf-8")
+
+    @pytest.mark.asyncio
+    async def test_an_exact_match_says_nothing_extra(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        """The common case keeps the message it had: one line, no caveat."""
+        out = await _call(
+            tools, "edit_file", path="app.py", old="print('hello')", new="print('hi')"
+        )
+        assert out.startswith("Edited app.py")
+        assert "matched" not in out
+
+    @pytest.mark.asyncio
+    async def test_a_reindented_block_is_still_refused(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        """Without context lines, forgiving the indent means guessing the block."""
+        path = workspace.root / "deep.py"
+        path.write_text("    a\n        b\n", encoding="utf-8")
+        out = await _call(
+            tools, "edit_file", path="deep.py", old="    a\n    b", new="    a\n    c"
+        )
+        assert out.startswith("ERROR:")
+        assert path.read_text(encoding="utf-8") == "    a\n        b\n"
+
+    @pytest.mark.asyncio
+    async def test_loose_false_requires_an_exact_match(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        path = workspace.root / "strict.py"
+        path.write_text("    x = 1\n", encoding="utf-8")
+        out = await _call(
+            tools, "edit_file", path="strict.py", old="    x = 1   ", new="    x = 2", loose=False
+        )
+        assert out.startswith("ERROR:")
+        assert path.read_text(encoding="utf-8") == "    x = 1\n"
+
+    @pytest.mark.asyncio
+    async def test_an_empty_old_text_is_refused_by_name(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        out = await _call(tools, "edit_file", path="app.py", old="", new="x")
+        assert "must not be empty" in out
+        assert (workspace.root / "app.py").read_text(encoding="utf-8").startswith("print('hello')")
+
+
+class TestTheResultShowsTheChange:
+    """The model cannot see the file it just wrote, so the result carries the change.
+
+    Without it, a match that landed on a fragment of a line is indistinguishable
+    from a match that landed where it meant: both answer "Edited".
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_edit_comes_back_as_a_diff(self, tools: dict, workspace: Workspace) -> None:
+        out = await _call(
+            tools, "edit_file", path="app.py", old="print('hello')", new="print('hi')"
+        )
+        assert out.startswith("Edited app.py")
+        assert "@@ line 1 @@" in out
+        assert "-print('hello')" in out
+        assert "+print('hi')" in out
+
+    @pytest.mark.asyncio
+    async def test_a_fragment_match_shows_what_it_left_behind(
+        self, tools: dict, workspace: Workspace
+    ) -> None:
+        """The observed failure: an anchor narrowed until it matched a fragment."""
+        path = workspace.root / "units.py"
+        path.write_text('UNIT = "kg\u00a0per\u00a0m3"\nSCALE = 1000\n', encoding="utf-8")
+        out = await _call(tools, "edit_file", path="units.py", old='UNIT = "kg', new="")
+        assert "-UNIT = " in out
+        assert '+\u00a0per\u00a0m3"' in out, "the dangling fragment is in the result"
+
+    @pytest.mark.asyncio
+    async def test_a_refused_edit_shows_no_diff(self, tools: dict, workspace: Workspace) -> None:
+        out = await _call(tools, "edit_file", path="app.py", old="not there", new="x")
+        assert out.startswith("ERROR:")
+        assert "@@" not in out
+
+
 class TestWritingThroughHardLinks:
     """A hard link is a second name for the same file, so it has nothing for
     `Workspace.resolve` to follow: the name is inside the workspace, the file
