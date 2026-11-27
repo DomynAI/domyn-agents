@@ -24,11 +24,18 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, ConfigDict, Field
 
 from domyn.agents.core import METADATA_TOOL_BATCH, BaseEvent, ExecutionEventType, Part
-from domyn.agents.llm.base import LLMMessage, context_limit_from_error, reported_prompt_tokens
+from domyn.agents.llm.base import (
+    LLMMessage,
+    TokenUsage,
+    context_limit_from_error,
+    reported_prompt_tokens,
+)
 from domyn.agents.llm.context_window import (
     deployment_key,
+    forget_assumed_window,
     raise_assumed_window,
     remember_stated_window,
+    window_assumed,
 )
 from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.context_management.budget import (
@@ -613,14 +620,17 @@ def _adopt_window(agent: Any, window: int | None) -> None:
     deployment, and every conversation on it benefits — and remembered for that
     deployment (``remember_stated_window``), so a provider built again for the next
     turn starts from it. Only ever lowered — a declared window larger than the real
-    one is the mistake the rejection just proved; a smaller one is a choice.
+    one is the mistake the rejection just proved; a smaller one is a choice. An assumed
+    one is no choice, and is replaced whatever its size.
     """
     provider = getattr(agent, "llm_provider", None)
     if provider is None or not window or window <= 0:
         return
     remember_stated_window(provider, window)
     declared = _context_window(agent)
-    if declared is not None and declared <= window:
+    if window_assumed(provider):
+        forget_assumed_window(provider)
+    elif declared is not None and declared <= window:
         return
     try:
         provider.context_window = window
@@ -1019,8 +1029,8 @@ class Compactor(BaseModel):
         Not the calibration this replaces: that multiplied every estimate by a
         ratio learned on other text, so prose made dense text look small.
 
-        The model took the request, so a window assumed for ``provider`` that is smaller
-        than the count is raised to it (`raise_assumed_window`).
+        The model took the request and answered it, so a window assumed for ``provider``
+        smaller than the two counts together is raised to them (`raise_assumed_window`).
         """
         reported = reported_prompt_tokens(usage)
         raw = (measured or {}).get(CONTEXT_USAGE_METADATA_KEY) or {}
@@ -1036,7 +1046,8 @@ class Compactor(BaseModel):
                 f"against {estimated} estimated"
             )
             return False
-        raise_assumed_window(provider, reported)
+        answer = TokenUsage.from_provider(usage)
+        raise_assumed_window(provider, reported + ((answer and answer.output_tokens) or 0))
         state.setdefault(_ANCHORS_KEY, {})[agent_name] = {
             "reported": reported,
             "estimated": estimated,
@@ -1442,8 +1453,9 @@ class Compactor(BaseModel):
     ) -> dict[str, int]:
         """The requests that, with what every request carries, are over ``window`` (a
         rejection's; alone over it when ``stated`` is false), else over twice the agent's
-        (``_beyond_estimate_error``): event id to estimated tokens, without the correction."""
-        if window is None:
+        (``_beyond_estimate_error``) unless it is assumed, which a rejection decides on:
+        event id to estimated tokens, without the correction."""
+        if window is None and not window_assumed(getattr(agent, "llm_provider", None)):
             window = _beyond_estimate_error(_context_window(agent))
         if not self.active or window is None:
             return {}
@@ -1595,12 +1607,14 @@ class Compactor(BaseModel):
         state: dict[str, Any] | None,
         key: str,
         author: str,
+        provider: Any = None,
     ) -> BaseEvent | None:
         """The event ending the turn when the compacted request is still over twice the
         window, else ``None``. The current request is left out when it is the last message
-        and the rest is under that without it."""
+        and the rest is under that without it. A window assumed for ``provider`` refuses
+        nothing: a rejection decides."""
         raw = (usage_metadata or {}).get(CONTEXT_USAGE_METADATA_KEY)
-        if not self.active or not isinstance(raw, dict):
+        if not self.active or not isinstance(raw, dict) or window_assumed(provider):
             return None
         usage = ContextUsage.model_validate(raw)
         window = usage.context_window

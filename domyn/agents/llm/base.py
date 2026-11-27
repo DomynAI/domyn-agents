@@ -8,7 +8,7 @@ from enum import StrEnum, auto
 from typing import Any, ClassVar
 
 import httpx
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from domyn.agents.core import TOKEN_USAGE_METADATA_KEY
 from domyn.agents.llm.context_window import (
@@ -550,6 +550,9 @@ class BaseLLMProvider(BaseModel, ABC):
             "context-window policy is inert without it."
         ),
     )
+    _assumed_window: int | None = PrivateAttr(default=None)
+    """The window a host assumed for it (`assume_context_window`): assumed while
+    ``context_window`` is still that."""
 
     max_reply_keys: ClassVar[tuple[str, ...]] = ("max_tokens", "max_completion_tokens")
     """The request keys that carry the reply's ceiling (``max_reply_tokens``): the

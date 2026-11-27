@@ -767,7 +767,12 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 messages, tool_defs, agent, interaction_context.state, turn_context, key=record
             )
             refusal = self.compactor.refuse_over_window(
-                conversation, usage_metadata, interaction_context.state, record, agent.name
+                conversation,
+                usage_metadata,
+                interaction_context.state,
+                record,
+                agent.name,
+                getattr(agent, "llm_provider", None),
             )
             if refusal is not None:
                 yield refusal
@@ -1014,6 +1019,8 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             )
                             yield compaction_done
                             if compaction_done.metadata.get("changed"):
+                                # The same step again, not another iteration.
+                                iteration -= 1
                                 continue
                         # The same request would be rejected again. A message the
                         # rejection proves too big is left out, or the turn ends: each
@@ -1040,6 +1047,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                         yield left_out
                         if left_out.event_type == ExecutionEventType.ERROR_OCCURRED:
                             break
+                        iteration -= 1
                         continue
                     logger.error(f"LLM generation failed: {type(e).__name__}")
                     logger.debug(
@@ -1417,7 +1425,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 return
         else:
             # The loop ran out: a `break` (an error, a refusal) is not the limit, even on
-            # the last iteration.
+            # the last iteration, nor is a retry after a rejection.
             max_iterations_message = f"Reached maximum iterations ({self.max_iterations})"
             if self.use_stop:
                 yield BaseEvent(

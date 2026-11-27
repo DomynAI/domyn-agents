@@ -806,6 +806,18 @@ class TestARequestTheModelTook:
         assert compactor.observe({"prompt_tokens": 190_000}, sent, {}, "Assistant", provider)
         assert provider.context_window == kept
 
+    def test_its_answer_counts_too(self) -> None:
+        """The window held the request and the answer the model wrote into it."""
+        from domyn.agents.llm.context_window import assume_context_window
+
+        provider = VLLMProvider(model_name="m", url="http://llm.test/v1/chat/completions")
+        assume_context_window(provider, 150_000)
+        sent = {"context_usage": {"message_tokens": 200_000, "tool_definition_tokens": 0}}
+        usage = {"prompt_tokens": 190_000, "completion_tokens": 1_500}
+
+        assert _active().observe(usage, sent, {}, "Assistant", provider)
+        assert provider.context_window == 191_500
+
     def test_a_count_on_another_basis_raises_nothing(self) -> None:
         from domyn.agents.llm.context_window import assume_context_window
 
@@ -956,6 +968,19 @@ class TestLearningTheWindowFromARejection:
         _active().overflow_plan(_conversation(2), agent, error=error)
 
         assert await resolve_context_window(served()) == 40_960
+
+    def test_an_assumed_window_is_replaced_even_by_a_larger_one(self) -> None:
+        """A guess is no choice: the rejection states the fact."""
+        from domyn.agents.llm.context_window import assume_context_window, window_assumed
+
+        provider = VLLMProvider(model_name="m", url="http://llm.test/v1/chat/completions")
+        assume_context_window(provider, 150_000)
+        agent = SimpleNamespace(name="Assistant", llm_provider=provider)
+        error = _rejection("This model's maximum context length is 1048576 tokens.")
+        _active().overflow_plan(_conversation(2), agent, error=error)
+
+        assert provider.context_window == 1_048_576
+        assert not window_assumed(provider)
 
 
 class TestTheReserveFollowsTheReplyCeiling:
@@ -1145,6 +1170,21 @@ class TestAMessageNoWindowHolds:
         assert compactor.oversized(messages, agent) == {}
         metadata = compactor.usage_metadata(messages, None, agent, {})
         assert compactor.refuse_over_window(messages, metadata, {}, "A", "A") is None
+
+    def test_an_assumed_window_refuses_nothing(self) -> None:
+        """A guess is no reason to refuse: a rejection decides."""
+        from domyn.agents.llm.context_window import assume_context_window
+
+        compactor = _active()
+        messages = self._pasted(40_000)
+        provider = VLLMProvider(model_name="m", url="http://llm.test/v1/chat/completions")
+        assume_context_window(provider, 5_000)
+        agent = SimpleNamespace(name="Assistant", llm_provider=provider)
+        metadata = compactor.usage_metadata(messages, None, agent, {})
+
+        assert compactor.oversized(messages, agent) == {}
+        assert compactor.refuse_over_window(messages, metadata, {}, "A", "A", provider) is None
+        assert list(compactor.oversized(messages, agent, window=5_000)) == ["paste"]
 
     def test_against_a_window_a_rejection_stated_the_estimate_is_enough(self) -> None:
         found = _active().oversized(self._pasted(16_500), _Agent(None), window=5_000)

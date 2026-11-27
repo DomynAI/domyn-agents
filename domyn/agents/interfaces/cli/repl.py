@@ -99,7 +99,6 @@ from domyn.agents.interfaces.cli.voice import (
     VoiceInput,
 )
 from domyn.agents.llm.base import TokenUsage
-from domyn.agents.llm.context_window import window_assumed
 from domyn.agents.loader import load_application_from_file
 from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.context_management.budget import (
@@ -202,7 +201,8 @@ class SessionState:
     hypothetical one, nor one it rejected."""
 
     sent_usage: dict[str, ContextUsage] = field(default_factory=dict)
-    """Per agent, the measurement of the request it sent and has no answer to yet."""
+    """Per agent call (its interaction), the measurement of the request it sent and has no
+    answer to yet: two copies of one agent called together are two calls."""
 
     def reset_conversation(self) -> None:
         self.conversation_id = f"conv_{uuid.uuid4().hex}"
@@ -1410,7 +1410,7 @@ class Repl:
 
     def _window_hint(self, agent_name: str) -> str | None:
         """Where the window ``agent_name`` was refused against comes from, when it can be
-        changed here: declared in the config, or assumed because the endpoint reports none."""
+        changed here: declared in the config. An assumed window refuses nothing."""
         provider = getattr(self._agent_named(agent_name), "llm_provider", None)
         window = getattr(provider, "context_window", None)
         if not isinstance(window, int):
@@ -1428,11 +1428,6 @@ class Repl:
             return (
                 f"The window, {window:,} tokens, is `{key}` in {where}: "
                 "if the model takes more, raise it there."
-            )
-        if window_assumed(provider):
-            return (
-                f"The window, {window:,} tokens, is assumed: the endpoint does not report one. "
-                f"If the model takes more, set `context_window` in {where}."
             )
         return None
 
@@ -1480,16 +1475,16 @@ class Repl:
             return
         if event.event_type not in (ExecutionEventType.LLM_START, ExecutionEventType.LLM_END):
             return
-        author = event.author or ""
+        call = event.interaction_id or event.author or ""
         measured = self._usage_in(metadata)
         if event.event_type is ExecutionEventType.LLM_START:
             # Shown once answered: a request the model rejects does not describe the
             # conversation, and one it took is measured again with its count.
             if measured is not None:
-                self._state.sent_usage[author] = measured
+                self._state.sent_usage[call] = measured
             return
         self._add_turn_tokens(metadata.get(TOKEN_USAGE_METADATA_KEY))
-        sent = self._state.sent_usage.pop(author, None)
+        sent = self._state.sent_usage.pop(call, None)
         answered = measured if measured is not None else sent
         if answered is not None:
             self._state.last_usage = answered

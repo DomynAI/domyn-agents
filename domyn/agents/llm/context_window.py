@@ -34,8 +34,10 @@ refused request, after which the conversation is compacted toward half its size 
 of at the threshold. Nothing is written to disk.
 
 A window a host assumes because nothing above answers (:func:`assume_context_window`, the
-CLI's fallback) is raised to the provider's count of any larger request the model takes
-(:func:`raise_assumed_window`), and kept the same way.
+CLI's fallback) is raised to the provider's count of any larger request the model takes,
+its answer included (:func:`raise_assumed_window`), and kept the same way. It refuses
+nothing before a request is sent: a rejection decides, and replaces it with the window
+it states.
 """
 
 from __future__ import annotations
@@ -195,35 +197,38 @@ def assume_context_window(provider: Any, window: int) -> None:
     key = deployment_key(provider)
     if key is not None:
         window = _assumed[key] = max(window, _assumed.get(key, 0))
-    provider.context_window = window
+    provider.context_window = provider._assumed_window = window
 
 
 def forget_assumed_window(provider: Any) -> None:
-    """Stop treating ``provider``'s window as assumed: its endpoint reports one now."""
+    """Stop treating ``provider``'s window as assumed: its endpoint reports one now, or a
+    rejection stated it."""
     key = deployment_key(provider)
     if key is not None:
         _assumed.pop(key, None)
+    provider._assumed_window = None
 
 
 def window_assumed(provider: Any) -> bool:
     """Whether ``provider``'s window is the one assumed for it, not one declared or
-    reported, or stated by a rejection."""
-    key = deployment_key(provider)
+    reported, or stated by a rejection: any of those replaces it."""
     window = getattr(provider, "context_window", None)
-    return key is not None and window is not None and window == _assumed.get(key)
+    return isinstance(window, int) and window == getattr(provider, "_assumed_window", None)
 
 
 def raise_assumed_window(provider: Any, tokens: int) -> None:
-    """The model took a request it counted at ``tokens``: an assumed window smaller than
-    that is wrong, and is raised to it. A declared one is left as it is."""
-    key = deployment_key(provider)
-    if key is None or not window_assumed(provider) or tokens <= provider.context_window:
+    """The model took a request and its answer, ``tokens`` together: an assumed window
+    smaller than that is wrong, and is raised to it. A declared one is left as it is."""
+    if not window_assumed(provider) or tokens <= provider.context_window:
         return
     get_logger().info(
         f"context window of {provider.model_name} raised to {tokens} tokens: "
-        "the model took a request that large"
+        "the model took a request and its answer that large"
     )
-    _assumed[key] = provider.context_window = tokens
+    key = deployment_key(provider)
+    if key is not None:
+        _assumed[key] = tokens
+    provider.context_window = provider._assumed_window = tokens
 
 
 def deployment_key(provider: Any) -> tuple[str, str, str] | None:

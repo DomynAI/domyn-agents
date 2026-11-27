@@ -299,6 +299,16 @@ class TestAnAssumedWindow:
         cw.assume_context_window(again, 150_000)
         assert again.context_window == 190_658
 
+    def test_another_provider_of_the_deployment_declaring_that_size_is_not_assumed(
+        self,
+    ) -> None:
+        assumed = _vllm()
+        cw.assume_context_window(assumed, 150_000)
+        declared = _vllm(context_window=150_000)
+
+        assert cw.window_assumed(assumed)
+        assert not cw.window_assumed(declared)
+
     def test_a_window_the_endpoint_reports_is_not_assumed(self) -> None:
         provider = _vllm()
         cw.assume_context_window(provider, 150_000)

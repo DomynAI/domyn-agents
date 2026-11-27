@@ -335,6 +335,22 @@ class TestWhenTheProviderRejectsTheRequestAsTooLong:
         assert "rejected the request as too long" in buffer.getvalue(), "the reason went unsaid"
         assert buffer.getvalue().count("Hello from the agent.") == 2
 
+    @pytest.mark.parametrize("prune_only", [False, True], ids=["compacted", "left out"])
+    @pytest.mark.asyncio
+    async def test_a_retry_on_the_last_iteration_is_not_the_limit(self, prune_only: bool) -> None:
+        """A retry of the same request is no iteration of its own."""
+        repl, buffer, _ = self._repl(
+            "tool_use",
+            ("long " * (30_000 if prune_only else 9_000), "hello"),
+            {2},
+            prune_only=prune_only,
+        )
+        repl._agent.planner.max_iterations = 1
+        await repl.run()
+
+        assert "Reached maximum iterations" not in buffer.getvalue()
+        assert buffer.getvalue().count("Hello from the agent.") == 2
+
     @pytest.mark.parametrize(
         "context_window", [100_000, None], ids=["declared window", "no window"]
     )
@@ -481,7 +497,7 @@ class TestAMessageLargerThanTheWindow:
         def spy(event: BaseEvent) -> None:
             record(event)
             if event.event_type is ExecutionEventType.LLM_START:
-                usages.append(repl._state.sent_usage.get(event.author or ""))
+                usages.append(repl._state.sent_usage.get(event.interaction_id or ""))
 
         repl._record_usage = spy  # type: ignore[method-assign]
         return repl, buffer, repl._agent.llm_provider, usages
@@ -600,11 +616,16 @@ class TestAMessageLargerThanTheWindow:
         await cli_config.apply_context_window(provider)
 
     @pytest.mark.asyncio
-    async def test_an_assumed_window_says_it_is_assumed(self, monkeypatch: Any) -> None:
+    async def test_an_assumed_window_refuses_nothing_before_the_model_answers(
+        self, monkeypatch: Any
+    ) -> None:
+        """A guess is no reason to refuse: the model may hold far more, and a rejection
+        would say so."""
         repl, buffer, provider, _ = self._repl("long " * 200_000, config={"llm_providers": []})
         await self._resolved(provider, None, monkeypatch)
         await repl.run()
-        assert "is assumed: the endpoint does not report one" in buffer.getvalue()
+        assert len(provider.seen) == 1
+        assert "it was not sent" not in " ".join(buffer.getvalue().split())
 
     @pytest.mark.asyncio
     async def test_a_reported_window_of_the_assumed_size_is_not_called_assumed(
@@ -707,6 +728,29 @@ class TestTheShareShownIsOfWhatTheModelTook:
         )
         assert repl._state.last_usage is not None
         assert repl._state.last_usage.total_tokens == 1_000
+
+    def test_two_copies_of_one_agent_called_together_keep_their_own(self) -> None:
+        from domyn.agents.planner_strategy.context_management.budget import ContextUsage
+        from tests.cli.test_repl_session import _repl
+
+        repl, _ = _repl()
+
+        def event(kind: ExecutionEventType, call: str, tokens: int | None = None) -> BaseEvent:
+            usage = ContextUsage(message_tokens=tokens or 0, context_window=100_000)
+            return BaseEvent(
+                event_type=kind,
+                author="Helper",
+                interaction_id=call,
+                metadata={"context_usage": usage.model_dump()} if tokens else {},
+            )
+
+        repl._record_usage(event(ExecutionEventType.LLM_START, "first", 1_000))
+        repl._record_usage(event(ExecutionEventType.LLM_START, "second", 2_000))
+        repl._record_usage(event(ExecutionEventType.LLM_END, "first"))
+        assert repl._state.last_usage is not None
+        assert repl._state.last_usage.total_tokens == 1_000
+        repl._record_usage(event(ExecutionEventType.LLM_END, "second"))
+        assert repl._state.last_usage.total_tokens == 2_000
 
 
 class TestSayingWhenPruningIsNoLongerEnough:
