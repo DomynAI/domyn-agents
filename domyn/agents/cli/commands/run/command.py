@@ -806,6 +806,10 @@ async def load_session_agent(path: Path, options: SessionOptions) -> tuple[Agent
         str(path),
         extra_workspace_roots=[str(d) for d in skill_dirs],
     )
+    # As `start_session` does for the CLI's own configuration: without it a reloaded
+    # agent had neither the default window nor the `max_tokens` assigning it lowers.
+    if path.resolve() == config_path().resolve():
+        await apply_context_window(getattr(agent, "llm_provider", None))
     return configure_session_agent(agent, options), raw
 
 

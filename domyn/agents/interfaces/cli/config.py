@@ -43,6 +43,7 @@ from domyn.agents.core.links import is_link_stat
 from domyn.agents.instructions.discovery import AUTODISCOVERY_DIRS
 from domyn.agents.interfaces.cli.theme import Theme
 from domyn.agents.llm import BaseLLMProvider
+from domyn.agents.llm.base import DEFAULT_MAX_TOKENS_SHARE
 from domyn.agents.llm.context_window import resolve_context_window
 from domyn.agents.loader import interpolate_env_vars
 from domyn.agents.logger import get_logger
@@ -171,7 +172,8 @@ a 200k+ model would reject it.
 
 async def apply_context_window(provider: Any) -> None:
     """Give the CLI configuration's provider a window: declared, else asked of the
-    provider (`resolve_context_window`), else `DEFAULT_CONTEXT_WINDOW`.
+    provider (`resolve_context_window`), else `DEFAULT_CONTEXT_WINDOW`. Assigning it
+    lowers the provider's ``max_tokens`` to its ``max_tokens_share`` of the window.
 
     Before the first request, so the session's first message is already measured
     against the window the server reports.
@@ -185,6 +187,27 @@ async def apply_context_window(provider: Any) -> None:
         return
     if await resolve_context_window(provider) is None:
         provider.context_window = DEFAULT_CONTEXT_WINDOW
+
+
+def max_tokens_share_of(raw: dict[str, Any] | None) -> float:
+    """The ``max_tokens_share`` the configuration's entrypoint provider sets, else
+    `DEFAULT_MAX_TOKENS_SHARE`.
+
+    Lenient, like the bundle's blocks (`_docker_options`): it is a hand edit, and a
+    value out of range is a warning and the default, not a wizard that cannot open.
+    Loading the file still refuses it, as it refuses any invalid provider key."""
+    if not raw:
+        return DEFAULT_MAX_TOKENS_SHARE
+    _, provider_dict = _entrypoint_agent_and_provider(raw)
+    value = provider_dict.get("max_tokens_share", DEFAULT_MAX_TOKENS_SHARE)
+    if isinstance(value, int | float) and not isinstance(value, bool) and 0 < value <= 1:
+        return float(value)
+    # A number or a typo from the config file: configuration, no content.
+    get_logger().warning(
+        f"ignoring max_tokens_share {value!r}: it must be above 0 and at most 1; "
+        f"using {DEFAULT_MAX_TOKENS_SHARE:g}"
+    )
+    return DEFAULT_MAX_TOKENS_SHARE
 
 
 AUTO_CONTEXT_WINDOW = "auto"
@@ -231,6 +254,13 @@ class ProviderConfig(BaseModel):
     that takes it (`BaseLLMProvider.send_reasoning`). Not asked by the wizard: off
     is a hand edit, for a model whose chat template does not read it, and is the
     only value written, so that edit survives a re-run of setup or a `/model`."""
+
+    max_tokens_share: float = Field(default=DEFAULT_MAX_TOKENS_SHARE, gt=0, le=1)
+    """Largest share of the window ``max_tokens`` may claim
+    (`BaseLLMProvider.max_tokens_share`): above it, the provider sends and reserves
+    that share instead, so the prompt keeps the rest. Not asked by the wizard: a hand
+    edit, written only when it differs from the default, so that edit survives a
+    re-run of setup or a `/model`."""
 
     max_tokens: int = 16000
     """Ceiling on one generation.
@@ -1224,6 +1254,8 @@ def configuration_v1_dict_from(
         provider_dict["context_window"] = provider.context_window
     if not provider.send_reasoning:
         provider_dict["send_reasoning"] = False
+    if provider.max_tokens_share != DEFAULT_MAX_TOKENS_SHARE:
+        provider_dict["max_tokens_share"] = provider.max_tokens_share
     if provider.vision:
         provider_dict["vision"] = True
     # Only set when a key actually resolves right now (env, or the credentials
@@ -1504,6 +1536,7 @@ def current_settings_from(
         context_window=provider_dict.get("context_window"),
         send_reasoning=provider_dict.get("send_reasoning", True),
         vision=provider_dict.get("vision", False),
+        max_tokens_share=max_tokens_share_of(raw),
     )
 
     bundles = {b.get("name"): b for b in raw.get("tool_bundles", []) if isinstance(b, dict)}
@@ -1663,6 +1696,10 @@ def _provider_items(raw: dict[str, Any]) -> list[ConfigItem]:
                 str(window) if (window := p.get("context_window")) else AUTO_CONTEXT_WINDOW,
             ),
             ("max tokens", str(max_tokens) if max_tokens is not None else "(default)"),
+            (
+                "max tokens share",
+                f"{p.get('max_tokens_share', DEFAULT_MAX_TOKENS_SHARE):g} of the window",
+            ),
             ("images", "read" if p.get("vision") is True else "not read"),
             ("api key", _secret_field_state(p.get("api_key"))),
         ]
