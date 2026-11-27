@@ -451,6 +451,30 @@ class TestWhenTheProviderRejectsTheRequestAsTooLong:
         assert provider.calls == 4
         assert "was not sent" in out and "LLM error" not in out
 
+    @pytest.mark.parametrize("assumed", [False, True], ids=["no window", "assumed window"])
+    @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
+    @pytest.mark.asyncio
+    async def test_a_paste_no_stated_window_holds_is_refused_before_compacting(
+        self, planner_name: str, assumed: bool
+    ) -> None:
+        """No window known, or one assumed, until the rejection states one, which the paste
+        is far over: the earlier exchanges are not summarized for a request that cannot go
+        out, neither before it is sent nor after."""
+        from domyn.agents.llm.context_window import assume_context_window
+
+        script = ("first " * 3_000, "second " * 3_000, "third " * 3_000, "long " * 300_000)
+        repl, buffer, provider = self._repl(
+            planner_name, script, set(), context_window=None, rejects_over_chars=200_000
+        )
+        if assumed:
+            assume_context_window(provider, 100_000)
+        await repl.run()
+        out = " ".join(buffer.getvalue().split())
+
+        assert provider.calls == 4, "a summary was paid for"
+        assert "compacting context" not in out
+        assert "it was not sent" in out
+
     @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
     @pytest.mark.asyncio
     async def test_a_second_rejection_ends_the_turn(self, planner_name: str) -> None:

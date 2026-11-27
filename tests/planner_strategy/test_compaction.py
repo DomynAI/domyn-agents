@@ -1185,6 +1185,9 @@ class TestAMessageNoWindowHolds:
         assert compactor.oversized(messages, agent) == {}
         assert compactor.refuse_over_window(messages, metadata, {}, "A", "A", provider) is None
         assert list(compactor.oversized(messages, agent, window=5_000)) == ["paste"]
+        assert compactor.awaits_rejection(messages, agent, None, None), "compacted for nothing"
+        assert not compactor.awaits_rejection(self._pasted(300), agent, None, None)
+        assert not compactor.awaits_rejection(messages, _Agent(5_000), None, None)
 
     def test_against_a_window_a_rejection_stated_the_estimate_is_enough(self) -> None:
         found = _active().oversized(self._pasted(16_500), _Agent(None), window=5_000)
@@ -1194,6 +1197,12 @@ class TestAMessageNoWindowHolds:
         """Tool definitions alone over the window: every message would be found."""
         tools = [{"type": "function", "function": {"name": "t", "description": "x" * 30_000}}]
         assert _active().oversized(self._pasted(300), _Agent(5_000), tools) == {}
+
+    def test_over_the_window_but_not_twice_it_no_message_is_to_blame(self) -> None:
+        """Measured against twice the window, a message beside them was blamed, and its
+        refusal read as a request smaller than the window."""
+        tools = [{"type": "function", "function": {"name": "t", "description": "x" * 22_500}}]
+        assert _active().oversized(self._pasted(9_000), _Agent(5_000), tools) == {}
 
     def test_against_half_a_rejected_request_a_message_counts_alone(self) -> None:
         """What every request carries is part of the half: added again, a greeting

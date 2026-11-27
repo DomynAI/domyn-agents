@@ -1450,14 +1450,18 @@ class Compactor(BaseModel):
         turn_context: list[LLMMessage] | None = None,
         window: int | None = None,
         stated: bool = True,
+        assumed: bool = False,
     ) -> dict[str, int]:
         """The requests that, with what every request carries, are over ``window`` (a
         rejection's; alone over it when ``stated`` is false), else over twice the agent's
-        (``_beyond_estimate_error``) unless it is assumed, which a rejection decides on:
-        event id to estimated tokens, without the correction."""
-        if window is None and not window_assumed(getattr(agent, "llm_provider", None)):
-            window = _beyond_estimate_error(_context_window(agent))
-        if not self.active or window is None:
+        (``_beyond_estimate_error``) unless it is assumed, which a rejection decides on
+        (counted all the same with ``assumed``): event id to estimated tokens, without the
+        correction."""
+        held = window
+        if window is None and (assumed or not window_assumed(getattr(agent, "llm_provider", None))):
+            held = _context_window(agent)
+            window = _beyond_estimate_error(held)
+        if not self.active or window is None or held is None:
             return {}
         fixed = 0
         if stated:
@@ -1466,7 +1470,8 @@ class Compactor(BaseModel):
             )
             fixed += int(self.estimator.estimate_messages(turn_context or []))
             fixed += int(self.estimator.estimate_tool_definitions(tool_defs or []))
-            if fixed >= window:
+            # Over the window by themselves: no message is to blame.
+            if fixed >= held:
                 return {}
         found: dict[str, int] = {}
         for message in messages:
@@ -1476,6 +1481,19 @@ class Compactor(BaseModel):
             if fixed + tokens > window:
                 found[message.source_event_id] = tokens
         return found
+
+    def awaits_rejection(
+        self,
+        messages: list[LLMMessage],
+        agent: Any,
+        tool_defs: list[dict[str, Any]] | None,
+        turn_context: list[LLMMessage] | None,
+    ) -> bool:
+        """A request a declared window would refuse, under an assumed one: nothing is
+        compacted for it before a rejection says whether the model holds it."""
+        return window_assumed(getattr(agent, "llm_provider", None)) and bool(
+            self.oversized(messages, agent, tool_defs, turn_context, assumed=True)
+        )
 
     def leave_out_oversized(
         self,

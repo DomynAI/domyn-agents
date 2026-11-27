@@ -752,7 +752,9 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 state=interaction_context.state,
                 key=record,
             )
-            if compaction_plan.needed:
+            if compaction_plan.needed and not self.compactor.awaits_rejection(
+                messages, agent, tool_defs, turn_context
+            ):
                 yield self.compactor.start_event(compaction_plan, agent.name)
                 messages, compaction_done = await self.compactor.run(
                     messages, compaction_plan, interaction_context.state, agent.name, record
@@ -1004,6 +1006,22 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                         )
                     )
                     if recovery is not None:
+                        # The window the rejection stated is the agent's now: a message
+                        # no window holds is left out before anything is compacted for it.
+                        _, left_out = self.compactor.leave_out_oversized(
+                            conversation,
+                            agent,
+                            tool_defs,
+                            turn_context,
+                            interaction_context.state,
+                            record,
+                        )
+                        if left_out is not None:
+                            yield left_out
+                            if left_out.event_type == ExecutionEventType.ERROR_OCCURRED:
+                                break
+                            iteration -= 1
+                            continue
                         if not overflow_retried:
                             overflow_retried = True
                             logger.warning(
