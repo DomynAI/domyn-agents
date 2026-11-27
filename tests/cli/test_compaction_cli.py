@@ -360,6 +360,28 @@ class TestWhenTheProviderRejectsTheRequestAsTooLong:
 
     @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
     @pytest.mark.asyncio
+    async def test_short_messages_are_never_to_blame(self, planner_name: str) -> None:
+        """Rejected with nothing to compact and no window stated: the system prompt and
+        tool definitions are most of the request, and against half of it, added to them,
+        every message was over. Left out, the conversation lost them for good."""
+        repl, buffer, provider = self._repl(
+            planner_name,
+            ("hi there", "what is 2+2?", "and now?"),
+            {2},
+            context_window=None,
+            prune_only=True,
+            body="prompt is too long",
+        )
+        await repl.run()
+        out = " ".join(buffer.getvalue().split())
+
+        assert provider.calls == 3
+        assert "Start a new conversation" in out and "left out" not in out
+        sent = " ".join(str(m.content) for m in provider.seen[-1])
+        assert "hi there" in sent and "what is 2+2?" in sent and "not sent" not in sent
+
+    @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
+    @pytest.mark.asyncio
     async def test_a_rejection_stating_no_window_quotes_none(self, planner_name: str) -> None:
         """Half the rejected request stands in for the window: no fact to tell the user."""
         repl, buffer, provider = self._repl(
@@ -502,6 +524,35 @@ class TestAMessageLargerThanTheWindow:
         await repl.run()
         assert "it was not sent" in " ".join(buffer.getvalue().split())
         assert "raise it there" not in buffer.getvalue()
+
+    def test_a_sub_agent_refused_gets_the_hint_of_its_own_window(self) -> None:
+        from domyn.agents import Agent
+        from tests.cli.test_repl_session import ScriptedProvider
+
+        config = {
+            "llm_providers": [
+                {"name": "main", "context_window": 100_000},
+                {"name": "sub", "context_window": 20_000},
+            ]
+        }
+        repl, _, _, _ = self._repl(config=config, window=100_000)
+        repl._agent.llm_provider.name = "main"
+        sub = Agent(
+            name="Helper",
+            description="helps",
+            instruction="Help.",
+            llm_provider=ScriptedProvider(name="sub", context_window=20_000),
+        )
+        repl._agent.sub_agents.append(sub)
+        repl._record_usage(
+            BaseEvent(
+                event_type=ExecutionEventType.ERROR_OCCURRED,
+                author="Helper",
+                error_code="RequestTooLong",
+            )
+        )
+        assert repl._window_refused == "Helper"
+        assert "20,000 tokens" in str(repl._window_hint(repl._window_refused))
 
     @pytest.mark.asyncio
     async def test_an_assumed_window_says_it_is_assumed(self) -> None:

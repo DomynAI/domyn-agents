@@ -689,3 +689,9 @@ class TestASummaryThatSavesNothing:
         assert out == messages
         assert done.metadata["changed"] is False
         assert read_record(state, AGENT).summary is None
+
+        # Every later request still over the threshold, a tool call later in the
+        # same turn say, would pay for the same summary again.
+        plan = compactor.assess(messages, _agent(provider))
+        await compactor.run(messages, plan, state, AGENT)
+        assert len(provider.seen) == 1, "the same span was summarized again"

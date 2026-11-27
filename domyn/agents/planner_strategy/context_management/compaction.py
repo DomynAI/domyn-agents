@@ -49,6 +49,11 @@ than tidiness: `context_visibility` means two agents can see different slices of
 the same history, so "what has been dropped" is not a property they share.
 """
 
+_DECLINED_KEY = "declined_summary"
+"""The event ids of the last span whose summary was no shorter than the text, in
+``InteractionContext.state``: every later request still over the threshold would
+pay for the same summary again."""
+
 _ANCHORS_KEY = "context_anchors"
 """Where the provider's count of the last request lives, per agent, in
 ``InteractionContext.state``: ``{"reported", "estimated", "generation", "deployment"}``.
@@ -1106,7 +1111,7 @@ class Compactor(BaseModel):
                 messages,
                 budget=plan.budget,
                 policy=self.policy,
-                state=state or {},
+                state=state if state is not None else {},
                 llm_provider=plan.llm_provider,
             )
         except Exception as exc:
@@ -1421,20 +1426,30 @@ class Compactor(BaseModel):
         tool_defs: list[dict[str, Any]] | None = None,
         turn_context: list[LLMMessage] | None = None,
         window: int | None = None,
+        stated: bool = True,
     ) -> dict[str, int]:
         """The requests in ``messages`` no request can carry, by event id, with their
         estimated tokens: alone, with what every request carries (system prompt, tool
-        definitions, turn context), over ``window``, the agent's when not given.
+        definitions, turn context), over ``window``, the agent's when not given. With a
+        stand-in for the window (``stated`` false: half a rejected request), alone over
+        it: what every request carries is in the half too.
 
-        Empty without a window or a strategy that acts. Estimated without the measured
-        correction, which belongs to text the provider has already counted.
+        Empty without a window or a strategy that acts, and when what every request
+        carries is over the window by itself: no message is to blame. Estimated without
+        the measured correction, which belongs to text the provider has already counted.
         """
         window = window or _context_window(agent)
         if not self.active or window is None:
             return {}
-        fixed = int(self.estimator.estimate_messages([m for m in messages if m.role == "system"]))
-        fixed += int(self.estimator.estimate_messages(turn_context or []))
-        fixed += int(self.estimator.estimate_tool_definitions(tool_defs or []))
+        fixed = 0
+        if stated:
+            fixed += int(
+                self.estimator.estimate_messages([m for m in messages if m.role == "system"])
+            )
+            fixed += int(self.estimator.estimate_messages(turn_context or []))
+            fixed += int(self.estimator.estimate_tool_definitions(tool_defs or []))
+            if fixed >= window:
+                return {}
         found: dict[str, int] = {}
         for message in messages:
             if not message.source_event_id or not _is_request(message):
@@ -1460,7 +1475,7 @@ class Compactor(BaseModel):
         current request is one of them); a ``CONTEXT_COMPACTED`` lets it go on.
         ``stated`` is false when ``window`` is a stand-in, which the refusal then does
         not quote."""
-        oversized = self.oversized(messages, agent, tool_defs, turn_context, window)
+        oversized = self.oversized(messages, agent, tool_defs, turn_context, window, stated)
         if not oversized:
             return messages, None
         messages = self.leave_out(messages, oversized, state, key)
@@ -1478,20 +1493,23 @@ class Compactor(BaseModel):
         state: dict[str, Any] | None,
         key: str,
         author: str,
+        rejected_tokens: int,
     ) -> BaseEvent:
         """The event ending a turn the provider rejected as too long when nothing could
         be compacted or left out. The current request is left out when it is the last
-        message, as in ``refuse_over_window``: the request before it went through, so
-        the conversation stays usable. A request under the window can be rejected for
-        the room its answer needs (vLLM before 0.32)."""
+        message and over half the ``rejected_tokens`` request, as in
+        ``refuse_over_window``: the request before it went through, so the conversation
+        stays usable. A request under the window can be rejected for the room its
+        answer needs (vLLM before 0.32). A smaller one is not to blame."""
         last = conversation[-1] if conversation else None
-        if last is not None and last.source_event_id and _is_request(last):
-            self.leave_out(
-                conversation,
-                {last.source_event_id: int(self.estimator.estimate_messages([last]))},
-                state,
-                key,
-            )
+        tokens = int(self.estimator.estimate_messages([last])) if last is not None else 0
+        if (
+            last is not None
+            and last.source_event_id
+            and _is_request(last)
+            and tokens > rejected_tokens // 2
+        ):
+            self.leave_out(conversation, {last.source_event_id: tokens}, state, key)
             return self.refusal(
                 REQUEST_TOO_LONG,
                 "The model rejected the request as too long, and the conversation cannot be "
@@ -2033,6 +2051,11 @@ class TwoPhaseCompaction(CompactionStrategy):
             note="context compacted, but the summary failed",
             pruned_event_ids=pruned_ids,
         )
+        declined = phase_one.model_copy(
+            update={"note": "context compacted: the summary was no shorter than the text"}
+        )
+        if state.get(_DECLINED_KEY) == event_ids:
+            return declined
         try:
             summary = await self.summarizer.summarize(pruned_middle, llm_provider=provider)
         except Exception as exc:
@@ -2055,9 +2078,8 @@ class TwoPhaseCompaction(CompactionStrategy):
             after_pruning
         ):
             # A one-line greeting came back as a longer paragraph: kept, it grew the context.
-            return phase_one.model_copy(
-                update={"note": "context compacted: the summary was no shorter than the text"}
-            )
+            state[_DECLINED_KEY] = event_ids
+            return declined
 
         return CompactionOutcome(
             messages=summarized,

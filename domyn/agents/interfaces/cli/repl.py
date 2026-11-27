@@ -417,8 +417,8 @@ class Repl:
         # never have to care whether the caller passed a relative path.
         self._config_file = config_file.resolve() if config_file is not None else None
         self._state = SessionState()
-        # A turn ended because its request did not fit the window: say where the window comes from.
-        self._window_refused = False
+        # The agent whose request did not fit the window: say where its window comes from.
+        self._window_refused: str | None = None
         # What the last session left, with `-v` set on top like `/verbose` would; saved
         # whole, by `save`, whenever one of them changes.
         self._prefs = CliState.load()
@@ -1392,8 +1392,8 @@ class Repl:
                 style=self._theme.style("accent"),
                 highlight=False,
             )
-        hint = self._window_hint() if self._window_refused else None
-        self._window_refused = False
+        hint = self._window_hint(self._window_refused) if self._window_refused else None
+        self._window_refused = None
         if hint:
             self._console.print(f"  {hint}", style=self._theme.style("meta"), highlight=False)
         shown = context_view.indicator(self._state.last_usage)
@@ -1402,10 +1402,10 @@ class Repl:
         text, style_name = shown
         self._console.print(f"  {text}", style=self._theme.style(style_name), highlight=False)
 
-    def _window_hint(self) -> str | None:
-        """Where the window a turn was refused against comes from, when it can be changed
-        here: declared in the config, or assumed because the endpoint reports none."""
-        provider = getattr(self._agent, "llm_provider", None)
+    def _window_hint(self, agent_name: str) -> str | None:
+        """Where the window ``agent_name`` was refused against comes from, when it can be
+        changed here: declared in the config, or assumed because the endpoint reports none."""
+        provider = getattr(self._agent_named(agent_name), "llm_provider", None)
         window = getattr(provider, "context_window", None)
         if not isinstance(window, int):
             return None
@@ -1430,6 +1430,20 @@ class Repl:
             )
         return None
 
+    def _agent_named(self, name: str) -> Any:
+        """The agent of the tree called ``name``, the root when none is."""
+        pending, seen = [self._agent], set()
+        while pending:
+            agent = pending.pop()
+            if getattr(agent, "name", None) == name:
+                return agent
+            if id(agent) not in seen:
+                seen.add(id(agent))
+                pending.extend(
+                    a for a in getattr(agent, "sub_agents", None) or [] if not isinstance(a, str)
+                )
+        return self._agent
+
     def _record_usage(self, event: BaseEvent) -> None:
         """Collect the context measurement, or a model call's cost, if the event carries one.
 
@@ -1446,7 +1460,7 @@ class Repl:
         metadata = event.metadata or {}
         usage = self._state.last_usage
         if event.error_code in (REQUEST_TOO_LONG, CONVERSATION_TOO_LONG):
-            self._window_refused = True
+            self._window_refused = event.author or getattr(self._agent, "name", "")
             return
         if event.event_type is ExecutionEventType.CONTEXT_COMPACTED:
             saved = metadata.get("tokens_saved")

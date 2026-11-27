@@ -1023,7 +1023,11 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                         )
                         if left_out is None:
                             left_out = self.compactor.refuse_rejected(
-                                conversation, interaction_context.state, record, agent.name
+                                conversation,
+                                interaction_context.state,
+                                record,
+                                agent.name,
+                                recovery.current_tokens,
                             )
                         yield left_out
                         if left_out.event_type == ExecutionEventType.ERROR_OCCURRED:

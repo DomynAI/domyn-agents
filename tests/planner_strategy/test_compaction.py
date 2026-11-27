@@ -1107,6 +1107,35 @@ class TestAMessageNoWindowHolds:
         assert _active().oversized(messages, _Agent(4_500)) == {}
         assert list(_active().oversized(messages, _Agent(4_500), tools)) == ["paste"]
 
+    def test_over_the_window_without_any_message_none_is_to_blame(self) -> None:
+        """Tool definitions alone over the window: every message would be found."""
+        tools = [{"type": "function", "function": {"name": "t", "description": "x" * 30_000}}]
+        assert _active().oversized(self._pasted(300), _Agent(5_000), tools) == {}
+
+    def test_against_half_a_rejected_request_a_message_counts_alone(self) -> None:
+        """What every request carries is part of the half: added again, a greeting
+        beside large tool definitions was over it."""
+        tools = [{"type": "function", "function": {"name": "t", "description": "x" * 30_000}}]
+        messages = self._pasted(300)
+        half = (_active().tokens_after(messages) + 10_000) // 2
+        assert _active().oversized(messages, _Agent(None), tools, None, half, False) == {}
+        assert list(
+            _active().oversized(self._pasted(60_000), _Agent(None), tools, None, half, False)
+        ) == ["paste"]
+
+    def test_a_rejected_request_is_left_out_only_when_it_is_most_of_it(self) -> None:
+        compactor = _active()
+        state: dict[str, Any] = {}
+        messages = self._pasted(300)
+        rejected = compactor.tokens_after(messages) + 10_000
+
+        event = compactor.refuse_rejected(messages, state, "A", "A", rejected)
+
+        assert event.error_code == "ConversationTooLong"
+        assert compactor.replay(messages, state, "A") == messages, "nothing is left out"
+        event = compactor.refuse_rejected(messages, state, "A", "A", 100)
+        assert event.error_code == "RequestTooLong"
+
     def test_without_a_window_or_a_strategy_nothing_is_found(self) -> None:
         assert _active().oversized(self._pasted(30_000), _Agent(None)) == {}
         inert = Compactor(strategy=NoOpCompaction())
