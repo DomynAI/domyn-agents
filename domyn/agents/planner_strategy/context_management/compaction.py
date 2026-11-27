@@ -1339,9 +1339,22 @@ class Compactor(BaseModel):
                 # summarizing, or by starting a new conversation.
                 "sufficient": sufficient,
                 "threshold_tokens": threshold,
+                # Against the stand-in threshold of a rejection: how the turn goes on
+                # is the planner's to say (a retry, or a refusal).
+                "rejected": plan.rejected,
+                "request_tokens": self._request_tokens(outcome.messages, plan.budget),
             },
         )
         return outcome.messages, done
+
+    def _request_tokens(self, messages: list[LLMMessage], budget: Budget | None) -> int | None:
+        """The current request with what every request carries, estimated: over the
+        threshold, no compaction can get under it."""
+        requests = _last_requests(messages, 1)
+        if budget is None or not requests:
+            return None
+        system = [m for m in messages if m.role == "system"]
+        return int(self.estimator.estimate_messages(system + requests)) + budget.fixed_tokens
 
     def usage_metadata(
         self,

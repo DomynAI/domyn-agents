@@ -455,15 +455,20 @@ class EventRenderer:
         else:
             self._work("context compacted", "meta")
 
-        if meta.get("sufficient") is False:
+        if meta.get("sufficient") is False and not meta.get("rejected"):
             # It pruned, and it was not enough. Saying only the first part is how
             # the next line the person sees is a rejected request they have no
-            # reason to connect to this.
-            self._work(
-                "still over the limit: what is left cannot be shortened further"
-                " — /clear starts a new conversation",
-                "warning",
-            )
+            # reason to connect to this. After a rejection the planner says how
+            # the turn goes on, and a new conversation would not help a message
+            # that alone is over the limit.
+            request, threshold = meta.get("request_tokens"), meta.get("threshold_tokens")
+            if isinstance(request, int) and isinstance(threshold, int) and request > threshold:
+                note = (
+                    "this message alone takes most of the window, and leaves the answer less room"
+                )
+            else:
+                note = "what is left cannot be shortened further — /clear starts a new conversation"
+            self._work(f"still over the limit: {note}", "warning")
 
     def finish(self) -> None:
         """Close any dangling stream. Call when a turn ends."""

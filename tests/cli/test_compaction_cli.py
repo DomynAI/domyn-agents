@@ -391,6 +391,7 @@ class TestWhenTheProviderRejectsTheRequestAsTooLong:
 
         assert "was not sent" in out
         assert "Start a new conversation" not in out
+        assert "/clear" not in out and "this message alone" in out
         assert out.count("Hello from the agent.") == 1
         last = " ".join(str(m.content) for m in provider.seen[-1])
         assert "long long" not in last and "not sent" in last
@@ -580,6 +581,36 @@ class TestSayingWhenPruningIsNoLongerEnough:
         assert "nothing to compact" in out
         assert "still over the limit" in out
         assert out.index("nothing to compact") < out.index("still over the limit")
+
+    def test_a_message_alone_over_the_limit_is_not_sent_to_clear(self) -> None:
+        """A new conversation would not help a message that alone is over the limit."""
+        renderer, buffer = _renderer()
+        renderer.begin_turn()
+        renderer.render(
+            _event(
+                ExecutionEventType.CONTEXT_COMPACTED,
+                changed=False,
+                sufficient=False,
+                threshold_tokens=24_960,
+                request_tokens=34_800,
+            )
+        )
+        out = " ".join(buffer.getvalue().split())
+        assert "this message alone" in out
+        assert "/clear" not in out
+
+    def test_after_a_rejection_the_planner_says_how_it_goes_on(self) -> None:
+        renderer, buffer = _renderer()
+        renderer.begin_turn()
+        renderer.render(
+            _event(
+                ExecutionEventType.CONTEXT_COMPACTED,
+                changed=False,
+                sufficient=False,
+                rejected=True,
+            )
+        )
+        assert "still over the limit" not in buffer.getvalue()
 
 
 class TestMeasuringFromTheProvidersCountInARealSession:
