@@ -14,7 +14,7 @@ from domyn.agents.interfaces.cli import Theme, setup
 from domyn.agents.interfaces.cli import config as cfg
 from domyn.agents.interfaces.cli import select as select_mod
 
-FIELDS = ["openai", "m", "", "", "", ""]
+FIELDS = ["openai", "", "", "m", "", ""]
 """The model section's answers: provider, model, url, api key, max tokens, context window."""
 
 NAME = ""

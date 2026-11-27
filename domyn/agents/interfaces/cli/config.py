@@ -119,21 +119,24 @@ PROVIDER_HINTS: dict[str, dict[str, str]] = {
     "open_router": {"env": "OPENROUTER_API_KEY", "models": "https://openrouter.ai/models"},
     "cerebras": {"env": "CEREBRAS_API_KEY", "models": "https://inference-docs.cerebras.ai/models"},
     "vllm": {"env": "VLLM_API_KEY", "models": "your vLLM deployment"},
-    "custom": {"env": "LLM_API_KEY", "models": "your endpoint"},
 }
 
 # Providers whose endpoint we cannot guess.
-REQUIRES_URL = ("domyn", "vllm", "custom")
+REQUIRES_URL = ("domyn", "vllm")
 
 _CHAT_COMPLETIONS = "/chat/completions"
 
 
-def vllm_chat_url(url: str) -> str:
+_VERSION_SEGMENT = re.compile(r"v\d+")
+
+
+def chat_completions_url(url: str) -> str:
     """The chat completions endpoint for a vLLM server URL typed into ``domyn setup``.
 
     ``VLLMProvider`` posts to its ``url`` as given, so a server's base URL would be a
-    404 on the first message. ``http://host:8000`` and ``http://host:8000/v1`` both
-    become ``http://host:8000/v1/chat/completions``; a URL already ending in
+    404 on the first message. ``http://host:8000`` becomes
+    ``http://host:8000/v1/chat/completions``; a URL ending in a version (``…/v1``,
+    ``…/api/v2``) gets ``/chat/completions`` after it; one already ending in
     ``/chat/completions`` is kept as written, so a gateway serving it under another
     prefix still works. Query and fragment are kept.
 
@@ -144,7 +147,8 @@ def vllm_chat_url(url: str) -> str:
     path = parts.path.rstrip("/")
     if path.endswith(_CHAT_COMPLETIONS):
         return url
-    path += _CHAT_COMPLETIONS if path.endswith("/v1") else "/v1" + _CHAT_COMPLETIONS
+    last = path.rsplit("/", 1)[-1]
+    path += _CHAT_COMPLETIONS if _VERSION_SEGMENT.fullmatch(last) else "/v1" + _CHAT_COMPLETIONS
     return urlunsplit(parts._replace(path=path))
 
 

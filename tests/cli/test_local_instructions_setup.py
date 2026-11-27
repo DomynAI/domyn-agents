@@ -23,7 +23,7 @@ from domyn.agents.interfaces.cli import select as select_mod
 AUTO = [".domyn", ".agents"]
 """What a yes writes, in precedence order."""
 
-FIELDS = ["openai", "m", "", "", "", ""]
+FIELDS = ["openai", "", "", "m", "", ""]
 """The answers up to the context window; the instructions path and this question follow."""
 
 # Captured before the CLI conftest replaces them for every other wizard test.

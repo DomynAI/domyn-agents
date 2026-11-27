@@ -62,10 +62,10 @@ from domyn.agents.interfaces.cli.config import (
     CLI_DEFAULT_TOOL_BUNDLE_NAME,
     CLI_PLANNER,
     CONFIG_FILENAME,
+    chat_completions_url,
     config_path,
     drop_credentials_from_environment,
     use_project,
-    vllm_chat_url,
 )
 
 DEFAULT_INSTRUCTIONS = """\
@@ -147,7 +147,7 @@ def run_headless_config(
     provider: dict[str, Any] = {
         "name": CLI_DEFAULT_PROVIDER_NAME,
         "type": "vllm",
-        "url": vllm_chat_url(url),
+        "url": chat_completions_url(url),
         "model_name": model,
         "generation_params": generation_params,
     }

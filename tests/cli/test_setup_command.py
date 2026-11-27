@@ -39,9 +39,9 @@ class TestShow:
                 "builtins.input",
                 side_effect=[
                     "openai",
+                    "",
+                    "",
                     "gpt-4o-mini",
-                    "",
-                    "",
                     "",
                     "",
                     "",
@@ -91,9 +91,9 @@ class TestRun:
                 "builtins.input",
                 side_effect=[
                     "openai",
+                    "",
+                    "",
                     "gpt-4o-mini",
-                    "",
-                    "",
                     "",
                     "",
                     "",

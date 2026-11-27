@@ -398,7 +398,7 @@ class TestInTheWizard:
 
     def test_the_answer_is_saved(self, tmp_path):
         # provider, model, url, api key, max tokens, context window, memory
-        result = self.run(["openai", "m", "", "", "", "", "2"], tmp_path)
+        result = self.run(["openai", "", "", "m", "", "", "2"], tmp_path)
 
         assert manager_of(result)["file_path"].endswith("memory.md")
 
@@ -406,7 +406,7 @@ class TestInTheWizard:
         from domyn.agents.interfaces.cli.prompt import GoBack
 
         # Back from memory to the context window, typed this time, then memory again.
-        answers = ["openai", "m", "", "", "", "", GoBack(), "64000", "2"]
+        answers = ["openai", "", "", "m", "", "", GoBack(), "64000", "2"]
 
         result = self.run(answers, tmp_path)
 
@@ -493,7 +493,7 @@ class TestWhoDecidesWhatToRemember:
             monkeypatch.delenv(name, raising=False)
         console = Console(file=io.StringIO(), width=100, force_terminal=False)
         # provider, model, url, api key, max tokens, context window, memory: no "who decides"
-        answers = ["openai", "m", "", "", "", "", "2"]
+        answers = ["openai", "", "", "m", "", "", "2"]
         with patch("builtins.input", side_effect=answers):
             result = setup.run_setup(
                 console, Theme.build(allow_animation=False), path=tmp_path / "config.yaml"
@@ -516,7 +516,7 @@ class TestWhoDecidesWhatToRemember:
             monkeypatch.delenv(name, raising=False)
         console = Console(file=io.StringIO(), width=100, force_terminal=False)
         # provider, model, url, api key, max tokens, context window, memory, who decides
-        answers = ["openai", "m", "", "", "", "", "2", MemoryDecider.MODEL]
+        answers = ["openai", "", "", "m", "", "", "2", MemoryDecider.MODEL]
         with patch("builtins.input", side_effect=answers):
             result = setup.run_setup(
                 console, Theme.build(allow_animation=False), path=tmp_path / "config.yaml"
@@ -539,7 +539,7 @@ class TestWhoDecidesWhatToRemember:
             monkeypatch.delenv(name, raising=False)
         console = Console(file=io.StringIO(), width=100, force_terminal=False)
         # A further answer would be left over: input() raises StopIteration if asked.
-        with patch("builtins.input", side_effect=["openai", "m", "", "", "", "", "1"]):
+        with patch("builtins.input", side_effect=["openai", "", "", "m", "", "", "1"]):
             result = setup.run_setup(
                 console, Theme.build(allow_animation=False), path=tmp_path / "config.yaml"
             )
@@ -567,7 +567,7 @@ class TestAddingAndRemovingTheDecisionModel:
         buffer = io.StringIO()
         console = Console(file=buffer, width=200, force_terminal=False)
         # provider, model, url, api key, max tokens, context window, then `answers`
-        with patch("builtins.input", side_effect=["openai", "m", "", "", "", "", *answers]):
+        with patch("builtins.input", side_effect=["openai", "", "", "m", "", "", *answers]):
             result = setup.run_setup(
                 console,
                 Theme.build(allow_animation=False),

@@ -17,7 +17,7 @@ from domyn.agents.interfaces.cli import Theme, setup
 from domyn.agents.interfaces.cli import config as cfg
 from domyn.agents.interfaces.cli import select as select_mod
 
-FIELDS = ["openai", "m", "", "", "", ""]
+FIELDS = ["openai", "", "", "m", "", ""]
 """The answers up to the max tokens and context window; the skill steps follow."""
 
 AUTO_DIRS = (Path(".domyn/skills"), Path(".agents/skills"))

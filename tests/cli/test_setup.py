@@ -53,7 +53,7 @@ class TestAFreshWizardRun:
         target = tmp_path / "config.yaml"
         with patch(
             "builtins.input",
-            side_effect=["openai", "gpt-4o-mini", "", "", "", "", ""],
+            side_effect=["openai", "", "", "gpt-4o-mini", "", "", ""],
         ):
             result = setup.run_setup(console, theme, path=target)
 
@@ -74,7 +74,7 @@ class TestAFreshWizardRun:
         target = tmp_path / "config.yaml"
         with patch(
             "builtins.input",
-            side_effect=["openai", "m", "", "", "", "", ""],
+            side_effect=["openai", "", "", "m", "", "", ""],
         ):
             result = setup.run_setup(console, theme, path=target)
 
@@ -94,7 +94,7 @@ class TestAFreshWizardRun:
         target = tmp_path / "config.yaml"
         with patch(
             "builtins.input",
-            side_effect=["openai", "m", "", "sk-super-secret", "", "", ""],
+            side_effect=["openai", "", "sk-super-secret", "m", "", "", ""],
         ):
             result = setup.run_setup(console, theme, path=target)
 
@@ -109,7 +109,7 @@ class TestAFreshWizardRun:
         target = tmp_path / "config.yaml"
         with patch(
             "builtins.input",
-            side_effect=["vllm", "m", "", "", "", "", ""],
+            side_effect=["vllm", "", "", "m", "", "", ""],
         ):
             result = setup.run_setup(console, theme, path=target)
 
@@ -136,6 +136,20 @@ def _domyn_answers(
     """What the wizard is asked for Domyn, in order. ``key=None``: it is already set, so not asked."""
     asked_key = [] if key is None else [key]
     return ["domyn", url, space, configuration, *asked_key, model, "", "", "A", "i", ""]
+
+
+class TestTheCustomProviderIsNotOffered:
+    """`custom` differs from `vllm` only by headers the wizard cannot set, so it is not
+    offered until it can; a config holding it still runs, it is just not picked again."""
+
+    def test_it_is_not_among_the_providers(self) -> None:
+        assert "custom" not in cfg.PROVIDER_HINTS
+
+    def test_a_config_holding_it_opens_the_picker_on_the_first_provider(
+        self, console: MagicMock, theme: Theme
+    ) -> None:
+        with patch("builtins.input", side_effect=[""]):
+            assert setup._choose_provider(console, theme, "custom") == "domyn"
 
 
 class TestTheDomynProvider:
@@ -302,7 +316,7 @@ class TestTheDomynProvider:
     ) -> None:
         with patch(
             "builtins.input",
-            side_effect=["openai", "gpt-4o-mini", "", "", "", "", "A", "i", ""],
+            side_effect=["openai", "", "", "gpt-4o-mini", "", "", "A", "i", ""],
         ):
             result = setup.run_setup(console, theme, path=tmp_path / "config.yaml")
 
@@ -373,7 +387,7 @@ class TestDiscoveringTheSpacesModels:
             patch("builtins.input", side_effect=["1"]),
             patch.object(setup, "select", wraps=setup.select) as picker,
         ):
-            setup._choose_domyn_model(
+            setup._choose_listed_model(
                 console, theme, {"qwen": "vllm Qwen/Qwen3-32B", "gpt": ""}, current=""
             )
 
@@ -523,7 +537,7 @@ class TestMaxTokensAndContextWindow:
         target = tmp_path / "config.yaml"
         with patch(
             "builtins.input",
-            side_effect=["openai", "m", "", "", "8000", "32000", ""],
+            side_effect=["openai", "", "", "m", "8000", "32000", ""],
         ):
             result = setup.run_setup(console, theme, path=target)
 
@@ -538,7 +552,7 @@ class TestMaxTokensAndContextWindow:
         target = tmp_path / "config.yaml"
         with patch(
             "builtins.input",
-            side_effect=["openai", "m", "", "", "", "", ""],
+            side_effect=["openai", "", "", "m", "", "", ""],
         ):
             result = setup.run_setup(console, theme, path=target)
 
@@ -565,7 +579,7 @@ class TestMaxTokensAndContextWindow:
         target = tmp_path / "config.yaml"
         with patch(
             "builtins.input",
-            side_effect=["openai", "m", "", "", "", "150000", "A", "i", "", ""],
+            side_effect=["openai", "", "", "m", "", "150000", "A", "i", "", ""],
         ):
             result = setup.run_setup(console, theme, path=target)
 
@@ -582,7 +596,7 @@ class TestMaxTokensAndContextWindow:
         target = tmp_path / "config.yaml"
         with patch(
             "builtins.input",
-            side_effect=["openai", "m", "", "", "not-a-number", "4096", "", ""],
+            side_effect=["openai", "", "", "m", "not-a-number", "4096", "", ""],
         ):
             result = setup.run_setup(console, theme, path=target)
 
@@ -595,7 +609,7 @@ class TestMaxTokensAndContextWindow:
         target = tmp_path / "config.yaml"
         with patch(
             "builtins.input",
-            side_effect=["openai", "m", "", "", "8000", "32000", ""],
+            side_effect=["openai", "", "", "m", "8000", "32000", ""],
         ):
             first = setup.run_setup(console, theme, path=target)
 
@@ -617,14 +631,14 @@ class TestProviderOnly:
         self, console: MagicMock, theme: Theme, tmp_path: Path
     ) -> None:
         target = tmp_path / "config.yaml"
-        with patch("builtins.input", side_effect=["openai", "m1", "", "", "", "", ""]):
+        with patch("builtins.input", side_effect=["openai", "", "", "m1", "", "", ""]):
             first = setup.run_setup(console, theme, path=target)
         assert first is not None
         # Setup no longer asks for them, so they are hand-edited.
         first["entrypoint"] = first["agents"][0]["name"] = "MyAgent"
         first["agents"][0]["instruction"] = "My instruction"
 
-        with patch("builtins.input", side_effect=["anthropic", "m2", "", "", "", ""]):
+        with patch("builtins.input", side_effect=["anthropic", "", "", "m2", "", ""]):
             second = setup.run_setup(console, theme, first, path=target, provider_only=True)
 
         assert second is not None
@@ -648,7 +662,7 @@ class TestRenderConfig:
         target = tmp_path / "config.yaml"
         with patch(
             "builtins.input",
-            side_effect=["openai", "gpt-4o-mini", "", "", "", "", ""],
+            side_effect=["openai", "", "", "gpt-4o-mini", "", "", ""],
         ):
             result = setup.run_setup(console, theme, path=target)
 
@@ -762,7 +776,7 @@ class TestTextFields:
         self, console: MagicMock, theme: Theme, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         asked: list[tuple[str, bool]] = []
-        answers = iter(["gpt-4o-mini", "", "", "", "", "", ""])
+        answers = iter(["", "", "gpt-4o-mini", "", "", "", ""])
 
         def fake_ask(
             console: object,
@@ -782,6 +796,39 @@ class TestTextFields:
 
         hidden = [label for label, password in asked if password]
         assert hidden == ["Paste key (empty = skip)"]
+
+    @pytest.mark.parametrize("provider", ["domyn", "openai", "anthropic", "vllm"])
+    def test_the_connection_is_asked_before_the_model(
+        self,
+        console: MagicMock,
+        theme: Theme,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        provider: str,
+    ) -> None:
+        # Every provider: URL, then key, then model. The connection decides which models
+        # there are, and Domyn's and vLLM's are listed with it.
+        for name in ("VLLM_API_KEY", "DOMYN_API_KEY", "DOMYN_BASE_URL", "DOMYN_SPACE_ID"):
+            monkeypatch.delenv(name, raising=False)  # so every connection question is asked
+        asked: list[str] = []
+
+        def fake_ask(console: object, theme: object, label: str, current: str = "", **_: object):
+            asked.append(label)
+            return current
+
+        monkeypatch.setattr(setup, "_ask", fake_ask)
+        with patch("builtins.input", return_value=provider):
+            setup.run_setup(console, theme, path=tmp_path / "config.yaml")
+
+        url, key, model = (
+            next(i for i, label in enumerate(asked) if matches(label))
+            for matches in (
+                lambda label: label.startswith(("URL", "Platform URL")),
+                lambda label: label.startswith("Paste key"),
+                lambda label: label.startswith("Model"),
+            )
+        )
+        assert url < key < model
 
     def test_ctrl_c_in_a_field_aborts_without_saving(
         self, console: MagicMock, theme: Theme, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -887,7 +934,7 @@ class TestErasingAFieldGivesItsDefault:
         )
 
 
-FIELDS = ["openai", "m", "", "", "", ""]
+FIELDS = ["openai", "", "", "m", "", ""]
 """Answers up to and including the context window; the skills question follows."""
 
 
@@ -990,7 +1037,7 @@ class TestChoosingTheSkills:
             first = setup.run_setup(console, theme, path=target)
         assert first is not None
 
-        with patch("builtins.input", side_effect=["anthropic", "m2", "", "", "", ""]):
+        with patch("builtins.input", side_effect=["anthropic", "", "", "m2", "", ""]):
             second = setup.run_setup(console, theme, first, path=target, provider_only=True)
 
         assert second is not None
@@ -1519,7 +1566,7 @@ class TestAVLLMUrlIsCompleted:
     def test_the_saved_url(
         self, console: MagicMock, theme: Theme, tmp_path: Path, typed: str, saved: str
     ) -> None:
-        with patch("builtins.input", side_effect=["vllm", "m", typed, "", "", "", ""]):
+        with patch("builtins.input", side_effect=["vllm", typed, "", "m", "", "", ""]):
             result = setup.run_setup(console, theme, path=tmp_path / "config.yaml")
 
         assert result is not None
@@ -1530,7 +1577,7 @@ class TestAVLLMUrlIsCompleted:
     ) -> None:
         with patch(
             "builtins.input",
-            side_effect=["custom", "m", "http://host:8000", "", "", "", ""],
+            side_effect=["openai", "http://host:8000", "", "m", "", "", ""],
         ):
             result = setup.run_setup(console, theme, path=tmp_path / "config.yaml")
 
@@ -1547,7 +1594,7 @@ class TestAVLLMUrlIsCompleted:
         buffer = io.StringIO()
         with patch(
             "builtins.input",
-            side_effect=["vllm", "m", "http://user:pw@host:8000", "", "", "", ""],
+            side_effect=["vllm", "http://user:pw@host:8000", "", "m", "", "", ""],
         ):
             setup.run_setup(Console(file=buffer, width=160), theme, path=tmp_path / "config.yaml")
 

@@ -751,9 +751,25 @@ class _Exporter:
             return f"${{{candidate}}}"
 
         for provider in self.config.get("llm_providers") or []:
-            if isinstance(provider, dict) and "api_key" in provider:
-                hint = PROVIDER_HINTS.get(str(provider.get("type")), {}).get("env", "LLM_API_KEY")
+            if not isinstance(provider, dict):
+                continue
+            hint = PROVIDER_HINTS.get(str(provider.get("type")), {}).get("env", "LLM_API_KEY")
+            if "api_key" in provider:
                 provider["api_key"] = reference(provider["api_key"], hint)
+            # The custom provider takes its credentials in `headers`: an Authorization
+            # header keeps its scheme and gets the provider's key variable for the token.
+            headers = provider.get("headers")
+            if isinstance(headers, dict):
+                for header, value in headers.items():
+                    if not _SECRET_HEADER.search(str(header)):
+                        continue
+                    scheme, _, token = str(value).partition(" ")
+                    if str(header).lower() == "authorization" and token:
+                        headers[header] = f"{scheme} {reference(token, hint)}"
+                    elif str(header).lower() == "authorization":
+                        headers[header] = reference(value, hint)
+                    else:
+                        headers[header] = reference(value, f"{provider.get('name')}_{header}")
 
         for section in ("mcp_servers", "tools"):
             for entry in self.config.get(section) or []:

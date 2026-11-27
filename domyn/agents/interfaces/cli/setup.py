@@ -22,6 +22,7 @@ import asyncio
 import copy
 import logging
 import os
+import re
 import shutil
 import sys
 from collections.abc import Callable, Collection, Iterable
@@ -60,6 +61,7 @@ from domyn.agents.interfaces.cli.config import (
     ProviderConfig,
     _scrub_url,
     active_project,
+    chat_completions_url,
     config_path,
     configuration_v1_dict_from,
     credentials_path,
@@ -83,13 +85,13 @@ from domyn.agents.interfaces.cli.config import (
     read_credentials,
     resolve_api_key,
     skills_install_dir,
-    vllm_chat_url,
     write_credential,
 )
 from domyn.agents.interfaces.cli.prompt import GoBack, back_key, interactive_terminal, read_line
 from domyn.agents.interfaces.cli.select import multiselect, select
 from domyn.agents.llm import LLMProviderFactory
 from domyn.agents.llm.base import image_message
+from domyn.agents.llm.context_window import get_json, models_url, window_from_model_entry
 from domyn.agents.planner_strategy.context_management.compaction import CompactionConfig
 from domyn.agents.skills.catalog import (
     BuiltinSkill,
@@ -682,7 +684,6 @@ _PROVIDER_BLURB = {
     "open_router": "many models behind one key",
     "cerebras": "Cerebras inference",
     "vllm": "your own vLLM deployment",
-    "custom": "any OpenAI-compatible endpoint",
 }
 
 
@@ -776,10 +777,10 @@ def _discover_models(console: Console, theme: Theme, settings: PlatformSettings)
     return models
 
 
-def _choose_domyn_model(
+def _choose_listed_model(
     console: Console, theme: Theme, models: dict[str, str], current: str
 ) -> str:
-    """Pick one of the space's models from the list, or type a name that is not on it.
+    """Pick one of the listed models, or type a name that is not on it.
 
     Ctrl-B on the typed name goes back to the list."""
     options = [*models, _OTHER_MODEL]
@@ -802,6 +803,80 @@ def _choose_domyn_model(
         except GoBack:
             _back_to(mark)
             continue
+
+
+# LiteLLM's `mode` for a model a chat agent can use; any other (`embedding`, `rerank`,
+# `evaluation`, `audio_transcription`…) is left out of the list.
+_CHAT_MODES = frozenset({"chat", "responses"})
+# A plain vLLM server states no mode, nor does a gateway for most models: there the
+# name is all there is to go by.
+_NOT_CHAT_NAME = re.compile(r"embed|rerank", re.IGNORECASE)
+
+
+def _serves_chat(entry: dict[str, Any]) -> bool:
+    """Whether a ``/models`` entry is a model a chat agent can use: its ``mode`` when the
+    endpoint states one, else its name, which rules out embedding and rerank models."""
+    mode = entry.get("mode")
+    if isinstance(mode, str) and mode.strip():
+        return mode.strip().lower() in _CHAT_MODES
+    return not _NOT_CHAT_NAME.search(str(entry.get("id", "")))
+
+
+def _discover_endpoint_models(
+    console: Console, theme: Theme, url: str, api_key: str | None
+) -> dict[str, str]:
+    """The models an OpenAI-compatible endpoint lists at the ``/models`` beside ``url``,
+    by id with the window each states; empty when unknown.
+
+    Asked with the key just settled, so a wrong URL or key shows up here rather than on
+    the first message. Best effort: a failure says why and the model is typed instead.
+    """
+    listing = models_url(url)
+    if listing is None:
+        return {}
+    console.print(
+        f"  Looking up the models at {_scrub_url(listing)}...",
+        style=theme.style("meta"),
+        highlight=False,
+    )
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        found = run_sync(get_json(listing, headers))
+    except Exception as error:
+        status = getattr(getattr(error, "response", None), "status_code", None)
+        what = f"{type(error).__name__}, HTTP {status}" if status else type(error).__name__
+        why = {401: " (check the API key)", 403: " (check the API key)", 404: " (check the URL)"}
+        console.print(
+            f"  Could not list the models ({what}){why.get(status or 0, '')}: "
+            "type the name instead",
+            style=theme.style("warning"),
+            highlight=False,
+        )
+        return {}
+    entries = found.get("data") if isinstance(found, dict) else None
+    models: dict[str, str] = {}
+    hidden = 0
+    for entry in entries if isinstance(entries, list) else ():
+        if not isinstance(entry, dict) or not entry.get("id"):
+            continue
+        if not _serves_chat(entry):
+            hidden += 1
+            continue
+        window = window_from_model_entry(entry)
+        models[str(entry["id"])] = f"{window:,} tokens" if window else ""
+    if hidden:
+        console.print(
+            f"  {hidden} embedding or other non-chat models are not listed",
+            style=theme.style("meta"),
+            highlight=False,
+        )
+    if not models:
+        console.print(
+            "  The endpoint lists no models: type the name instead",
+            style=theme.style("warning"),
+            highlight=False,
+        )
+    return models
 
 
 def _ensure_api_key(console: Console, theme: Theme, provider: ProviderConfig) -> None:
@@ -1689,10 +1764,10 @@ def run_setup(
     # An import offers the project's own skills, and erases its instructions when
     # they are not kept (`_choose_project_skills`, `_choose_imported_instructions`).
     import_into = project if imported is not None else None
-    domyn_key = ProviderConfig(type="domyn", api_key_env=PROVIDER_HINTS["domyn"].get("env"))
     # The space's models by what they were asked with. Outside the draft, so going
     # back over the lookup does not ask the platform again.
     domyn_models: dict[tuple[str, ...], dict[str, str]] = {}
+    endpoint_models: dict[tuple[str, str], dict[str, str]] = {}
     # What each provider answered to an image, by the settings it was sent with.
     # Outside the draft for the same reason: going back over the check sends nothing.
     image_rejections: dict[tuple[str, str | None], str | None] = {}
@@ -1789,7 +1864,7 @@ def run_setup(
 
     def choose_domyn_model(d: _Draft) -> None:
         settings = PlatformSettings(
-            api_key=resolve_api_key(domyn_key) or "",
+            api_key=resolve_api_key(endpoint_key(d)) or "",
             space_id=d.space_id,
             base_url=d.url,
             configuration_id=d.configuration_id or None,
@@ -1799,7 +1874,7 @@ def run_setup(
             domyn_models[asked_with] = _discover_models(console, theme, settings)
         models = domyn_models[asked_with]
         if models:
-            d.model_name = _choose_domyn_model(console, theme, models, d.provider.model_name)
+            d.model_name = _choose_listed_model(console, theme, models, d.provider.model_name)
         else:
             ask_model(d)
 
@@ -1810,10 +1885,36 @@ def run_setup(
             else "URL (empty = provider default)"
         )
         url = _ask(console, theme, label, d.url)
-        if d.provider_type == "vllm" and url and (completed := vllm_chat_url(url)) != url:
+        if d.provider_type == "vllm" and url and (completed := chat_completions_url(url)) != url:
             url = completed
             console.print(f"  URL: {_scrub_url(url)}", style=theme.style("meta"), highlight=False)
         d.url = url
+
+    def endpoint_key(d: _Draft) -> ProviderConfig:
+        return ProviderConfig(
+            type=d.provider_type,
+            api_key_env=PROVIDER_HINTS.get(d.provider_type, {}).get("env", "LLM_API_KEY"),
+        )
+
+    def choose_model(d: _Draft) -> None:
+        """Picked from the models the connection just given lists: the space's for Domyn,
+        the server's `/models` for vLLM, which also checks the URL and the key. Typed for a
+        hosted API, and wherever the listing comes back empty."""
+        if d.provider_type == "domyn":
+            choose_domyn_model(d)
+            return
+        if d.provider_type != "vllm":
+            ask_model(d)
+            return
+        api_key = resolve_api_key(endpoint_key(d)) or ""
+        asked_with = (d.url, api_key)
+        if asked_with not in endpoint_models:
+            endpoint_models[asked_with] = _discover_endpoint_models(console, theme, d.url, api_key)
+        models = endpoint_models[asked_with]
+        if models:
+            d.model_name = _choose_listed_model(console, theme, models, d.provider.model_name)
+        else:
+            ask_model(d)
 
     def ask_max_tokens(d: _Draft) -> None:
         d.max_tokens = _ask_max_tokens(console, theme, d.provider.max_tokens)
@@ -2047,32 +2148,22 @@ def run_setup(
     def asks_domyn(d: _Draft) -> bool:
         return not d.keep_model and d.provider_type == "domyn"
 
-    def asks_other(d: _Draft) -> bool:
+    def asks_url(d: _Draft) -> bool:
         return not d.keep_model and d.provider_type != "domyn"
 
     model_steps = [
         _Step("keep model", keep_model, lambda d: ask_keep_model),
         _Step("provider", choose_provider, asks_model),
-        _Step("model", ask_model, asks_other),
+        # One connection → model sequence for every provider: where, with what key, then
+        # the model, since the connection decides which models there are and the listed
+        # ones are asked with it. Domyn's URL is the platform's, and its space and
+        # configuration come between URL and key.
+        _Step("url", ask_url, asks_url),
         _Step("platform url", ask_platform_url, asks_domyn),
         _Step("space id", ask_space_id, asks_domyn),
         _Step("configuration id", ask_configuration_id, asks_domyn),
-        # The connection comes before the model: it is what the space's models are asked with.
-        _Step("domyn api key", lambda d: _ensure_api_key(console, theme, domyn_key), asks_domyn),
-        _Step("domyn model", choose_domyn_model, asks_domyn),
-        _Step("url", ask_url, asks_other),
-        _Step(
-            "api key",
-            lambda d: _ensure_api_key(
-                console,
-                theme,
-                ProviderConfig(
-                    type=d.provider_type,
-                    api_key_env=PROVIDER_HINTS.get(d.provider_type, {}).get("env", "LLM_API_KEY"),
-                ),
-            ),
-            asks_other,
-        ),
+        _Step("api key", lambda d: _ensure_api_key(console, theme, endpoint_key(d)), asks_model),
+        _Step("model", choose_model, asks_model),
         _Step("max tokens", ask_max_tokens, asks_model),
         _Step("context window", ask_context_window, asks_model),
         # Asks nothing, and runs for a kept model too: a config written before

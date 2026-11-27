@@ -17,7 +17,7 @@ from domyn.agents.interfaces.cli import config as cfg
 from domyn.agents.interfaces.cli import select as select_mod
 from domyn.agents.tools.builtin import BUNDLES
 
-FIELDS = ["openai", "m", "", "", "", ""]
+FIELDS = ["openai", "", "", "m", "", ""]
 """The answers up to the max tokens and context window; the tools step follows, then the skills."""
 
 # Captured before the CLI conftest replaces it for every other wizard test.
@@ -174,7 +174,7 @@ class TestARerun:
         second = _run(
             console,
             theme,
-            ["anthropic", "m2", "", "", "", ""],
+            ["anthropic", "", "", "m2", "", ""],
             first,
             path=target,
             provider_only=True,

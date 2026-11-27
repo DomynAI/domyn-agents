@@ -780,6 +780,37 @@ class TestSecrets:
         assert headers == {"Authorization": "${SRV_AUTHORIZATION}", "Accept": "a"}
         assert report.env_vars == ["MY_KEY", "SRV_AUTHORIZATION"]
 
+    def test_a_custom_providers_literal_bearer_keeps_its_scheme(
+        self, machine: dict[str, Path], tmp_path: Path
+    ) -> None:
+        # A custom provider takes its key in `headers`, where setup writes it as a Bearer.
+        raw = _config()
+        provider = raw["llm_providers"][0]
+        provider["type"] = "custom"
+        provider["headers"] = {"Authorization": "Bearer sk-literal", "X-Api-Key": "k2", "A": "a"}
+
+        report = _export(raw, machine, tmp_path / "out")
+
+        headers = _exported(report.dest)["llm_providers"][0]["headers"]
+        assert headers["Authorization"] == "Bearer ${LLM_API_KEY}"
+        assert headers["X-Api-Key"].startswith("${") and headers["A"] == "a"
+        assert "sk-literal" not in (report.dest / "config.yaml").read_text()
+        assert "LLM_API_KEY" in report.env_vars
+
+    def test_a_custom_providers_bearer_reference_is_kept(
+        self, machine: dict[str, Path], tmp_path: Path
+    ) -> None:
+        raw = _config()
+        provider = raw["llm_providers"][0]
+        provider["type"] = "custom"
+        provider["headers"] = {"Authorization": "Bearer ${LLM_API_KEY}"}
+
+        report = _export(raw, machine, tmp_path / "out")
+
+        headers = _exported(report.dest)["llm_providers"][0]["headers"]
+        assert headers == {"Authorization": "Bearer ${LLM_API_KEY}"}
+        assert report.env_vars == ["LLM_API_KEY"]
+
 
 class TestInstructions:
     def test_nothing_is_exported_that_is_not_declared(

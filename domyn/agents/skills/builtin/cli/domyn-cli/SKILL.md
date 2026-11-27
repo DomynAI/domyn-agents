@@ -374,7 +374,7 @@ To start over: `domyn setup` (it pre-fills the current values; Enter keeps them)
 
 | symptom | likely cause and fix |
 |---|---|
-| "No configuration yet" / setup opens on every run | config missing or incomplete (no model; no `url` for vllm/custom). Run `domyn setup` |
+| "No configuration yet" / setup opens on every run | config missing or incomplete (no model; no `url` for domyn/vllm). Run `domyn setup` |
 | fails at startup naming an environment variable | a `${VAR}` in the YAML is not set. Set it in `.env`, `credentials` or the shell, or re-run `domyn setup` |
 | auth errors when calling the model | key missing or wrong. `/model` asks for it again and saves it to `credentials` |
 | a `config.yaml` edit "did nothing" | not reloaded. Restart (`/exit`, `domyn run`) |

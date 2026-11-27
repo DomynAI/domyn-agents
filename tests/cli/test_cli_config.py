@@ -202,7 +202,6 @@ class TestSecrets:
             ("open_router", "OPENROUTER_API_KEY"),
             ("cerebras", "CEREBRAS_API_KEY"),
             ("vllm", "VLLM_API_KEY"),
-            ("custom", "LLM_API_KEY"),
         ],
     )
     def test_each_provider_uses_its_conventional_env_var(
@@ -924,6 +923,23 @@ class TestTheBrowserSettingsSurviveTheWizard:
         fields = dict(bundle.fields)
         assert fields["browser cdp"] == "set"
         assert fields["browser allowed_domains"] == "(any public site)"
+
+
+@pytest.mark.parametrize(
+    ("typed", "endpoint"),
+    [
+        ("http://host:8000", "http://host:8000/v1/chat/completions"),
+        ("https://gw/v1", "https://gw/v1/chat/completions"),
+        ("https://gw/api/v2/", "https://gw/api/v2/chat/completions"),
+        ("https://gw/serve/chat/completions", "https://gw/serve/chat/completions"),
+        ("https://gw/vllm/qwen?key=1", "https://gw/vllm/qwen/v1/chat/completions?key=1"),
+        ("https://gw/v1beta", "https://gw/v1beta/v1/chat/completions"),
+    ],
+)
+def test_chat_completions_url(typed: str, endpoint: str) -> None:
+    from domyn.agents.interfaces.cli.config import chat_completions_url
+
+    assert chat_completions_url(typed) == endpoint
 
 
 class TestWhetherTheModelReadsImages:
