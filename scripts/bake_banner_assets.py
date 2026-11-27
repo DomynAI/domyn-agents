@@ -277,7 +277,6 @@ CAP_SRC = 198.0
 BASELINE_SRC = 635.0
 
 
-
 # Letters of the compact cuts, redrawn on the pixel grid once the word is whole.
 # A filter cannot give a stroke that is 2.4 source pixels wide the same width in
 # every letter: the "o" came out lopsided with a hole missing in its bottom, the
@@ -301,68 +300,93 @@ TIDY: dict[int, dict] = {
             # until it narrows the same way at the bottom; the stem side is straight.
             # Stem and right wall are 3 wide, like the legs of the m and n. (The
             # font's D is a column wider, with a 5-wide counter.)
-            (0, 0, (
-                "#######...",
-                "########..",
-                "###...###.",
-                "###....###",
-                "###....###",
-                "###....###",
-                "###....###",
-                "###....###",
-                "###....###",
-                "###....###",
-                "###...###.",
-                "########..",
-                "#######...",
-            )),
+            (
+                0,
+                0,
+                (
+                    "#######...",
+                    "########..",
+                    "###...###.",
+                    "###....###",
+                    "###....###",
+                    "###....###",
+                    "###....###",
+                    "###....###",
+                    "###....###",
+                    "###....###",
+                    "###...###.",
+                    "########..",
+                    "#######...",
+                ),
+            ),
             # o: symmetric in both directions; 10 wide, the font's (counter 4). Its
             # bars are two rows at the centre: the font's are 2.4 pixels, like the
             # stems, and a solid third row made it heavy. The outline runs 4, 8, 10 wide, as
             # a circle of that diameter does, so it reads round.
-            (11, 3, (
-                "...####...",
-                ".########.",
-                "####..####",
-                "###....###",
-                "###....###",
-                "###....###",
-                "###....###",
-                "####..####",
-                ".########.",
-                "...####...",
-            )),
+            (
+                11,
+                3,
+                (
+                    "...####...",
+                    ".########.",
+                    "####..####",
+                    "###....###",
+                    "###....###",
+                    "###....###",
+                    "###....###",
+                    "####..####",
+                    ".########.",
+                    "...####...",
+                ),
+            ),
             # m: three equal stems, two equal counters, rounded like the n's. 15
             # wide, so that it keeps the column the font leaves between it and the y.
-            (22, 3, (
-                "###.#####.####.",
-                "###############",
-                "###############",
-                "####.#####.####",
-                "###...###...###",
-                "###...###...###",
-                "###...###...###",
-                "###...###...###",
-                "###...###...###",
-                "###...###...###",
-            )),
+            (
+                22,
+                3,
+                (
+                    "###.#####.####.",
+                    "###############",
+                    "###############",
+                    "####.#####.####",
+                    "###...###...###",
+                    "###...###...###",
+                    "###...###...###",
+                    "###...###...###",
+                    "###...###...###",
+                    "###...###...###",
+                ),
+            ),
             # n
-            (50, 3, (
-                "###.#####.",
-                "##########",
-                "##########",
-                "####..####",
-                "###....###",
-                "###....###",
-                "###....###",
-                "###....###",
-                "###....###",
-                "###....###",
-            )),
+            (
+                50,
+                3,
+                (
+                    "###.#####.",
+                    "##########",
+                    "##########",
+                    "####..####",
+                    "###....###",
+                    "###....###",
+                    "###....###",
+                    "###....###",
+                    "###....###",
+                    "###....###",
+                ),
+            ),
         ),
         "stems": (
-            (0, 2), (8, 10), (12, 14), (20, 22), (24, 26), (30, 32), (37, 39), (42, 44),
-            (46, 48), (52, 54), (59, 61),
+            (0, 2),
+            (8, 10),
+            (12, 14),
+            (20, 22),
+            (24, 26),
+            (30, 32),
+            (37, 39),
+            (42, 44),
+            (46, 48),
+            (52, 54),
+            (59, 61),
         ),
         "clear": ((-1, 39), (52, 61)),
         "stem_row": 6,
@@ -381,52 +405,77 @@ TIDY: dict[int, dict] = {
         "letters": (
             # D: the outer curve is the font's, scaled: of its width the edge has
             # 74%, 91%, 96% at the first rows, then all of it.
-            (0, 0, (
-                "#####..",
-                "######.",
-                "##..###",
-                "##...##",
-                "##...##",
-                "##...##",
-                "##...##",
-                "##..###",
-                "######.",
-                "#####..",
-            )),
-            (8, 2, (
-                "..####..",
-                ".######.",
-                "###..###",
-                "##....##",
-                "##....##",
-                "###..###",
-                ".######.",
-                "..####..",
-            )),
-            (17, 2, (
-                "##.####.###.",
-                "############",
-                "###.####.###",
-                "##...##...##",
-                "##...##...##",
-                "##...##...##",
-                "##...##...##",
-                "##...##...##",
-            )),
-            (38, 2, (
-                "##.###.",
-                "#######",
-                "###.###",
-                "##...##",
-                "##...##",
-                "##...##",
-                "##...##",
-                "##...##",
-            )),
+            (
+                0,
+                0,
+                (
+                    "#####..",
+                    "######.",
+                    "##..###",
+                    "##...##",
+                    "##...##",
+                    "##...##",
+                    "##...##",
+                    "##..###",
+                    "######.",
+                    "#####..",
+                ),
+            ),
+            (
+                8,
+                2,
+                (
+                    "..####..",
+                    ".######.",
+                    "###..###",
+                    "##....##",
+                    "##....##",
+                    "###..###",
+                    ".######.",
+                    "..####..",
+                ),
+            ),
+            (
+                17,
+                2,
+                (
+                    "##.####.###.",
+                    "############",
+                    "###.####.###",
+                    "##...##...##",
+                    "##...##...##",
+                    "##...##...##",
+                    "##...##...##",
+                    "##...##...##",
+                ),
+            ),
+            (
+                38,
+                2,
+                (
+                    "##.###.",
+                    "#######",
+                    "###.###",
+                    "##...##",
+                    "##...##",
+                    "##...##",
+                    "##...##",
+                    "##...##",
+                ),
+            ),
         ),
         "stems": (
-            (0, 2), (7, 8), (10, 12), (14, 16), (18, 21), (23, 26), (28, 30), (32, 34),
-            (36, 38), (40, 42), (45, 47),
+            (0, 2),
+            (7, 8),
+            (10, 12),
+            (14, 16),
+            (18, 21),
+            (23, 26),
+            (28, 30),
+            (32, 34),
+            (36, 38),
+            (40, 42),
+            (45, 47),
         ),
         "clear": ((-1, 30), (40, 47)),
         "stem_row": 6,
@@ -439,12 +488,17 @@ TIDY: dict[int, dict] = {
 }
 
 
-def tidy_word(px: Image.Image, baseline_row: int, cut: int) -> None:
+def tidy_word(px: Image.Image, baseline_row: int, cut: int, tolerance: int = 1) -> bool:
     """Redraw the letters of ``TIDY[cut]`` on a rendered compact frame.
 
     Only when the whole word is there; while it is being revealed the frame is
     left as the filter made it. ``baseline_row`` is the pixel row just below the
-    baseline.
+    baseline. Returns whether the letters were redrawn.
+
+    ``tolerance`` is how far, in columns, a stem may be from where the cut expects
+    it. The caller widens it once a frame has matched: the letters of a reveal
+    overshoot their place by a column or two just before they settle, and a frame
+    that fell back to the filter's own letters there showed them jumping left.
     """
     cfg = TIDY[cut]
     pix = px.load()
@@ -461,7 +515,7 @@ def tidy_word(px: Image.Image, baseline_row: int, cut: int) -> None:
             first = x
             break
     if first is None:
-        return
+        return False
     row = baseline_row - cfg["stem_row"]
     found: list[tuple[int, int]] = []
     start = None
@@ -474,9 +528,10 @@ def tidy_word(px: Image.Image, baseline_row: int, cut: int) -> None:
             start = None
     stems = cfg["stems"]
     if len(found) != len(stems) or any(
-        abs(a - ra) > 1 or abs(b - rb) > 1 for (a, b), (ra, rb) in zip(found, stems)
+        abs(a - ra) > tolerance or abs(b - rb) > tolerance
+        for (a, b), (ra, rb) in zip(found, stems, strict=True)
     ):
-        return
+        return False
     moved: list[tuple[int, int, tuple[int, int, int, int]]] = []
     if "shift" in cfg:
         lo, hi, dx = cfg["shift"]
@@ -488,7 +543,7 @@ def tidy_word(px: Image.Image, baseline_row: int, cut: int) -> None:
     for lo, hi in cfg["clear"]:
         for y in range(max(0, cap_top - 1), baseline_row + 1):
             for x in range(max(0, first + lo), min(px.width, first + hi + 1)):
-                r, g, b, a = pix[x, y]
+                r, g, b, _a = pix[x, y]
                 if min(r, g, b) >= 200:
                     pix[x, y] = (0, 0, 0, 0)
     for x, y, value in moved:
@@ -513,6 +568,7 @@ def tidy_word(px: Image.Image, baseline_row: int, cut: int) -> None:
                     x, y = first + col + dx, top + dy
                     if 0 <= x < px.width and 0 <= y < px.height:
                         pix[x, y] = (255, 255, 255, 255)
+    return True
 
 
 # Cuts whose glyph is snapped to a circle on the outside (see round_glyph).
@@ -590,20 +646,31 @@ def place_glyph(
     scale: float,
     top: float,
     margin: int,
+    ref: tuple[float, float, float] | None = None,
 ) -> None:
     """Redraw the mark with its centre on the middle of a pixel, then round it.
+
+    ``ref`` is the mark's centre and radius in source pixels, if they are not to be
+    read off this frame: the mark spins on the spot, and its box, which follows the
+    swirl, moves a pixel or two as it turns; the circle should not.
 
     A mark whose centre falls a quarter of a pixel off the grid gives its top row
     a different coverage from its bottom one: one pixel up, six down. It is
     rendered again, shifted by that quarter, so the two ends match, and its
     pixels replace the frame's own.
     """
-    cx = (mark[0] + mark[2]) / 2 * scale
-    cy = ((mark[1] + mark[3]) / 2 - top) * scale
-    radius = min(mark[2] - mark[0], mark[3] - mark[1]) / 2 * scale
+    left, up, right, down = render_box
+    mid_x, mid_y = (mark[0] + mark[2]) / 2, (mark[1] + mark[3]) / 2
+    radius_src = min(mark[2] - mark[0], mark[3] - mark[1]) / 2
+    if ref is not None:
+        mid_x, mid_y, radius_src = ref
+    # Where the centre falls in the rendered pixels: the picture is read from
+    # ``render_box``, which is moved by the sub-column shift ``compact_frames`` makes.
+    cx = (mid_x + margin - left) * scale
+    cy = (mid_y + margin - up) * scale
+    radius = radius_src * scale
     tx, ty = math.floor(cx) + 0.5, math.floor(cy) + 0.5
     dx, dy = tx - cx, ty - cy
-    left, up, right, down = render_box
     moved = padded.resize(
         px.size,
         Image.BOX,
@@ -621,18 +688,34 @@ def place_glyph(
     round_glyph(px, tx, ty, radius)
 
 
-def to_half_blocks_compact(img: Image.Image, crop_top: int, width: int) -> str:
-    """Render one cropped frame at the compact geometry (see ``COMPACT_CAP``).
+def render_compact_px(
+    img: Image.Image,
+    crop_top: int,
+    width: int,
+    letters: "tuple[list[Template], list[tuple[int, int]]] | None" = None,
+    x_shift: float = 0.0,
+    glyph_ref: "tuple[float, float, float] | None" = None,
+) -> tuple[Image.Image, bool]:
+    """One cropped frame at the compact geometry, as pixels, and whether its word
+    was redrawn (see ``COMPACT_CAP``).
+
+    With ``letters`` (the templates and the column of each letter in view, from
+    ``letter_places``) those letters are redrawn (``tidy_letters``). Without, the word
+    is redrawn only if it is exactly where ``TIDY`` expects it (``tidy_word``), which
+    is how the templates themselves are made. ``glyph_ref`` is the centre and the
+    radius of the mark, in source pixels, smoothed over the frames around this one.
 
     ``crop_top`` is the top of the crop in source pixels, to find the baseline;
-    ``width`` names the cut in ``COMPACT_CUTS``.
+    ``width`` names the cut in ``COMPACT_CUTS``. ``x_shift`` moves the picture right
+    by that many source pixels, which ``compact_frames`` uses to put the lockup's left
+    edge on a whole column.
     """
     global ALPHA_THRESHOLD
     scale = COMPACT_CUTS[width] / CAP_SRC
     box = content_bbox(img)
-    if box is not None and box[2] * scale > width:
+    if box is not None and (box[2] + x_shift) * scale > width:
         raise ValueError(
-            f"compact banner: content reaches column {box[2] * scale:.1f}, past {width}"
+            f"compact banner: content reaches column {(box[2] + x_shift) * scale:.1f}, past {width}"
         )
     base = BASELINE_SRC - crop_top
     rows_above = math.ceil(base * scale)
@@ -642,11 +725,13 @@ def to_half_blocks_compact(img: Image.Image, crop_top: int, width: int) -> str:
     margin = 160
     padded = Image.new("RGBA", (img.width + 2 * margin, img.height + 2 * margin), (0, 0, 0, 0))
     padded.paste(img, (margin, margin))
-    px = padded.resize(
-        (width, height),
-        Image.BOX,
-        box=(margin, top + margin, margin + width / scale, top + margin + height / scale),
+    render_box = (
+        margin - x_shift,
+        top + margin,
+        margin - x_shift + width / scale,
+        top + margin + height / scale,
     )
+    px = padded.resize((width, height), Image.BOX, box=render_box)
     saved, ALPHA_THRESHOLD = ALPHA_THRESHOLD, COMPACT_ALPHA
     try:
         if width in ROUND_GLYPH:
@@ -655,17 +740,307 @@ def to_half_blocks_compact(img: Image.Image, crop_top: int, width: int) -> str:
                 place_glyph(
                     px,
                     padded,
-                    (margin, top + margin, margin + width / scale, top + margin + height / scale),
+                    render_box,
                     (mark[0], mark[1], mark[2], mark[3]),
                     scale,
                     top,
                     margin,
+                    glyph_ref,
                 )
-        if width in TIDY:
-            tidy_word(px, round((base - top) * scale), width)
+        if letters is not None:
+            return px, tidy_letters(px, *letters)
+        redrawn = width in TIDY and tidy_word(px, round((base - top) * scale), width)
+        return px, redrawn
+    finally:
+        ALPHA_THRESHOLD = saved
+
+
+# Columns cleared beyond a redrawn letter, each side: the filter's stroke can be a
+# column wider than the template, and what is left of it would stand beside the
+# new letter. Everything is cleared before anything is drawn.
+CLEAR_MARGIN = 2
+
+# A letter counts as fully in view when its ink is this much of its finished width.
+# While one is still behind the mark it is narrower than that.
+LETTER_VISIBLE = 0.92
+
+Template = tuple[int, list[tuple[int, int]], int]
+"""A letter: its width, its ink as ``(column, row)`` offsets from its left edge, and
+where that edge is in the finished word, from the word's own left edge."""
+
+
+def _white_ink(px: Image.Image) -> list[list[bool]]:
+    pix = px.load()
+    assert pix is not None
+    return [
+        [pix[x, y][3] >= COMPACT_ALPHA and min(pix[x, y][:3]) >= 200 for x in range(px.width)]
+        for y in range(px.height)
+    ]
+
+
+def _first_ink(ink: list[list[bool]], cap_top: int, baseline_row: int) -> int | None:
+    """The leftmost column with white ink between the cap line and the baseline."""
+    for x in range(len(ink[0])):
+        if any(ink[y][x] for y in range(max(0, cap_top), min(len(ink), baseline_row))):
+            return x
+    return None
+
+
+def letter_templates(px: Image.Image, cap_top: int, baseline_row: int, cut: int) -> list[Template]:
+    """The five letters of a finished, redrawn frame, left to right.
+
+    Cut where ``TIDY[cut]`` says each letter is: D, o, m and n are listed there and
+    the y is what lies between the m and the n. Splitting at blank columns instead
+    would work for one cut and not the other, where the m, y and n touch.
+    """
+    ink = _white_ink(px)
+    first = _first_ink(ink, cap_top, baseline_row)
+    assert first is not None
+    placed = [(col, col + len(rows[0])) for col, _, rows in TIDY[cut]["letters"]]
+    d, o, m, n = placed
+    spans = [d, o, m, (m[1], n[0]), n]
+    out: list[Template] = []
+    for lo, hi in spans:
+        cells = [
+            (x - first - lo, y)
+            for y, row in enumerate(ink)
+            for x in range(first + lo, min(px.width, first + hi))
+            if row[x]
+        ]
+        out.append((hi - lo, cells, lo))
+    return out
+
+
+def word_clusters(img: Image.Image, crop_top: int) -> list[tuple[float, float]]:
+    """Left and right edge, in source pixels, of each run of white ink in the word.
+
+    Read on the source, where a letter's edge is known to a fraction of a pixel:
+    that is what lets a letter be put on a whole column that moves smoothly from
+    frame to frame, which matching the rendered pixels does not (the filter's edge
+    flips by a column or two between frames).
+    """
+    base = int(BASELINE_SRC - crop_top)
+    r, g, b, a = img.crop((0, base - int(CAP_SRC), img.width, base)).split()
+    white = ImageChops.multiply(
+        ImageChops.darker(ImageChops.darker(r, g), b).point(lambda v: 255 if v >= 232 else 0),
+        a.point(lambda v: 255 if v >= 128 else 0),
+    )
+    columns = [
+        white.crop((x, 0, x + 1, white.height)).getbbox() is not None for x in range(img.width)
+    ]
+    runs: list[tuple[float, float]] = []
+    start = None
+    for x, filled in enumerate([*columns, False]):
+        if filled and start is None:
+            start = x
+        elif not filled and start is not None:
+            if x - start >= MIN_LETTER_SRC:
+                runs.append((float(start), float(x)))
+            start = None
+    return runs
+
+
+# Narrowest run of white ink, in source pixels, that is a letter and not a speck.
+MIN_LETTER_SRC = 40
+
+
+def letter_places(
+    clusters: list[tuple[float, float]],
+    finished: list[tuple[float, float]],
+    templates: list[Template],
+    offsets: list[float],
+    scale: float,
+    x_shift: float,
+) -> list[tuple[int, int]]:
+    """Which letters are fully in view in a frame, and on which column to draw each.
+
+    The reveal brings the letters in from the right, so the clusters in view are the
+    last ones of the word. A letter is drawn only if its cluster is nearly as wide
+    as it will be, and its column is its source position, scaled, offset by where
+    the finished frame has it, and rounded: a smooth path becomes a smooth path.
+    """
+    n = len(templates)
+    if not clusters or len(clusters) > n:
+        return []
+    first_letter = n - len(clusters)
+    out: list[tuple[int, int]] = []
+    for j, (lo, hi) in enumerate(clusters):
+        k = first_letter + j
+        done = finished[k][1] - finished[k][0]
+        if hi - lo < LETTER_VISIBLE * done:
+            continue
+        out.append((k, round((lo + x_shift) * scale + offsets[k])))
+    return out
+
+
+def tidy_letters(px: Image.Image, templates: list[Template], places: list[tuple[int, int]]) -> bool:
+    """Redraw the letters in ``places`` from their templates, each on its column.
+
+    The ink round each is cleared first, a little wider than the letter. When every
+    letter is there, everything from the first to the right edge of the picture is
+    cleared: nothing else is right of the word. Returns whether any was redrawn.
+    """
+    if not places:
+        return False
+    ink = _white_ink(px)
+    width = px.width
+    pix = px.load()
+    assert pix is not None
+    n = len(templates)
+
+    def clear(lo: int, hi: int) -> None:
+        for x in range(max(0, lo), min(width, hi)):
+            for y in range(px.height):
+                if ink[y][x]:
+                    pix[x, y] = (0, 0, 0, 0)
+
+    if len(places) == n:
+        clear(places[0][1] - CLEAR_MARGIN, width)
+    else:
+        for k, p in places:
+            clear(p - CLEAR_MARGIN, p + templates[k][0] + CLEAR_MARGIN)
+        if places[-1][0] == n - 1:
+            clear(places[-1][1] + templates[-1][0] + CLEAR_MARGIN, width)
+    for k, p in places:
+        for dx, y in templates[k][1]:
+            if 0 <= p + dx < width:
+                pix[p + dx, y] = (255, 255, 255, 255)
+    return True
+
+
+def compact_text(px: Image.Image, width: int) -> str:
+    """Half-block text of compact pixels, read at the compact alpha cut."""
+    global ALPHA_THRESHOLD
+    saved, ALPHA_THRESHOLD = ALPHA_THRESHOLD, COMPACT_ALPHA
+    try:
         return to_half_blocks(px, width)
     finally:
         ALPHA_THRESHOLD = saved
+
+
+def to_half_blocks_compact(img: Image.Image, crop_top: int, width: int) -> str:
+    """One cropped frame at the compact geometry, as half-block text."""
+    return compact_text(render_compact_px(img, crop_top, width)[0], width)
+
+
+# Frames either side of one that its mark's centre and size are averaged over.
+GLYPH_SMOOTH = 12
+
+
+def glyph_refs(frames: list[Image.Image]) -> list[tuple[float, float, float] | None]:
+    """The mark's centre and radius in each frame, source pixels, smoothed.
+
+    Its box follows the swirl as it turns, so read frame by frame its centre wanders
+    a few source pixels and its size more: a pixel or two on the rendered mark, and
+    the mark appears to bob. The median over the frames around each one keeps what
+    really moves (the mark shrinks and travels as the word appears) and drops that.
+    ``None`` for a frame in which the mark is still being drawn.
+    """
+    marks = [glyph_box(f) for f in frames]
+    drawn = [
+        m is not None and m[2] - m[0] >= GLYPH_DRAWN and m[3] - m[1] >= GLYPH_DRAWN for m in marks
+    ]
+    out: list[tuple[float, float, float] | None] = []
+    for i, m in enumerate(marks):
+        if not drawn[i] or m is None:
+            out.append(None)
+            continue
+        near = [
+            marks[j]
+            for j in range(max(0, i - GLYPH_SMOOTH), min(len(marks), i + GLYPH_SMOOTH + 1))
+            if drawn[j]
+        ]
+        xs = sorted((q[0] + q[2]) / 2 for q in near if q)
+        ys = sorted((q[1] + q[3]) / 2 for q in near if q)
+        rs = sorted(min(q[2] - q[0], q[3] - q[1]) / 2 for q in near if q)
+        mid = len(xs) // 2
+        out.append((xs[mid], ys[mid], rs[mid]))
+    return out
+
+
+def hold_glyph(
+    refs: list[tuple[float, float, float] | None], scale: float
+) -> list[tuple[float, float, float] | None]:
+    """``refs`` with the centre and radius held until they move a whole pixel.
+
+    Even smoothed, a value that sits near a pixel boundary rounds one way and the
+    other from frame to frame, and the mark bobs by a pixel. Held, it changes only
+    when the drift is a full rendered pixel, and never goes back.
+    """
+    out: list[tuple[float, float, float] | None] = []
+    held: tuple[float, float, float] | None = None
+    # Walked from the last frame back, so the finished mark keeps the position the
+    # static banner has.
+    for ref in reversed(refs):
+        if ref is None:
+            out.append(None)
+            continue
+        if held is None:
+            held = ref
+        else:
+            held = tuple(  # type: ignore[assignment]
+                new if abs(new - old) * scale >= 1.0 else old
+                for new, old in zip(ref, held, strict=True)
+            )
+        out.append(held)
+    return out[::-1]
+
+
+def compact_frames(frames: list[Image.Image], crop_top: int, width: int) -> list[str]:
+    """The reveal and the closing slide of one compact cut, as half-block text.
+
+    The slide moves the finished frame by whole columns. Re-rendering the source
+    at each offset, as the full-size cut does, samples the letters at a different
+    fraction of a pixel every frame, and their strokes shimmer as they travel; a
+    column is one pixel wide, so a whole-column move is exact.
+    """
+    scale = COMPACT_CUTS[width] / CAP_SRC
+    final_box = content_bbox(frames[-1])
+    # The lockup's left edge, in compact pixels, rounded up to a whole column and
+    # then put there: the picture is moved right by under one column, so that the
+    # slide's end (the edge on column 0) is the same pixels, whole columns away,
+    # as the frame it starts from. Letters sampled at one fraction of a pixel
+    # while the word settles and another once it has slid change shape on arrival.
+    edge = final_box[0] * scale if final_box else 0.0
+    x_shift = (math.ceil(edge) - edge) / scale
+    finished, redrawn = render_compact_px(frames[-1], crop_top, width, None, x_shift)
+    assert redrawn or width not in TIDY, "the finished word is not where TIDY expects it"
+    # The baseline's pixel row, as render_compact_px puts it: the rows above it,
+    # rounded up to an even number so it falls on a cell boundary.
+    baseline_row = math.ceil((BASELINE_SRC - crop_top) * scale)
+    baseline_row += baseline_row % 2
+    cap_top = baseline_row - TIDY[width]["cap"]
+    templates = letter_templates(finished, cap_top, baseline_row, width)
+    # Where each finished letter is, in source and in rendered pixels: a letter
+    # in an earlier frame is drawn at its source position plus the difference.
+    finished_clusters = word_clusters(frames[-1], crop_top)
+    assert len(finished_clusters) == len(templates), "the finished word is not five letters"
+    first = _first_ink(_white_ink(finished), cap_top, baseline_row)
+    assert first is not None
+    offsets = [
+        first + t[2] - (c[0] + x_shift) * scale
+        for t, c in zip(templates, finished_clusters, strict=True)
+    ]
+    refs = hold_glyph(glyph_refs(frames), scale)
+    out: list[str] = []
+    px = finished
+    for img, ref in zip(frames, refs, strict=True):
+        places = letter_places(
+            word_clusters(img, crop_top), finished_clusters, templates, offsets, scale, x_shift
+        )
+        px, _ = render_compact_px(img, crop_top, width, (templates, places), x_shift, ref)
+        out.append(compact_text(px, width))
+    ink = px.getchannel("A").point(lambda a: 255 if a >= COMPACT_ALPHA else 0).getbbox()
+    left = ink[0] if ink else 0
+    for i in range(1, SLIDE_STEPS + 1):
+        t = i / SLIDE_STEPS
+        shift = round(left * (1 - (1 - t) ** 2))
+        moved = Image.new("RGBA", px.size, (0, 0, 0, 0))
+        # No mask: a frame used as its own mask squares the alpha of its soft edges
+        # and dims the white of the word below the threshold that reads as white.
+        moved.paste(px, (-shift, 0))
+        out.append(compact_text(moved, width))
+    return out
 
 
 def main() -> None:
@@ -682,7 +1057,7 @@ def main() -> None:
 
     # The two beats of the reveal: the mark draws itself, then the finished
     # lockup slides to the margin.
-    full = frames + slide_left(frames[-1], steps=SLIDE_STEPS)[1:]
+    full = frames + slide_left(frames[-1], steps=SLIDE_STEPS)[1:]  # full-size cut only
     if N_FRAMES is None:
         keyframes = full
     else:
@@ -694,7 +1069,7 @@ def main() -> None:
     for width in (*WIDTHS, *COMPACT_CUTS):
         if width in COMPACT_CUTS:
             top = box[1] if box is not None else 0
-            rendered = [to_half_blocks_compact(img, top, width) for img in keyframes]
+            rendered = compact_frames(frames, top, width)
         else:
             rendered = [to_half_blocks(img, width) for img in keyframes]
         (args.out / f"logo_{width}.ans").write_text(rendered[-1] + "\n", encoding="utf-8")
