@@ -31,7 +31,12 @@ from domyn.agents.llm.base import (
     LLMToolCall,
     ToolCallFunction,
 )
-from domyn.agents.planner_strategy import PlannerStrategyFactory
+from domyn.agents.planner_strategy import (
+    ContextManagementType,
+    ContextManagerFactory,
+    PlannerStrategyFactory,
+    PromptingType,
+)
 from domyn.agents.planner_strategy.context_management.full_messages import FullMessageContext
 from domyn.agents.planner_strategy.prompting.json_prompting import JSONMessagePrompting
 from domyn.agents.planner_strategy.prompting.structural_tags_prompting import (
@@ -318,6 +323,57 @@ async def test_react_json_prompting_adds_the_user_edit_note_once() -> None:
 
     assert _joined_contents(messages).count(USER_EDIT_NOTE) == 1
     assert "The call is done" in _joined_contents(messages)
+
+
+def _every_context_manager() -> list[dict[str, Any]]:
+    """A config for every context manager type, with every prompting where it takes one."""
+    native = {ContextManagementType.TOOL_USE, ContextManagementType.THOUGHT_TOOL_USE}
+    return [
+        {"type": context_type.value}
+        if context_type in native
+        else {"type": context_type.value, "prompting": {"type": prompting.value}}
+        for context_type in ContextManagementType
+        for prompting in ([None] if context_type in native else PromptingType)
+    ]
+
+
+# A new context manager must not drop the note: models then retry with the replaced values.
+@pytest.mark.parametrize(
+    "config",
+    _every_context_manager(),
+    ids=lambda c: "-".join([c["type"], *c.get("prompting", {}).values()]),
+)
+@pytest.mark.parametrize("func", [multiply, _multiply_failing_above_3()], ids=["end", "error"])
+@pytest.mark.asyncio
+async def test_every_context_manager_shows_the_user_edit_note(
+    config: dict[str, Any], func: Any
+) -> None:
+    runner, _ = await _run_and_answer_approval(
+        "tool_use_thought", approve=True, edit=True, func=func
+    )
+    events = await _stored_events(runner)
+    context_manager = ContextManagerFactory.from_config(
+        {
+            **config,
+            "name": "test",
+            "llm_provider": _ScriptedProvider(),
+            "narrow_non_visible_agents": True,
+        }
+    )
+    agent = Agent(
+        name="Calc",
+        description="Multiplies.",
+        instruction="Use the tools.",
+        llm_provider=_ScriptedProvider(),
+        tools=[FunctionTool(func=func, approval_type=ApprovalType.PARAMS_UPDATE)],
+    )
+    context = InteractionContext(
+        conversation_id="c1", user_id="u", agent_input=events[0], conversation_history=events
+    )
+
+    messages = await context_manager.get_context(context, agent, use_stop=False)
+
+    assert _joined_contents(messages).count(USER_EDIT_NOTE) == 1
 
 
 @pytest.mark.asyncio
