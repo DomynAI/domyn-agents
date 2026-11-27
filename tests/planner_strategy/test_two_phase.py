@@ -519,13 +519,21 @@ class TestTheSummarizerItself:
 
     @pytest.mark.asyncio
     async def test_the_prompt_asks_for_what_matters(self) -> None:
-        """Failures and open points are the two things a summary usually loses,
-        and both cost real work when they go: the agent repeats a failed attempt
-        or forgets what it was doing."""
+        """Failures are what a summary usually loses, and losing them costs real
+        work: the agent repeats a failed attempt."""
         prompt = ConversationSummarizer().system_prompt.lower()
         assert "failed" in prompt
-        assert "open" in prompt
         assert "invent" in prompt, "a summarizer told nothing about invention will invent"
+
+    @pytest.mark.asyncio
+    async def test_the_prompt_asks_for_what_was_done_only(self) -> None:
+        """Open points written into a summary outlive the steps after it that
+        settle them, and the model goes back to work already done; the task is in
+        the messages kept around the summary, so restating it only costs tokens."""
+        prompt = ConversationSummarizer().system_prompt.lower()
+        assert "do not list open points" in prompt
+        assert "do not restate the task" in prompt
+        assert "still open" not in prompt
 
     @pytest.mark.asyncio
     async def test_an_empty_answer_raises_rather_than_returning_nothing(self) -> None:
