@@ -1040,6 +1040,31 @@ class TestTheReserveAfterTheShare:
         assert plan.threshold_tokens == 131_072
         assert not any("reply reserve" in r.message for r in caplog.records)
 
+    @pytest.mark.parametrize(
+        ("request_tokens", "compacts"),
+        [
+            # Over the tenth floor (26,214) the whole-window reserve left: no longer
+            # a reason to compact.
+            (60_000, False),
+            (125_000, False),
+            (140_000, True),
+        ],
+    )
+    def test_it_compacts_past_half_the_window_and_not_before(
+        self, request_tokens: int, compacts: bool
+    ) -> None:
+        agent = self._agent(context_window=262_144)
+        # Three characters to a token (`HeuristicEstimator`).
+        plan = _active().assess([_msg("user", "x" * (request_tokens * 3))], agent)
+        assert plan.threshold_tokens == 131_072
+        assert plan.needed is compacts
+
+    def test_an_explicit_reserve_still_wins(self) -> None:
+        """The policy's own `reserve_tokens` is a choice made on purpose, kept as given."""
+        agent = self._agent(context_window=262_144)
+        plan = _active(reserve_tokens=200_000).assess([_msg("user", "hi")], agent)
+        assert plan.threshold_tokens == 262_144 - 200_000
+
     def test_the_share_moves_the_threshold(self) -> None:
         agent = self._agent(context_window=262_144, max_tokens_share=0.25)
         assert _active().assess([_msg("user", "hi")], agent).threshold_tokens == 262_144 - 65_536
