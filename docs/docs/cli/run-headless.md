@@ -65,6 +65,7 @@ Without `--config`, the session runs with the following.
 - **Skills**: none. The built-in [skills](../guides/skills.md) are not installed; a `--config` file can declare skills of its own.
 - **Standing instructions**: a short text telling the model it works alone, that the message is a task to carry out rather than a question, that nobody will answer a question or read a plan, to install what is missing and fix errors on the way, to follow the request's names and paths exactly, to check the result before finishing, to leave services running, and to end with a short summary. Without it a model tends to describe the steps and offer to carry them out, and with nobody to accept, the session ends on the offer. `--instructions <file>` replaces the text with the file's, `--no-instructions` runs without any. See [Standing instructions](../guides/standing-instructions.md).
 - **Steps**: up to 1000 model calls in the turn (`--max-iterations`).
+- **Replies**: not streamed. Each reply arrives whole, and is waited for however long the model takes: a call is not cut while the model is still thinking, only when the server cannot be reached or the connection dies (see [LLM providers](../guides/llm-providers.md#provider-specific-options)). A `--config` file sets `stream` on its own agents.
 
 ## Running a configuration of your own
 

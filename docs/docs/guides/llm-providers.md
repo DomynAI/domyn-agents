@@ -104,10 +104,13 @@ Default `generation_params`:
 
 | Provider | Option | Type | Default | Description |
 |---|---|---|---|---|
-| `vllm` | `timeout` | `float` | `300.0` | Seconds to wait for the server, for slow or large models. |
+| `vllm`, `custom`, `openai` | `timeout` | `float` | `300.0` (`openai`: `60.0`) | On a streamed call, seconds without a new chunk before the call fails: it catches a stalled server, not a long reply. |
+| `vllm`, `custom`, `openai` | `non_stream_read_timeout` | `float` or `null` | `null` | On a call that is not streamed, seconds to wait for the whole reply. `null` waits however long the model takes. |
 | `cerebras`, `open_router` | `max_retries` | `int` | `3` | Attempts when the API answers with an empty body. |
 | `vllm`, `custom`, `domyn`, `cerebras`, `open_router` | `send_reasoning` | `bool` | `True` | Sends the model's reasoning back to it with its assistant messages (see [Planner strategies](planner-strategies.md)). Set it to `false` for a model that ignores it, such as one whose vLLM chat template does not read `reasoning_content`: it then sees only the short thought in each call's `reasoning` argument. |
 | `open_router` | `reasoning_supported` | `bool` | `False` | Sends `reasoning: {effort: medium}`. Set it only for models that accept the parameter: others reject the request. |
+
+A call that is not streamed sends nothing until the reply is whole, so any limit on it is a limit on how long the model may think: by default there is none. Connecting fails after 10 seconds, so an address nobody answers is reported at once, and TCP keepalive probes every connection, so a host that went away or a broken link fails the call in about two minutes. Keepalive reaches the first hop only: behind a gateway that still answers, a model server that died is left to the gateway's own timeouts, and a gateway that cuts silent connections (often after 60 seconds to a few minutes) cuts a long reply that is not streamed.
 
 ### `domyn`
 

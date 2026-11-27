@@ -5,7 +5,6 @@ import time
 from collections.abc import AsyncGenerator
 from typing import Any, ClassVar
 
-import httpx
 from pydantic import Field
 
 from domyn.agents.llm.base import (
@@ -20,6 +19,7 @@ from domyn.agents.llm.base import (
     log_inference_response,
     raise_for_status,
 )
+from domyn.agents.llm.http_client import llm_client
 from domyn.agents.logger import get_logger
 from domyn.agents.tools.base import sanitize_tool_names
 
@@ -36,6 +36,17 @@ class CustomLLMProvider(BaseLLMProvider):
     body: dict[str, Any] = Field(
         default_factory=dict,
         description="Extra key-value pairs merged into the request body",
+    )
+    timeout: float = Field(
+        default=300.0,
+        description="Seconds a streamed call waits for the next chunk before failing: it "
+        "catches a stalled server, not a long reply.",
+    )
+    non_stream_read_timeout: float | None = Field(
+        default=None,
+        description="Seconds a call that is not streamed waits for the whole reply. None, "
+        "the default, waits however long the model takes; a dead connection is still "
+        "found by TCP keepalive.",
     )
     supported_structured_outputs: list[StructuredOutputType] | None = None
 
@@ -86,7 +97,7 @@ class CustomLLMProvider(BaseLLMProvider):
 
         log_inference_request(logger, self.url, payload)
 
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with llm_client(self.non_stream_read_timeout) as client:
             response = await client.post(self.url, headers=request_headers, json=payload)
             await raise_for_status(logger, response, "Custom LLM")
             data = response.json()
@@ -174,7 +185,7 @@ class CustomLLMProvider(BaseLLMProvider):
         usage: dict[str, Any] = {}
 
         async with (
-            httpx.AsyncClient(timeout=300.0) as client,
+            llm_client(self.timeout) as client,
             client.stream("POST", self.url, headers=request_headers, json=payload) as response,
         ):
             await raise_for_status(logger, response, "Custom LLM")

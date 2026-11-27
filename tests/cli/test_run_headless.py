@@ -37,6 +37,10 @@ def _config(**given: Any) -> dict[str, Any]:
 
 
 class TestTheConfiguration:
+    def test_the_agent_does_not_stream(self) -> None:
+        """A reply that is not streamed has no read timeout, so a long generation is not cut."""
+        assert _config()["agents"][0]["stream"] is False
+
     def test_what_is_not_given_is_left_to_the_endpoint(self) -> None:
         provider = _config()["llm_providers"][0]
         assert provider["url"] == f"{ENDPOINT}/chat/completions"
