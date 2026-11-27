@@ -1406,11 +1406,9 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                         reasoning_content=reasoning,
                     )
                 return
-
-        # The while loop above can also end via an early `break` (LLM exception,
-        # malformed tool-call arguments after retries exhausted) — only report
-        # "max iterations reached" when that's actually why the loop ended.
-        if iteration >= self.max_iterations:
+        else:
+            # The loop ran out: a `break` (an error, a refusal) is not the limit, even on
+            # the last iteration.
             max_iterations_message = f"Reached maximum iterations ({self.max_iterations})"
             if self.use_stop:
                 yield BaseEvent(

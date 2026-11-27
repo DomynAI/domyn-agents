@@ -319,7 +319,7 @@ def _left_out(messages: list[LLMMessage], excluded: dict[str, int]) -> list[LLMM
             out.append(message)
             continue
         text = (
-            f"[A message from the user was here, about {tokens:,} tokens long. It did not fit "
+            f"[A message was here, about {tokens:,} tokens long. It did not fit "
             "the model's context window, so it was not sent: only this note is left of it.]"
         )
         out.append(message.model_copy(update={"content": text}))
@@ -1430,20 +1430,9 @@ class Compactor(BaseModel):
         window: int | None = None,
         stated: bool = True,
     ) -> dict[str, int]:
-        """The requests in ``messages`` no request can carry, by event id, with their
-        estimated tokens: alone, with what every request carries (system prompt, tool
-        definitions, turn context), over ``window``, one a rejection gave. With a
-        stand-in for it (``stated`` false: half a rejected request), alone over it: what
-        every request carries is in the half too.
-
-        Against the agent's own window (``window`` not given), over twice it: nothing
-        has proved the request too long, and the estimate counts prose at up to about
-        twice its tokens (``_beyond_estimate_error``).
-
-        Empty without a window or a strategy that acts, and when what every request
-        carries is over the window by itself: no message is to blame. Estimated without
-        the measured correction, which belongs to text the provider has already counted.
-        """
+        """The requests that, with what every request carries, are over ``window`` (a
+        rejection's; alone over it when ``stated`` is false), else over twice the agent's
+        (``_beyond_estimate_error``): event id to estimated tokens, without the correction."""
         if window is None:
             window = _beyond_estimate_error(_context_window(agent))
         if not self.active or window is None:
@@ -1503,12 +1492,9 @@ class Compactor(BaseModel):
         author: str,
         rejected_tokens: int,
     ) -> BaseEvent:
-        """The event ending a turn the provider rejected as too long when nothing could
-        be compacted or left out. The current request is left out when it is the last
-        message and over half the ``rejected_tokens`` request, as in
-        ``refuse_over_window``: the request before it went through, so the conversation
-        stays usable. A request under the window can be rejected for the room its
-        answer needs (vLLM before 0.32). A smaller one is not to blame."""
+        """The event ending a rejected turn nothing could shorten. The current request is
+        left out when it is the last message and over half the rejected one: a smaller one
+        is not to blame."""
         last = conversation[-1] if conversation else None
         tokens = int(self.estimator.estimate_messages([last])) if last is not None else 0
         if (
@@ -1521,8 +1507,8 @@ class Compactor(BaseModel):
             return self.refusal(
                 REQUEST_TOO_LONG,
                 "The model rejected the request as too long, and the conversation cannot be "
-                "shortened further: the message was not sent, and is left out of this "
-                "conversation. Send a shorter one, or a file the agent can read.",
+                "shortened further: the request was not sent, and is left out of this "
+                "conversation. A shorter one, or a file to read instead, can be sent.",
                 author,
                 rejected=True,
             )
@@ -1573,9 +1559,9 @@ class Compactor(BaseModel):
         )
         return self.refusal(
             REQUEST_TOO_LONG,
-            f"The message is about {tokens:,} tokens and {size}: it was not sent, and is "
-            "left out of this conversation. Send a shorter version, or a file the agent "
-            "can read.",
+            f"The request is about {tokens:,} tokens and {size}: it was not sent, and is "
+            "left out of this conversation. A shorter one, or a file to read instead, can "
+            "be sent.",
             author,
             rejected,
         )
@@ -1600,14 +1586,9 @@ class Compactor(BaseModel):
         key: str,
         author: str,
     ) -> BaseEvent | None:
-        """The event ending the turn when the request, compacted, is still over twice
-        the window, which no error of the estimate explains (``_beyond_estimate_error``),
-        else ``None``: a request under that goes out, and a rejection decides.
-
-        The request is left out when it is the last message and the rest is not over
-        that without it: the request before it went out, so the conversation stays
-        usable.
-        """
+        """The event ending the turn when the compacted request is still over twice the
+        window, else ``None``. The current request is left out when it is the last message
+        and the rest is under that without it."""
         raw = (usage_metadata or {}).get(CONTEXT_USAGE_METADATA_KEY)
         if not self.active or not isinstance(raw, dict):
             return None
@@ -1624,10 +1605,10 @@ class Compactor(BaseModel):
                 self.leave_out(conversation, {last.source_event_id: tokens}, state, key)
                 return self.refusal(
                     REQUEST_TOO_LONG,
-                    "The message does not fit in what is left of the model's context window: "
-                    f"with it the request is about {total:,} tokens of {window:,}. It was not "
-                    "sent, and is left out of this conversation. Send a shorter one, or start "
-                    "a new conversation.",
+                    "The request does not fit in what is left of the model's context window: "
+                    f"with it the conversation is about {total:,} tokens of {window:,}. It was "
+                    "not sent, and is left out of this conversation. A shorter one can be "
+                    "sent, or a new conversation started.",
                     author,
                 )
         return self.refusal(
@@ -1639,10 +1620,8 @@ class Compactor(BaseModel):
 
 
 def _beyond_estimate_error(window: int | None) -> int | None:
-    """What a request must be estimated over to be over ``window`` whatever the
-    estimate's error: twice it. Prose costs as little as 0.56 real tokens per estimated
-    one (Qwen3-32B), so refused on the estimate alone, prose the model would take was
-    refused; a request between the two goes out, and a rejection decides."""
+    """Twice ``window``: the estimate counts prose at up to about twice its tokens, so
+    only past that is a request over the window whatever the estimate's error."""
     return 2 * window if window is not None else None
 
 

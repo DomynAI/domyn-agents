@@ -2094,6 +2094,21 @@ class TestToolUseWithThoughtPlannerStrategy:
         assert any(e.event_type == ExecutionEventType.ERROR_OCCURRED for e in events)
 
     @pytest.mark.asyncio
+    async def test_an_error_on_the_last_iteration_is_not_the_iteration_limit(self):
+        strategy = ToolUseWithThoughtPlannerStrategy(max_iterations=1)
+        agent = self._make_agent()
+        agent.llm_provider = AsyncMock()
+        agent.llm_provider.generate = AsyncMock(side_effect=Exception("timeout"))
+        context = make_context(
+            conversation_history=[make_event(ExecutionEventType.USER_INPUT, content_text="Hi")]
+        )
+
+        events = [event async for event in strategy.execute(agent, context)]
+
+        assert any(e.event_type == ExecutionEventType.ERROR_OCCURRED for e in events)
+        assert not any(e.event_type == ExecutionEventType.RESPONSE for e in events)
+
+    @pytest.mark.asyncio
     async def test_malformed_tool_call_args_retries_then_recovers(self):
         """A malformed tool-call arguments JSON should trigger a verbatim retry."""
         strategy = self._make_strategy()

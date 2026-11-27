@@ -138,6 +138,8 @@ def render(
     )
 
     if usage.context_window:
+        # Not capped like the indicator: it is the total above against the window, and a
+        # capped share would contradict it.
         fraction = usage.fraction_used or 0.0
         console.print(
             f"   {'model window':<22} {thousands(usage.context_window):>7}  {fraction:>4.0%} used",
