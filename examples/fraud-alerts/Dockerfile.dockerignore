@@ -1,0 +1,11 @@
+# The build context is the repository's root: send only what the image needs.
+*
+!pyproject.toml
+!README.md
+!LICENSE
+!NOTICE
+!domyn
+!docs/docs
+!examples/fraud-alerts
+**/__pycache__
+examples/fraud-alerts/.env

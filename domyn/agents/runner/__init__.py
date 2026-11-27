@@ -533,7 +533,8 @@ class ContextBuilder:
                 filter(
                     lambda x: (
                         x.event_type == ExecutionEventType.AGENT_START
-                        and x.action.name == state.current_agent.name
+                        # A channel's AGENT_START (Telegram, Kafka) names no agent.
+                        and getattr(x.action, "name", None) == state.current_agent.name
                     ),
                     state.conversation_info.events_history,
                 )
@@ -569,7 +570,7 @@ class ContextBuilder:
                     x
                     for x in state.conversation_info.events_history
                     if x.event_type == ExecutionEventType.AGENT_START
-                    and x.action.name == state.current_agent.name
+                    and getattr(x.action, "name", None) == state.current_agent.name
                 ]
                 if agents_calls:
                     interaction_history = [agents_calls[-1]]
@@ -2062,6 +2063,22 @@ class Runner:
         # Return it as-is so context.agent_input points to the original and the runner
         # does not yield a duplicate (same object → elif branch stores without yielding).
         if user_input.event_type == ExecutionEventType.AGENT_START:
+            if getattr(user_input, "action", None) is None:
+                # A channel's request (Telegram, Kafka…) names no agent: it is the
+                # root's start. Recorded as the root's, as for a USER_INPUT, or the
+                # history would hide it (its author is no agent) and a turn resumed
+                # after an approval would read its task after the tool's result.
+                task_text = " ".join(p.text for p in (user_input.content or []) if p.text)
+                return user_input.model_copy(
+                    update={
+                        "author": state.current_agent.name,
+                        "action": AgentAction(
+                            name=state.current_agent.name,
+                            parameters={"task": task_text},
+                            thought="",
+                        ),
+                    }
+                )
             return user_input
 
         if is_new_conversation:  # New conversation

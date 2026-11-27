@@ -980,6 +980,8 @@ Providers implement `BaseLLMProvider` interface with `async def generate(message
 
 The chat channels (Telegram, Slack, WhatsApp) take a `transcriber` and put a text `Part` after every audio `Part` (`channels/_voice.py`): the transcription, prefixed `[Voice message, transcribed]`, or a line saying why there is none (no transcriber, failure, silence), so the agent can say so instead of answering nothing. No context manager renders a file `Part` to a model, which is why the text is needed at all. Each channel passes the headers its downloads need (Telegram's URL carries the token; WhatsApp and Slack take a Bearer header); downloads are capped at 25 MB. `domyn serve --channel multi` reads `serve.transcriber` and gives it to every entry without its own. Channel attachments are `File(file_id=<url>)`: the field was renamed from `uri` in #486 and the channels kept building `File(uri=...)`, which failed validation, until this was fixed alongside.
 
+**The Kafka channel** (`channels/kafka.py`, `KafkaChannel`, the `kafka` extra: `aiokafka`) serves an agent to events rather than people: `type: kafka` under `serve.channels` (`bootstrap_servers`, `topics`, `output_topic`, `group_id`, `events`, `max_in_flight`, `options` for aiokafka's security settings), run with `domyn serve <file> --channel multi`. A message's key is the conversation; its value is a `BaseEvent` as JSON (an `AGENT_START`, or the `TOOL_FEEDBACK` answering an approval) or any other text, which becomes the text of an `AGENT_START`. It writes the event types in `events` to `output_topic`, keyed the same way, never a partial one. It stops reading while `max_in_flight` turns run, so messages wait in Kafka instead of meeting the adapter's `WorkerBusy`, and commits an offset only once its turn has ended or parked, and only up to the oldest message still running in its partition (a turn is over at its approval request, its final `RESPONSE`, an `AGENT_END` or the adapter's refusal). The `serve` block of the file is read with `${VAR}` resolved, as the rest of it (`_read_serve_section`). A channel's `AGENT_START` names no agent and no `action`: the runner records it as the root's start (`_build_agent_start_event`), or a turn resumed after an approval read its task after the tool's result, and the resume failed on the missing action before that. `examples/fraud-alerts` is the worked example; tests run on an in-process stand-in for aiokafka (`tests/channels/test_kafka_channel.py`), no broker.
+
 `import domyn.agents.audio` must not import `onnx_asr`/`onnxruntime` (`tests/audio/test_resolve.py` checks it); the engine is imported inside `LocalTranscriber._load`.
 
 ## Key Directory Structure
@@ -1010,7 +1012,7 @@ domyn/agents/
 ├── interfaces/          # cli/ (the REPL and everything it draws), plus channel
 │                        # and adapter plumbing
 ├── cli/                 # Typer entrypoint and one subpackage per command
-├── channels/            # Slack, Telegram, WhatsApp, relay
+├── channels/            # Slack, Telegram, WhatsApp, Kafka, relay
 ├── adapters/            # Foreign-framework agents (langgraph, domyn_agent)
 ├── plugins/             # External plugins: placeholder, support still to be added (TODO)
 ├── integrations/        # Host integrations (hermes gateway)

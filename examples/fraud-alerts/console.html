@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analyst console</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #16191d; --muted: #5f6873; --line: #e3e6ea;
+    --accent: #1f5fd6; --accent-text: #ffffff;
+    --wait: #a35a00; --wait-bg: #fff4e0; --done: #1d7a46; --done-bg: #e6f5ec;
+    --error: #b42318; --error-bg: #fdecea; --work: #1f5fd6; --work-bg: #e8f0fd;
+    --risk-high: #b42318; --risk-mid: #a35a00; --risk-low: #1d7a46;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111316; --panel: #1a1d21; --text: #e8eaed; --muted: #9aa3ad; --line: #2c3036;
+      --accent: #5b8def; --accent-text: #0b0d10;
+      --wait: #f0b45a; --wait-bg: #3a2a10; --done: #5cc38a; --done-bg: #12301f;
+      --error: #f28b82; --error-bg: #3b1714; --work: #8ab0f5; --work-bg: #172640;
+      --risk-high: #f28b82; --risk-mid: #f0b45a; --risk-low: #5cc38a;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  .start { text-align: center; padding: 48px 12px; }
+  .start h2 { margin: 0 0 8px; }
+  .start p { color: var(--muted); margin: 0 auto 20px; max-width: 420px; }
+  .start .buttons { justify-content: center; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 12px; padding: 16px 24px;
+    border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { margin: 0; font-size: 17px; font-weight: 600; }
+  header .counts { color: var(--muted); font-size: 14px; }
+  main { display: grid; grid-template-columns: 340px 1fr; gap: 20px; padding: 20px 24px; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; padding: 16px; } }
+
+  .list { display: flex; flex-direction: column; gap: 8px; }
+  .case {
+    display: block; width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+  }
+  .case:hover { border-color: var(--muted); }
+  .case.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .case .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .case .id { font-weight: 600; }
+  .case .type { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+  .chip { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .chip.waiting { color: var(--wait); background: var(--wait-bg); }
+  .chip.done { color: var(--done); background: var(--done-bg); }
+  .chip.error { color: var(--error); background: var(--error-bg); }
+  .chip.working, .chip.queued { color: var(--work); background: var(--work-bg); }
+
+  .detail { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px 24px; min-width: 0; }
+  .detail h2 { margin: 0 0 4px; font-size: 20px; }
+  .facts { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 14px; margin-bottom: 10px; }
+  .risk { font-weight: 600; }
+  .summary { margin: 0 0 18px; }
+  .empty { color: var(--muted); padding: 40px 0; text-align: center; }
+
+  .ask { border: 1px solid var(--wait); background: var(--wait-bg); border-radius: 10px; padding: 16px; margin-bottom: 20px; }
+  .ask h3 { margin: 0 0 6px; font-size: 15px; color: var(--wait); }
+  .ask.failed { border-color: var(--error); background: var(--error-bg); }
+  .ask.failed h3 { color: var(--error); }
+  .ask .reason { margin: 0 0 12px; }
+  .params { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; align-items: center; margin-bottom: 14px; }
+  .params label { color: var(--muted); font-size: 14px; }
+  .params input {
+    font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 8px; width: 100%; max-width: 260px;
+  }
+  .buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+  button.act { font: inherit; font-weight: 600; border-radius: 8px; padding: 8px 18px; cursor: pointer; border: 1px solid var(--line); }
+  button.approve { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button.deny { background: var(--panel); color: var(--text); }
+  button.act:disabled { opacity: .5; cursor: default; }
+  .problem { color: var(--error); margin-top: 10px; font-size: 14px; }
+
+  .timeline { list-style: none; margin: 0; padding: 0; border-left: 2px solid var(--line); }
+  .timeline li { position: relative; padding: 0 0 14px 18px; }
+  .timeline li::before {
+    content: ""; position: absolute; left: -6px; top: 6px; width: 10px; height: 10px;
+    border-radius: 50%; background: var(--line);
+  }
+  .timeline li.action::before, .timeline li.decision::before { background: var(--accent); }
+  .timeline li.asked::before { background: var(--wait); }
+  .timeline li.note::before { background: var(--done); }
+  .timeline li.error::before { background: var(--error); }
+  .timeline li.resent::before { background: var(--accent); }
+  .timeline li.policy::before { border-radius: 2px; }
+  .timeline li.policy.v-allow::before { background: var(--done); }
+  .timeline li.policy.v-ask::before { background: var(--wait); }
+  .timeline li.policy.v-deny::before { background: var(--error); }
+  .rule-tag {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    padding: 1px 6px; border-radius: 4px; vertical-align: 1px;
+  }
+  .rule-tag.v-allow { color: var(--done); background: var(--done-bg); }
+  .rule-tag.v-ask { color: var(--wait); background: var(--panel); border: 1px solid var(--wait); }
+  .rule-tag.v-deny { color: var(--error); background: var(--error-bg); }
+  .ask .why { margin: 0 0 8px; }
+  .rules { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+  .rules li { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .rules li strong { display: block; margin-bottom: 2px; }
+  .rules input { width: 80px; display: inline-block; margin: 0 4px; }
+  .timeline .when { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .timeline .what { font-weight: 600; }
+  .timeline .args { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  .timeline li.note .text { background: var(--bg); border-radius: 8px; padding: 10px 12px; margin-top: 4px; }
+  .timeline .text { overflow-wrap: anywhere; }
+  h3.section { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 12px; }
+  header .spacer { flex: 1; }
+  button.new.secondary { background: var(--panel); color: var(--text); border-color: var(--line); }
+  button.new { font: inherit; font-weight: 600; font-size: 14px; border-radius: 8px; padding: 7px 14px;
+    cursor: pointer; background: var(--accent); color: var(--accent-text); border: 1px solid var(--accent); }
+  dialog {
+    border: 1px solid var(--line); border-radius: 12px; padding: 0; width: min(480px, calc(100vw - 32px));
+    background: var(--panel); color: var(--text);
+  }
+  dialog::backdrop { background: rgb(0 0 0 / .35); }
+  dialog form { padding: 20px 22px; display: grid; gap: 14px; }
+  dialog h2 { margin: 0; font-size: 18px; }
+  dialog .field { display: grid; gap: 5px; }
+  dialog label { font-size: 14px; color: var(--muted); }
+  dialog select, dialog input {
+    font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 9px; width: 100%;
+  }
+  dialog .hint { font-size: 13px; color: var(--muted); margin: 0; }
+  dialog .buttons { justify-content: flex-end; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Fraud alerts · analyst console</h1>
+  <span class="counts" id="counts"></span>
+  <span class="spacer"></span>
+  <button class="new secondary" id="bank-rules">Bank rules</button>
+  <button class="new" id="new-alert">New alert</button>
+</header>
+<dialog id="rules">
+  <form method="dialog" id="rules-form">
+    <h2>Bank rules</h2>
+    <p class="hint">Code the bank writes, not instructions to the model: each one rules on an
+      action before it runs, from the bank's own data, and the agent cannot argue with it.</p>
+    <ul class="rules">
+      <li><strong>Blocking a card</strong>always allowed: it protects the customer, and can be undone.</li>
+      <li><strong>Closing an alert as a false alarm</strong>allowed under a risk score of
+        <input id="r-threshold" type="number" min="0" max="100" required>
+        and asks an analyst from there on.</li>
+      <li><strong>Releasing a held payment</strong>always asks an analyst, who can change the
+        amount; more than the payment holds is refused, even if the analyst typed it.</li>
+    </ul>
+    <div class="problem" id="r-problem"></div>
+    <div class="buttons">
+      <button class="act deny" value="cancel" formnovalidate>Cancel</button>
+      <button class="act approve" value="save">Save</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="raise">
+  <form method="dialog" id="raise-form">
+    <h2>New alert</h2>
+    <p class="hint">Raised as the fraud engine would: the customer's data gets what the alert
+      describes, and the agent takes it from the queue.</p>
+    <div class="field"><label for="f-scenario">Scenario</label><select id="f-scenario"></select></div>
+    <div class="field"><label for="f-customer">Customer</label><select id="f-customer"></select></div>
+    <div class="field">
+      <label for="f-risk">Risk score</label>
+      <input id="f-risk" type="number" min="0" max="100" required>
+      <p class="hint" id="f-risk-hint"></p>
+    </div>
+    <div class="field" id="f-amount-field"><label for="f-amount">Amount (EUR)</label>
+      <input id="f-amount" type="number" min="1" step="0.01"></div>
+    <div class="problem" id="f-problem"></div>
+    <div class="buttons">
+      <button class="act deny" value="cancel" formnovalidate>Cancel</button>
+      <button class="act approve" id="f-send" value="send">Raise alert</button>
+    </div>
+  </form>
+</dialog>
+<main>
+  <nav class="list" id="list" aria-label="Cases"></nav>
+  <section class="detail" id="detail"></section>
+</main>
+<script>
+const LABEL = { waiting: "Needs you", working: "Agent working", queued: "Queued", done: "Done", error: "Error" };
+let cases = [];
+let selected = null;
+let askingFor = null;  // the call the decision form is for, kept while the analyst types
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v; else if (k.startsWith("on")) node[k] = v; else node.setAttribute(k, v);
+  }
+  for (const child of children.flat(Infinity)) if (child != null) node.append(child);
+  return node;
+}
+
+const words = (s) => (s || "").replaceAll("_", " ");
+const time = (iso) => new Date(iso).toLocaleTimeString();
+const args = (o) => Object.entries(o || {}).map(([k, v]) => `${k}: ${v}`).join(" · ");
+function risk(score) {
+  const level = score >= 70 ? "high" : score >= 50 ? "mid" : "low";
+  return el("span", { class: "risk", style: `color: var(--risk-${level})` }, `risk ${score}`);
+}
+
+function renderList() {
+  const list = document.getElementById("list");
+  list.replaceChildren(...cases.map((c) => el("button", {
+      class: "case" + (c.id === selected ? " selected" : ""),
+      onclick: () => { selected = c.id; render(); },
+    },
+    el("div", { class: "top" }, el("span", { class: "id" }, c.id), el("span", { class: `chip ${c.status}` }, LABEL[c.status])),
+    el("div", { class: "type" }, c.alert ? `${words(c.alert.type)} · ` : "", c.alert ? risk(c.alert.risk_score) : ""),
+  )));
+  const waiting = cases.filter((c) => c.status === "waiting").length;
+  document.getElementById("counts").textContent =
+    `${cases.length} cases · ${waiting} waiting for you · ${cases.filter((c) => c.status === "done").length} done`;
+}
+
+function askForm(c) {
+  const w = c.waiting;
+  const inputs = {};
+  const problem = el("div", { class: "problem" });
+  const params = el("div", { class: "params" }, w.parameters.map((p) => {
+    if (!w.editable) return [el("label", {}, words(p.name)), el("span", {}, String(p.value))];
+    const input = el("input", { id: `p-${p.name}`, value: p.value });
+    inputs[p.name] = input;
+    return [el("label", { for: `p-${p.name}` }, words(p.name)), input];
+  }));
+  async function send(approve) {
+    for (const b of form.querySelectorAll("button")) b.disabled = true;
+    const parameters = {};
+    if (w.editable) for (const [k, input] of Object.entries(inputs)) parameters[k] = input.value;
+    const response = await fetch(`/api/cases/${encodeURIComponent(c.id)}/decision`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approve, parameters }),
+    });
+    if (!response.ok) {
+      problem.textContent = (await response.json()).detail || "The answer was not sent.";
+      for (const b of form.querySelectorAll("button")) b.disabled = false;
+      return;
+    }
+    askingFor = undefined;  // matches nothing: the next render clears the form
+    await refresh();
+  }
+  const form = el("div", { class: "ask" },
+    el("h3", {}, `The agent wants to ${words(w.name)}`),
+    w.policy ? el("p", { class: "why" }, el("span", { class: "rule-tag v-ask" }, "Bank rule"),
+      ` ${w.policy.rule}: ${w.policy.reason}.`) : null,
+    w.reason ? el("p", { class: "reason" }, el("strong", {}, "The agent says: "), w.reason) : null,
+    params,
+    el("div", { class: "buttons" },
+      el("button", { class: "act approve", onclick: () => send(true) }, w.editable ? "Approve with these values" : "Approve"),
+      el("button", { class: "act deny", onclick: () => send(false) }, "Deny"),
+    ),
+    problem,
+  );
+  return form;
+}
+
+function resendForm(c) {
+  const problem = el("div", { class: "problem" });
+  const button = el("button", { class: "act approve", onclick: async () => {
+    button.disabled = true;
+    const response = await fetch(`/api/cases/${encodeURIComponent(c.id)}/resend`, { method: "POST" });
+    if (!response.ok) {
+      problem.textContent = (await response.json()).detail || "The alert was not sent.";
+      button.disabled = false;
+      return;
+    }
+    askingFor = undefined;
+    await refresh();
+  } }, "Send the alert again");
+  return el("div", { class: "ask failed" },
+    el("h3", {}, "The agent stopped on an error"),
+    el("p", { class: "reason" }, "Send the alert again and the agent takes the case up where it "
+      + "stopped, with what it has found so far."),
+    el("div", { class: "buttons" }, button),
+    problem);
+}
+
+const RULED = { allow: "allows", deny: "refuses", ask: "asks you before" };
+
+function step(s) {
+  if (s.kind === "policy") {
+    return el("li", { class: `policy v-${s.decision}` },
+      el("div", { class: "when" }, time(s.at)),
+      el("div", { class: "what" }, el("span", { class: `rule-tag v-${s.decision}` }, "Bank rule"),
+        ` ${RULED[s.decision] || s.decision} ${words(s.action)}`),
+      el("div", { class: "args" }, `${s.rule}: ${s.text}`));
+  }
+  const kind = s.kind === "call" && s.action ? "action" : s.kind;
+  const what = {
+    call: `Called ${s.text}`, result: `${words(s.name)} ran`, asked: "Waiting for an analyst",
+    decision: s.text, note: "Case note", error: "Error", stale: s.text, resent: s.text,
+  }[s.kind];
+  return el("li", { class: kind },
+    el("div", { class: "when" }, time(s.at)),
+    el("div", { class: "what" }, what),
+    s.arguments && Object.keys(s.arguments).length ? el("div", { class: "args" }, args(s.arguments)) : null,
+    ["result", "note", "error"].includes(s.kind) && s.text ? el("div", { class: "text" }, s.text) : null,
+  );
+}
+
+// Three parts of the detail, each redrawn on its own: the form only when another call
+// waits, so what the analyst is typing is never redrawn under them.
+const parts = {
+  head: el("div"), form: el("div"),
+  steps: el("div", {}, el("h3", { class: "section" }, "What happened"), el("div")),
+};
+
+function renderDetail() {
+  const detail = document.getElementById("detail");
+  const c = cases.find((x) => x.id === selected);
+  if (!c) {
+    detail.replaceChildren(cases.length ? el("p", { class: "empty" }, "Choose a case.") : start());
+    askingFor = null;
+    return;
+  }
+  if (detail.firstChild !== parts.head) detail.replaceChildren(parts.head, parts.form, parts.steps);
+
+  const a = c.alert || {};
+  parts.head.replaceChildren(
+    el("h2", {}, c.id, " ", el("span", { class: `chip ${c.status}` }, LABEL[c.status])),
+    el("div", { class: "facts" },
+      a.type ? el("span", {}, words(a.type)) : null,
+      a.risk_score != null ? risk(a.risk_score) : null,
+      a.customer_id ? el("span", {}, `customer ${a.customer_id}`) : null),
+    a.summary ? el("p", { class: "summary" }, a.summary) : null,
+  );
+
+  // The form: an action waiting for the analyst, or a case that ended in an error.
+  const waitingFor = c.waiting ? `${c.id}/${c.waiting.call_id}/${c.waiting.policy ? "ruled" : ""}`
+    : c.status === "error" ? `${c.id}/error/${c.steps.length}` : null;
+  if (waitingFor !== askingFor) {
+    parts.form.replaceChildren(...(c.waiting ? [askForm(c)] : c.status === "error" ? [resendForm(c)] : []));
+    askingFor = waitingFor;
+  }
+
+  parts.steps.lastChild.replaceChildren(
+    c.steps.length ? el("ul", { class: "timeline" }, c.steps.map(step))
+                   : el("p", { class: "empty" }, "The agent has not started yet."));
+}
+
+// Shown while there is no case: the way to the first ones.
+const startPanel = (() => {
+  const problem = el("div", { class: "problem" });
+  const samples = el("button", { class: "act approve", onclick: async () => {
+    samples.disabled = true;
+    const response = await fetch("/api/samples", { method: "POST" });
+    if (!response.ok) problem.textContent = (await response.json()).detail || "Not sent.";
+    samples.disabled = false;
+    await refresh();
+  } }, "Send the five sample alerts");
+  return el("div", { class: "start" },
+    el("h2", {}, "No alerts yet"),
+    el("p", {}, "Send the five sample alerts, one for each kind of fraud this agent knows, "
+      + "or raise your own."),
+    el("div", { class: "buttons" }, samples,
+      el("button", { class: "act deny", onclick: () => field("new-alert").click() }, "New alert")),
+    problem);
+})();
+const start = () => startPanel;
+
+function render() { renderList(); renderDetail(); }
+
+async function refresh() {
+  try {
+    cases = await (await fetch("/api/cases")).json();
+  } catch { return; }
+  if (!selected || !cases.some((c) => c.id === selected)) {
+    selected = (cases.find((c) => c.status === "waiting") || cases[0] || {}).id || null;
+  }
+  render();
+}
+
+// --- New alert --------------------------------------------------------------------------
+const raise = document.getElementById("raise");
+const field = (id) => document.getElementById(id);
+let catalog = null;
+
+function fillCustomers() {
+  const scenario = catalog.scenarios[field("f-scenario").value];
+  const select = field("f-customer");
+  const before = select.value;
+  select.replaceChildren(...catalog.customers.map((c) => {
+    const blocked = scenario.card && c.card_blocked;
+    const option = el("option", { value: c.customer_id },
+      `${c.name} (${c.segment})${blocked ? " · card blocked" : ""}`);
+    option.disabled = blocked;
+    return option;
+  }));
+  const usable = [...select.options].filter((o) => !o.disabled);
+  select.value = usable.some((o) => o.value === before) ? before : (usable[0] || {}).value || "";
+  field("f-send").disabled = !usable.length;
+  field("f-problem").textContent = usable.length ? "" : "Every card is blocked: no card alert can be raised.";
+}
+
+function fillScenario() {
+  const scenario = catalog.scenarios[field("f-scenario").value];
+  field("f-risk").value = scenario.risk_score;
+  field("f-amount-field").hidden = !("amount" in scenario);
+  field("f-amount").value = scenario.amount ?? "";
+  fillCustomers();
+}
+
+function riskHint(threshold) {
+  return `Under ${threshold}, the agent may close the alert as a false alarm on its own; `
+    + `from ${threshold}, closing it asks you. Change it in Bank rules.`;
+}
+
+field("new-alert").onclick = async () => {
+  catalog = await (await fetch("/api/scenarios")).json();
+  field("f-risk-hint").textContent = riskHint((await (await fetch("/api/policy")).json()).high_risk);
+  field("f-scenario").replaceChildren(...Object.entries(catalog.scenarios).map(
+    ([key, s]) => el("option", { value: key }, s.label)));
+  field("f-problem").textContent = "";
+  fillScenario();
+  raise.showModal();
+};
+field("f-scenario").onchange = fillScenario;
+
+field("raise-form").onsubmit = async (e) => {
+  if (e.submitter && e.submitter.value === "cancel") return;
+  e.preventDefault();
+  const scenario = catalog.scenarios[field("f-scenario").value];
+  const body = {
+    scenario: field("f-scenario").value,
+    customer_id: field("f-customer").value,
+    risk_score: Number(field("f-risk").value),
+    amount: "amount" in scenario ? Number(field("f-amount").value) : null,
+  };
+  field("f-send").disabled = true;
+  const response = await fetch("/api/alerts", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  field("f-send").disabled = false;
+  if (!response.ok) {
+    field("f-problem").textContent = (await response.json()).detail || "The alert was not raised.";
+    return;
+  }
+  selected = (await response.json()).alert_id;
+  raise.close();
+  await refresh();
+};
+
+// --- Bank rules -------------------------------------------------------------------------
+const rules = document.getElementById("rules");
+field("bank-rules").onclick = async () => {
+  field("r-threshold").value = (await (await fetch("/api/policy")).json()).high_risk;
+  field("r-problem").textContent = "";
+  rules.showModal();
+};
+field("rules-form").onsubmit = async (e) => {
+  if (e.submitter && e.submitter.value === "cancel") return;
+  e.preventDefault();
+  const response = await fetch("/api/policy", {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ high_risk: Number(field("r-threshold").value) }),
+  });
+  if (!response.ok) {
+    field("r-problem").textContent = (await response.json()).detail || "Not saved.";
+    return;
+  }
+  rules.close();
+};
+
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>

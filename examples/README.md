@@ -16,6 +16,7 @@ The examples are listed from the simplest to the most involved:
 | [`rest-guardrail`](rest-guardrail/) | Hooks served over HTTP, used as a guardrail on what reaches the model and what reaches you |
 | [`runner-in-your-app`](runner-in-your-app/) | Running a system from your own code with the `Runner`, approvals answered in code, saved conversations, long-term memory |
 | [`remote-agent`](remote-agent/) | An agent that runs in another process, called as a sub-agent through a relay |
+| [`fraud-alerts`](fraud-alerts/) | An agent served on Kafka with `domyn serve`, working alerts with nobody typing: policy hooks that allow, deny or ask, cases parked for an analyst and resumed, REST services as MCP tools |
 
 ## Setup
 
