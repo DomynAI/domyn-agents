@@ -44,25 +44,61 @@ CHOICE_STYLES: dict[str, str] = {
 }
 
 
-# Lines of the screen a picker leaves to what is not its options: its label, its
-# hint, and a few for the prompt the terminal draws around it.
-_CHROME_ROWS = 5
-_MIN_VISIBLE = 3
+# Lines the terminal keeps for itself under an inline picker: the cursor's row and
+# the one the prompt is drawn on.
+_MARGIN_ROWS = 2
 
 
-def visible_options() -> int:
-    """How many option rows fit the terminal, for a picker drawn inline."""
+def screen_size() -> tuple[int, int]:
+    """The terminal's ``(columns, lines)``."""
     import shutil
 
-    return max(_MIN_VISIBLE, shutil.get_terminal_size((80, 24)).lines - _CHROME_ROWS)
+    size = shutil.get_terminal_size((80, 24))
+    return size.columns, size.lines
 
 
-def window(count: int, index: int, visible: int | None) -> range:
-    """The rows to draw out of ``count``: all, or ``visible`` of them around ``index``."""
-    if visible is None or count <= visible:
-        return range(count)
-    start = min(max(index - visible // 2, 0), count - visible)
-    return range(start, start + visible)
+def _height(text: str, columns: int) -> int:
+    """Lines ``text`` takes once the picker's window wraps it at ``columns``."""
+    from prompt_toolkit.utils import get_cwidth
+
+    return max(1, -(-get_cwidth(text) // max(columns, 1)))
+
+
+def window(heights: Sequence[int], index: int, budget: int | None) -> range:
+    """The rows to draw: all of them, or those around ``index`` within ``budget`` lines.
+
+    Heights, not counts: a row longer than the terminal is wide wraps onto more lines,
+    and a picker taller than the screen scrolls its top, label included, out of sight.
+    The row at ``index`` is always drawn.
+    """
+    if budget is None or sum(heights) <= budget:
+        return range(len(heights))
+    start, end, used = index, index + 1, heights[index]
+    grew = True
+    while grew:
+        grew = False
+        if end < len(heights) and used + heights[end] <= budget:
+            used, end, grew = used + heights[end], end + 1, True
+        if start > 0 and used + heights[start - 1] <= budget:
+            start, used, grew = start - 1, used + heights[start - 1], True
+    return range(start, end)
+
+
+def _fit(
+    label: str,
+    texts: Sequence[str],
+    hint: str,
+    index: int,
+    screen: tuple[int, int] | None,
+) -> range:
+    """The rows of a picker that fit ``screen`` below its label and above its hint."""
+    if screen is None:
+        return range(len(texts))
+    columns, lines = screen
+    # The label may gain " (40/40)" once the list is cut.
+    fixed = _height(f"  {label} ({len(texts)}/{len(texts)})", columns) + _height(hint, columns)
+    budget = max(1, lines - fixed - _MARGIN_ROWS)
+    return window([_height(text, columns) for text in texts], index, budget)
 
 
 def _position(shown: range, count: int, index: int) -> str:
@@ -78,12 +114,13 @@ def choice_rows(
     keys: list[str],
     *,
     descriptions: dict[str, str] | None = None,
-    visible: int | None = None,
+    screen: tuple[int, int] | None = None,
 ) -> list[tuple[str, str]]:
     """A pick-one question as prompt_toolkit fragments, ending in a newline.
 
-    ``visible`` caps the options drawn: the window follows ``index``, so a list longer
-    than the terminal scrolls instead of leaving its end out of reach.
+    ``screen`` is the terminal's ``(columns, lines)``: given, only the options that fit
+    are drawn, around ``index``, so a list longer than the terminal scrolls instead of
+    leaving its end out of reach.
 
     ``keys`` are the hint's entries after ``↑↓ move`` (``enter select``…), since
     what the other keys do depends on who asks.
@@ -96,7 +133,14 @@ def choice_rows(
     unicode = theme.capabilities.unicode
     pointer_glyph = "\u276f" if unicode else ">"
     descriptions = descriptions or {}
-    shown = window(len(options), index, visible)
+    separator, move = (" \u00b7 ", "\u2191\u2193 move") if unicode else (" - ", "up/down move")
+    hint = f"  {separator.join([move, *keys])}"
+    texts = [
+        f"    {position + 1}. {option}"
+        + (f"  {descriptions[option]}" if option in descriptions else "")
+        for position, option in enumerate(options)
+    ]
+    shown = _fit(label, texts, hint, index, screen)
     rows: list[tuple[str, str]] = [
         ("class:choice-label", f"  {label}{_position(shown, len(options), index)}\n")
     ]
@@ -109,9 +153,7 @@ def choice_rows(
         if option in descriptions:
             rows.append(("class:choice-hint", f"  {descriptions[option]}"))
         rows.append(("", "\n"))
-    separator, move = (" \u00b7 ", "\u2191\u2193 move") if unicode else (" - ", "up/down move")
-    hint = separator.join([move, *keys])
-    rows.append(("class:choice-hint", f"  {hint}\n"))
+    rows.append(("class:choice-hint", f"{hint}\n"))
     return rows
 
 
@@ -141,11 +183,14 @@ def select(
     descriptions: dict[str, str] | None = None,
     aliases: dict[str, str] | None = None,
     max_tries: int | None = None,
+    erase_on_cancel: bool = False,
 ) -> str | None:
     """Ask the user to pick one option.
 
     Returns the chosen value, or ``None`` if the user aborted. Inside
     :func:`~domyn.agents.interfaces.cli.prompt.back_key`, Ctrl-B raises ``GoBack``.
+    ``erase_on_cancel`` takes the list off the screen when the user cancels, for a
+    list that says nothing once nobody is choosing from it (the arrow picker only).
 
     Only the numbered fallback reads typed text, so only it uses the last two:
     ``aliases`` maps extra answers to an option (``y`` for a yes), and
@@ -158,7 +203,9 @@ def select(
     start = options.index(current) if current in options else 0
 
     if _interactive(theme):
-        chosen = _select_with_arrows(theme, label, options, start, descriptions or {})
+        chosen = _select_with_arrows(
+            theme, label, options, start, descriptions or {}, erase_on_cancel
+        )
         if chosen is not None and back_key_on():
             _echo(console, theme, label, chosen)
         return chosen
@@ -224,6 +271,7 @@ def _select_with_arrows(
     options: list[str],
     start: int,
     descriptions: dict[str, str],
+    erase_on_cancel: bool = False,
 ) -> str | None:
     """Inline arrow-key picker.
 
@@ -263,7 +311,7 @@ def _select_with_arrows(
                     "ctrl-c cancel",
                 ],
                 descriptions=descriptions,
-                visible=visible_options(),
+                screen=screen_size(),
             )
         )
 
@@ -302,6 +350,8 @@ def _select_with_arrows(
     def _cancel(event: Any) -> None:
         nonlocal aborted
         aborted = True
+        # Read when the application finishes, so it can still be decided here.
+        event.app.erase_when_done = erase_on_cancel or back
         event.app.exit()
 
     if back:
@@ -472,14 +522,24 @@ def multi_choice_rows(
     *,
     descriptions: dict[str, str] | None = None,
     back: bool = False,
-    visible: int | None = None,
+    screen: tuple[int, int] | None = None,
 ) -> list[tuple[str, str]]:
     """The `choice_rows` look for a tick-any question: a box before each row, a group's
-    options indented below it. ``back`` adds Ctrl-B to the hint; ``visible`` cuts the
+    options indented below it. ``back`` adds Ctrl-B to the hint; ``screen`` cuts the
     rows to a window around ``index``, as in `choice_rows`."""
     pointer_glyph = "\u276f" if theme.capabilities.unicode else ">"
     descriptions = descriptions or {}
-    shown = window(len(ticks.rows), index, visible)
+    separator, move = (
+        (" \u00b7 ", "\u2191\u2193 move") if theme.capabilities.unicode else (" - ", "up/down move")
+    )
+    keys = ["space tick", "a all/none", "enter confirm", *(["ctrl-b back"] if back else [])]
+    hint = f"  {separator.join([move, *keys, 'ctrl-c cancel'])}"
+    texts = [
+        f"    {_INDENT * row.indent}{_box(theme, ticks.state(position))} {row.label}"
+        + (f"  {descriptions[row.label]}" if row.label in descriptions else "")
+        for position, row in enumerate(ticks.rows)
+    ]
+    shown = _fit(label, texts, hint, index, screen)
     rows: list[tuple[str, str]] = [
         ("class:choice-label", f"  {label}{_position(shown, len(ticks.rows), index)}\n")
     ]
@@ -493,12 +553,7 @@ def multi_choice_rows(
         if row.label in descriptions:
             rows.append(("class:choice-hint", f"  {descriptions[row.label]}"))
         rows.append(("", "\n"))
-    separator, move = (
-        (" \u00b7 ", "\u2191\u2193 move") if theme.capabilities.unicode else (" - ", "up/down move")
-    )
-    keys = ["space tick", "a all/none", "enter confirm", *(["ctrl-b back"] if back else [])]
-    hint = separator.join([move, *keys, "ctrl-c cancel"])
-    rows.append(("class:choice-hint", f"  {hint}\n"))
+    rows.append(("class:choice-hint", f"{hint}\n"))
     return rows
 
 
@@ -605,7 +660,7 @@ def _multiselect_with_arrows(
                 index,
                 descriptions=descriptions,
                 back=back,
-                visible=visible_options(),
+                screen=screen_size(),
             )
         )
 

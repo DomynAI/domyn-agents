@@ -125,7 +125,7 @@ def pick(console: Console, theme: Theme, found: list[ConversationInfo]) -> Conve
     # with the same first message — and `select` answers with the string, so an
     # index has to survive the round trip.
     numbered = [f"{n + 1}. {row}" for n, row in enumerate(rows)]
-    chosen = select(console, theme, "Resume which conversation?", numbered)
+    chosen = select(console, theme, "Resume which conversation?", numbered, erase_on_cancel=True)
     if chosen is None:
         return None
     return found[numbered.index(chosen)]
