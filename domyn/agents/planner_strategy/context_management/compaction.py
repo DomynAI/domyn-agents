@@ -1431,6 +1431,68 @@ class Compactor(BaseModel):
                 found[message.source_event_id] = tokens
         return found
 
+    def leave_out_oversized(
+        self,
+        messages: list[LLMMessage],
+        agent: Any,
+        tool_defs: list[dict[str, Any]] | None,
+        turn_context: list[LLMMessage] | None,
+        state: dict[str, Any] | None,
+        key: str,
+        window: int | None = None,
+        stated: bool = True,
+    ) -> tuple[list[LLMMessage], BaseEvent | None]:
+        """Leave out the ``oversized`` requests and say so: ``messages`` without them,
+        and the event to yield. A ``REQUEST_TOO_LONG`` refusal ends the turn (the
+        current request is one of them); a ``CONTEXT_COMPACTED`` lets it go on.
+        ``stated`` is false when ``window`` is a stand-in, which the refusal then does
+        not quote."""
+        oversized = self.oversized(messages, agent, tool_defs, turn_context, window)
+        if not oversized:
+            return messages, None
+        messages = self.leave_out(messages, oversized, state, key)
+        current = current_request_id(messages)
+        if current in oversized:
+            window = window or _context_window(agent)
+            return messages, self.message_refusal(
+                oversized[current], window if stated else None, agent.name
+            )
+        return messages, self.left_out_event(oversized, agent.name)
+
+    def refuse_rejected(
+        self,
+        conversation: list[LLMMessage],
+        state: dict[str, Any] | None,
+        key: str,
+        author: str,
+    ) -> BaseEvent:
+        """The event ending a turn the provider rejected as too long when nothing could
+        be compacted or left out. The current request is left out when it is the last
+        message, as in ``refuse_over_window``: the request before it went through, so
+        the conversation stays usable. A request under the window can be rejected for
+        the room its answer needs (vLLM before 0.32)."""
+        last = conversation[-1] if conversation else None
+        if last is not None and last.source_event_id and _is_request(last):
+            self.leave_out(
+                conversation,
+                {last.source_event_id: int(self.estimator.estimate_messages([last]))},
+                state,
+                key,
+            )
+            return self.refusal(
+                REQUEST_TOO_LONG,
+                "The model rejected the request as too long, and the conversation cannot be "
+                "shortened further: the message was not sent, and is left out of this "
+                "conversation. Send a shorter one, or a file the agent can read.",
+                author,
+            )
+        return self.refusal(
+            CONVERSATION_TOO_LONG,
+            "The model rejected the request as too long, and the conversation cannot be "
+            "shortened further. Start a new conversation.",
+            author,
+        )
+
     def leave_out(
         self,
         messages: list[LLMMessage],
@@ -1456,13 +1518,19 @@ class Compactor(BaseModel):
             error_message=text,
         )
 
-    def message_refusal(self, tokens: int, window: int, author: str) -> BaseEvent:
-        """The request alone is over the window."""
+    def message_refusal(self, tokens: int, window: int | None, author: str) -> BaseEvent:
+        """The request alone is over the window, quoted only when known: a stand-in for
+        one (half a rejected request) is no fact about the model."""
+        size = (
+            f"the model's context window holds {window:,}"
+            if window
+            else "the model rejected the request as too long"
+        )
         return self.refusal(
             REQUEST_TOO_LONG,
-            f"The message is about {tokens:,} tokens and the model's context window holds "
-            f"{window:,}: it was not sent, and is left out of this conversation. Send a "
-            "shorter version, or a file the agent can read.",
+            f"The message is about {tokens:,} tokens and {size}: it was not sent, and is "
+            "left out of this conversation. Send a shorter version, or a file the agent "
+            "can read.",
             author,
         )
 

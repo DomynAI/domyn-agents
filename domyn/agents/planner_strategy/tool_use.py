@@ -70,10 +70,8 @@ from domyn.agents.planner_strategy.context_injection import (
     with_skills,
 )
 from domyn.agents.planner_strategy.context_management.compaction import (
-    CONVERSATION_TOO_LONG,
     Compactor,
     compaction_key,
-    current_request_id,
 )
 from domyn.agents.planner_strategy.context_management.tool_use import ToolUseContextManager
 from domyn.agents.planner_strategy.utils import (
@@ -739,18 +737,13 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
             messages = self.compactor.replay(messages, interaction_context.state, record)
             # A message no window holds is refused before any compaction pays for it, and
             # an earlier one (a conversation it already broke) is left out.
-            oversized = self.compactor.oversized(messages, agent, tool_defs, turn_context)
-            if oversized:
-                messages = self.compactor.leave_out(
-                    messages, oversized, interaction_context.state, record
-                )
-                current = current_request_id(messages)
-                if current in oversized:
-                    provider = getattr(agent, "llm_provider", None)
-                    window = getattr(provider, "context_window", None) or 0
-                    yield self.compactor.message_refusal(oversized[current], window, agent.name)
+            messages, left_out = self.compactor.leave_out_oversized(
+                messages, agent, tool_defs, turn_context, interaction_context.state, record
+            )
+            if left_out is not None:
+                yield left_out
+                if left_out.event_type == ExecutionEventType.ERROR_OCCURRED:
                     break
-                yield self.compactor.left_out_event(oversized, agent.name)
             compaction_plan = self.compactor.assess(
                 messages,
                 agent,
@@ -1017,30 +1010,25 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             continue
                         # Nothing compacted: the same request would be rejected again. A
                         # message the rejection proves too big is left out, or the turn ends.
-                        window = context_limit_from_error(e) or recovery.current_tokens // 2
-                        oversized = self.compactor.oversized(
-                            conversation, agent, tool_defs, turn_context, window
+                        stated = context_limit_from_error(e)
+                        _, left_out = self.compactor.leave_out_oversized(
+                            conversation,
+                            agent,
+                            tool_defs,
+                            turn_context,
+                            interaction_context.state,
+                            record,
+                            window=stated or recovery.current_tokens // 2,
+                            stated=stated is not None,
                         )
-                        if oversized:
-                            self.compactor.leave_out(
-                                conversation, oversized, interaction_context.state, record
+                        if left_out is None:
+                            left_out = self.compactor.refuse_rejected(
+                                conversation, interaction_context.state, record, agent.name
                             )
-                        current = current_request_id(conversation)
-                        if oversized and current not in oversized:
-                            yield self.compactor.left_out_event(oversized, agent.name)
-                            continue
-                        yield (
-                            self.compactor.message_refusal(oversized[current], window, agent.name)
-                            if current in oversized
-                            else self.compactor.refusal(
-                                CONVERSATION_TOO_LONG,
-                                "The model rejected the request as too long, and the "
-                                "conversation cannot be shortened further. Start a new "
-                                "conversation.",
-                                agent.name,
-                            )
-                        )
-                        break
+                        yield left_out
+                        if left_out.event_type == ExecutionEventType.ERROR_OCCURRED:
+                            break
+                        continue
                     logger.error(f"LLM generation failed: {type(e).__name__}")
                     logger.debug(
                         f"LLM generation failed: {e}",

@@ -1413,9 +1413,14 @@ class Repl:
         name = getattr(provider, "name", None)
         entry = next((e for e in entries if isinstance(e, dict) and e.get("name") == name), {})
         where = self._config_file or config_path()
-        if entry.get("context_window") or entry.get("max_model_len"):
+        key = "context_window" if entry.get("context_window") else "max_model_len"
+        if entry.get(key):
+            # A rejection that stated a smaller window caps the declared one, and
+            # raising the declaration would not lift that.
+            if entry[key] != window:
+                return None
             return (
-                f"The window, {window:,} tokens, is `context_window` in {where}: "
+                f"The window, {window:,} tokens, is `{key}` in {where}: "
                 "if the model takes more, raise it there."
             )
         if window == DEFAULT_CONTEXT_WINDOW:

@@ -260,6 +260,8 @@ class TestWhenTheProviderRejectsTheRequestAsTooLong:
         rejected: set[int] | range,
         context_window: int | None = 100_000,
         prune_only: bool = False,
+        body: str = "This model's maximum context length is 40960 tokens.",
+        rejects_over_chars: int | None = None,
     ) -> tuple[Any, io.StringIO, Any]:
         import httpx
 
@@ -272,12 +274,15 @@ class TestWhenTheProviderRejectsTheRequestAsTooLong:
         class Rejecting(ScriptedProvider):
             rejected: Any
             calls: int = 0
+            seen: list[Any]
 
             async def generate(self, messages: Any, **kwargs: Any) -> Any:
                 self.calls += 1
-                if self.calls in self.rejected:
+                self.seen.append(list(messages))
+                size = sum(len(str(m.content)) for m in messages)
+                over = rejects_over_chars is not None and size > rejects_over_chars
+                if self.calls in self.rejected or over:
                     request = httpx.Request("POST", "http://llm.test/v1/chat/completions")
-                    body = "This model's maximum context length is 40960 tokens."
                     response = httpx.Response(400, request=request, text=body)
                     raise httpx.HTTPStatusError("400", request=request, response=response)
                 return await super().generate(messages, **kwargs)
@@ -290,7 +295,7 @@ class TestWhenTheProviderRejectsTheRequestAsTooLong:
         repl._agent.planner = planners[planner_name]()
         if prune_only:
             repl._agent.planner.compactor = Compactor(strategy=PruneOnlyCompaction())
-        provider = Rejecting(rejected=rejected, context_window=context_window)
+        provider = Rejecting(rejected=rejected, context_window=context_window, seen=[])
         repl._agent.llm_provider = provider
         return repl, buffer, provider
 
@@ -352,6 +357,43 @@ class TestWhenTheProviderRejectsTheRequestAsTooLong:
         assert provider.calls == 3
         assert "does not fit the window: left out" in buffer.getvalue()
         assert buffer.getvalue().count("Hello from the agent.") == 2
+
+    @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
+    @pytest.mark.asyncio
+    async def test_a_rejection_stating_no_window_quotes_none(self, planner_name: str) -> None:
+        """Half the rejected request stands in for the window: no fact to tell the user."""
+        repl, buffer, provider = self._repl(
+            planner_name, ("long " * 30_000,), {1}, context_window=None, body="prompt is too long"
+        )
+        await repl.run()
+        out = " ".join(buffer.getvalue().split())
+
+        assert provider.calls == 1
+        assert "it was not sent" in out and "window holds" not in out
+
+    @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
+    @pytest.mark.asyncio
+    async def test_a_request_rejected_for_the_room_its_answer_needs_is_left_out(
+        self, planner_name: str
+    ) -> None:
+        """Under the 40,960 stated, the ~33k-token paste is rejected for the reserve the
+        answer needs (vLLM before 0.32): the paste is left out, not the conversation,
+        so the next message is answered."""
+        repl, buffer, provider = self._repl(
+            planner_name,
+            ("long " * 20_000, "ciao"),
+            set(),
+            context_window=40_960,
+            rejects_over_chars=(40_960 - 16_000) * 3,
+        )
+        await repl.run()
+        out = " ".join(buffer.getvalue().split())
+
+        assert "was not sent" in out
+        assert "Start a new conversation" not in out
+        assert out.count("Hello from the agent.") == 1
+        last = " ".join(str(m.content) for m in provider.seen[-1])
+        assert "long long" not in last and "not sent" in last
 
     @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
     @pytest.mark.asyncio
@@ -443,6 +485,22 @@ class TestAMessageLargerThanTheWindow:
         repl, buffer, _, _ = self._repl(self.PASTE, config=config)
         await repl.run()
         assert "is `context_window` in" in buffer.getvalue()
+
+    @pytest.mark.asyncio
+    async def test_the_hint_names_the_key_the_entry_uses(self) -> None:
+        config = {"llm_providers": [{"name": "main", "max_model_len": 20_000}]}
+        repl, buffer, _, _ = self._repl(self.PASTE, config=config)
+        await repl.run()
+        assert "is `max_model_len` in" in buffer.getvalue()
+
+    @pytest.mark.asyncio
+    async def test_a_window_a_rejection_lowered_gives_no_config_hint(self) -> None:
+        """Raising the declaration would not lift the window the rejection stated."""
+        config = {"llm_providers": [{"name": "main", "context_window": 100_000}]}
+        repl, buffer, _, _ = self._repl(self.PASTE, config=config)
+        await repl.run()
+        assert "it was not sent" in " ".join(buffer.getvalue().split())
+        assert "raise it there" not in buffer.getvalue()
 
     @pytest.mark.asyncio
     async def test_an_assumed_window_says_it_is_assumed(self) -> None:
