@@ -451,6 +451,17 @@ class TestWhatARowSays:
         assert "…" in row
         assert len(row) < 140
 
+    def test_a_row_is_cut_to_the_room_it_has(self) -> None:
+        row = conversations.label(_info("conv_x", "word " * 100), width=50)
+
+        assert len(row) <= 50
+        assert row.endswith("…")
+
+    def test_a_narrow_room_still_leaves_something_to_recognise_it_by(self) -> None:
+        row = conversations.label(_info("conv_x", "word " * 100), width=10)
+
+        assert len(row.rsplit("  ·  ", 1)[1]) == conversations.MIN_PREVIEW_CHARS
+
     def test_a_conversation_with_nothing_in_it_still_has_a_row(self) -> None:
         """A crash between creating the conversation and the first message
         leaves one, and it must not take the listing down with it."""

@@ -47,7 +47,9 @@ def picked(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
 
 def _arrows(monkeypatch: pytest.MonkeyPatch, calls: list[dict[str, Any]], answer: Any) -> None:
-    def fake(theme: Any, label: str, options: list[str], start: int, descriptions: Any) -> Any:
+    def fake(
+        theme: Any, label: str, options: list[str], start: int, descriptions: Any, *_: Any
+    ) -> Any:
         calls.append({"label": label, "options": options, "start": start})
         return answer(options) if callable(answer) else answer
 

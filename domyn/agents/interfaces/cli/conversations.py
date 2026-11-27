@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from domyn.agents.interfaces.cli.theme import Theme
 
 PREVIEW_CHARS = 60
+MIN_PREVIEW_CHARS = 20
 
 # Turns drawn back on resume. A terminal keeps about a thousand lines of
 # scrollback by default (iTerm2, VS Code), some thirty turns with tool calls:
@@ -73,8 +74,9 @@ async def recent(
     return sorted(found, key=lambda info: info.updated_at, reverse=True)
 
 
-def preview(info: ConversationInfo) -> str:
-    """The first thing the user said, which is what they will recognise it by."""
+def preview(info: ConversationInfo, limit: int = PREVIEW_CHARS) -> str:
+    """The first thing the user said, which is what they will recognise it by,
+    cut to ``limit`` characters."""
     from domyn.agents.core import ExecutionEventType
 
     for event in info.events_history:
@@ -83,7 +85,7 @@ def preview(info: ConversationInfo) -> str:
         text = " ".join((part.text or "").strip() for part in event.content or [])
         text = " ".join(text.split())
         if text:
-            return (text[: PREVIEW_CHARS - 1] + "…") if len(text) > PREVIEW_CHARS else text
+            return (text[: limit - 1] + "…") if len(text) > limit else text
     return "(nothing was said)"
 
 
@@ -93,11 +95,19 @@ def exchanges(info: ConversationInfo) -> int:
     return sum(1 for e in info.events_history if e.event_type == ExecutionEventType.USER_INPUT)
 
 
-def label(info: ConversationInfo, now: datetime | None = None) -> str:
-    """One row of the picker: when, how long, and what it was about."""
+def label(info: ConversationInfo, now: datetime | None = None, *, width: int | None = None) -> str:
+    """One row of the picker: when, how long, and what it was about.
+
+    ``width`` is the room the row has: the first message is cut to what is left of
+    it, so a row stays on one line (never below ``MIN_PREVIEW_CHARS``).
+    """
     count = exchanges(info)
     turns = f"{count} message{'s' if count != 1 else ''}"
-    return f"{_ago(info.updated_at, now)}  ·  {turns}  ·  {preview(info)}"
+    head = f"{_ago(info.updated_at, now)}  ·  {turns}  ·  "
+    limit = PREVIEW_CHARS
+    if width is not None:
+        limit = max(MIN_PREVIEW_CHARS, min(PREVIEW_CHARS, width - len(head)))
+    return f"{head}{preview(info, limit)}"
 
 
 def _ago(moment: datetime, now: datetime | None = None) -> str:
@@ -114,18 +124,23 @@ def _ago(moment: datetime, now: datetime | None = None) -> str:
 
 def pick(console: Console, theme: Theme, found: list[ConversationInfo]) -> ConversationInfo | None:
     """Choose one, or ``None`` if there is nothing to choose or the user backed out."""
-    from domyn.agents.interfaces.cli.select import select
+    from domyn.agents.interfaces.cli.select import screen_size, select
 
     if not found:
         console.print("  No past conversations yet.", style=theme.style("meta"), highlight=False)
         return None
 
-    rows = [label(info) for info in found]
+    # What the picker draws around a row: its pointer and the number it gives, then
+    # the number this list puts in front of the text.
+    digits = len(str(len(found)))
+    columns, _ = screen_size()
+    room = columns - 4 - 2 * (digits + 2) - 1
+    rows = [label(info, width=room) for info in found]
     # Rows can repeat — two conversations opened and closed in the same minute
     # with the same first message — and `select` answers with the string, so an
     # index has to survive the round trip.
     numbered = [f"{n + 1}. {row}" for n, row in enumerate(rows)]
-    chosen = select(console, theme, "Resume which conversation?", numbered)
+    chosen = select(console, theme, "Resume which conversation?", numbered, erase_on_cancel=True)
     if chosen is None:
         return None
     return found[numbered.index(chosen)]

@@ -1,7 +1,7 @@
 """Tests for the arrow-key option selector."""
 
 import asyncio
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -248,3 +248,92 @@ def test_rows_are_numbered(theme: Theme) -> None:
     texts = [text.rstrip() for _, text in rows]
     assert any(text.endswith("1. openai") for text in texts)
     assert any(text.endswith("3. custom") for text in texts)
+
+
+class TestALongListScrolls:
+    MANY: ClassVar[list[str]] = [f"option {n}" for n in range(1, 41)]
+    # 80 columns, and room for 10 rows under a label, a hint and the terminal's margin.
+    SCREEN = (80, 14)
+
+    @staticmethod
+    def _options(rows: list[tuple[str, str]]) -> list[str]:
+        return [
+            text.strip()
+            for style, text in rows
+            if style.startswith("class:choice-") and ". " in text
+        ]
+
+    def test_only_the_rows_that_fit_are_drawn(self, theme: Theme) -> None:
+        rows = select_mod.choice_rows(theme, "pick", self.MANY, 0, [], screen=self.SCREEN)
+        assert len(self._options(rows)) == 10
+
+    def test_the_window_follows_the_highlight_to_the_end(self, theme: Theme) -> None:
+        rows = select_mod.choice_rows(theme, "pick", self.MANY, 39, [], screen=self.SCREEN)
+        shown = self._options(rows)
+        assert shown[-1].endswith("40. option 40")
+        assert len(shown) == 10
+
+    def test_a_cut_list_says_where_the_highlight_is(self, theme: Theme) -> None:
+        rows = select_mod.choice_rows(theme, "pick", self.MANY, 24, [], screen=self.SCREEN)
+        assert rows[0][1] == "  pick (25/40)\n"
+
+    def test_a_list_that_fits_is_drawn_whole(self, theme: Theme) -> None:
+        rows = select_mod.choice_rows(theme, "pick", OPTIONS, 0, [], screen=self.SCREEN)
+        assert rows[0][1] == "  pick\n"
+        assert len(self._options(rows)) == len(OPTIONS)
+
+    def test_rows_that_wrap_count_for_every_line_they_take(self, theme: Theme) -> None:
+        long = [f"{n} " + "word " * 30 for n in range(20)]
+        columns, lines = 60, 20
+        rows = select_mod.choice_rows(theme, "pick", long, 10, [], screen=(columns, lines))
+        drawn = sum(
+            select_mod._height(text, columns)
+            for style, text in rows
+            if style == "class:choice-selected" or style == "class:choice-option"
+        )
+        # Label and hint are one line each, and the margin is kept free.
+        assert drawn + 2 + select_mod._MARGIN_ROWS <= lines
+        assert any(style == "class:choice-selected" for style, _ in rows)
+
+    def test_a_row_taller_than_the_screen_is_still_drawn(self, theme: Theme) -> None:
+        rows = select_mod.choice_rows(theme, "pick", ["x " * 200] * 3, 1, [], screen=(20, 6))
+        assert any(style == "class:choice-selected" for style, _ in rows)
+
+    def test_a_tick_list_scrolls_too(self, theme: Theme) -> None:
+        ticks = select_mod._TickList(self.MANY, None, [])
+        rows = select_mod.multi_choice_rows(theme, "tick", ticks, 39, screen=self.SCREEN)
+        assert rows[0][1] == "  tick (40/40)\n"
+        assert sum("option " in text for _, text in rows) == 10
+
+
+class TestEraseOnCancel:
+    def _erased(self, theme: Theme, keys: str, *, erase_on_cancel: bool) -> tuple[Any, bool]:
+        from prompt_toolkit.application import Application, create_app_session
+        from prompt_toolkit.input import create_pipe_input
+        from prompt_toolkit.output import DummyOutput
+
+        seen: list[Application[Any]] = []
+        run = Application.run
+
+        def recording(self: Application[Any], *args: Any, **kwargs: Any) -> Any:
+            seen.append(self)
+            return run(self, *args, **kwargs)
+
+        with (
+            patch.object(Application, "run", recording),
+            create_pipe_input() as pipe,
+            create_app_session(input=pipe, output=DummyOutput()),
+        ):
+            pipe.send_text(keys)
+            chosen = select_mod._select_with_arrows(theme, "pick", OPTIONS, 0, {}, erase_on_cancel)
+        return chosen, seen[0].erase_when_done
+
+    def test_a_cancelled_pick_is_taken_off_the_screen_when_asked(self, theme: Theme) -> None:
+        assert self._erased(theme, "\x03", erase_on_cancel=True) == (None, True)
+        assert self._erased(theme, "\x1b", erase_on_cancel=True) == (None, True)
+
+    def test_a_cancelled_pick_stays_by_default(self, theme: Theme) -> None:
+        assert self._erased(theme, "\x03", erase_on_cancel=False) == (None, False)
+
+    def test_a_chosen_row_is_not_erased_by_this_option(self, theme: Theme) -> None:
+        assert self._erased(theme, "\r", erase_on_cancel=True) == ("openai", False)
