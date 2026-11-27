@@ -13,7 +13,7 @@ Three groups, in order of how much getting them wrong costs:
 import re
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -44,6 +44,7 @@ from domyn.agents.planner_strategy.context_management.compaction import (
     PruneOnlyCompaction,
     TokenBudgetSplitter,
     ToolResultPruner,
+    _adopt_window,
     add_to_record,
     build_strategy,
     compaction_strategy,
@@ -477,11 +478,14 @@ class TestTheThresholdFloor:
 
     @staticmethod
     def _agent(window: int, **generation_params: Any) -> Any:
+        # The whole window may go to the reply: these tests are about the reserve, not
+        # about `max_tokens_share` lowering it (`TestTheReserveAfterTheShare`).
         provider = VLLMProvider(
             url="http://vllm.test/v1/chat/completions",
             model_name="m",
             context_window=window,
             generation_params=generation_params,
+            max_tokens_share=1.0,
         )
         return SimpleNamespace(llm_provider=provider, name="Assistant")
 
@@ -932,11 +936,14 @@ class TestTheReserveFollowsTheReplyCeiling:
 
     @staticmethod
     def _agent(window: int, **generation_params: Any) -> Any:
+        # The whole window may go to the reply: these tests are about the reserve, not
+        # about `max_tokens_share` lowering it (`TestTheReserveAfterTheShare`).
         provider = VLLMProvider(
             url="http://vllm.test/v1/chat/completions",
             model_name="m",
             context_window=window,
             generation_params=generation_params,
+            max_tokens_share=1.0,
         )
         return SimpleNamespace(llm_provider=provider, name="Assistant")
 
@@ -1004,3 +1011,72 @@ class TestTheReplyCeiling:
             url="http://custom.test", model_name="m", body={"max_tokens": value}
         )
         assert provider.max_reply_tokens is None
+
+
+class TestTheReserveAfterTheShare:
+    """A model whose longest reply is its whole window (the leaderboard's Flint:
+    262,144 and 262,144) compacts at half the window, not at the tenth the floor
+    would leave, and the floor says nothing."""
+
+    @staticmethod
+    def _agent(**fields: Any) -> Any:
+        provider = VLLMProvider(
+            url="http://vllm.test/v1/chat/completions",
+            model_name="flint",
+            generation_params={"max_tokens": 262_144},
+            **fields,
+        )
+        return SimpleNamespace(llm_provider=provider, name="Assistant")
+
+    @pytest.mark.parametrize("declared", [True, False])
+    def test_half_the_window_goes_to_the_prompt(
+        self, declared: bool, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        agent = self._agent(context_window=262_144) if declared else self._agent()
+        if not declared:
+            agent.llm_provider.context_window = 262_144
+        with caplog.at_level("WARNING", logger="domyn.agents"):
+            plan = _active().assess([_msg("user", "hi")], agent)
+        assert plan.threshold_tokens == 131_072
+        assert not any("reply reserve" in r.message for r in caplog.records)
+
+    @pytest.mark.parametrize(
+        ("request_tokens", "compacts"),
+        [
+            # Over the tenth floor (26,214) the whole-window reserve left: no longer
+            # a reason to compact.
+            (60_000, False),
+            (125_000, False),
+            (140_000, True),
+        ],
+    )
+    def test_it_compacts_past_half_the_window_and_not_before(
+        self, request_tokens: int, compacts: bool
+    ) -> None:
+        agent = self._agent(context_window=262_144)
+        # Three characters to a token (`HeuristicEstimator`).
+        plan = _active().assess([_msg("user", "x" * (request_tokens * 3))], agent)
+        assert plan.threshold_tokens == 131_072
+        assert plan.needed is compacts
+
+    def test_an_explicit_reserve_still_wins(self) -> None:
+        """The policy's own `reserve_tokens` is a choice made on purpose, kept as given."""
+        agent = self._agent(context_window=262_144)
+        plan = _active(reserve_tokens=200_000).assess([_msg("user", "hi")], agent)
+        assert plan.threshold_tokens == 262_144 - 200_000
+
+    def test_the_share_moves_the_threshold(self) -> None:
+        agent = self._agent(context_window=262_144, max_tokens_share=0.25)
+        assert _active().assess([_msg("user", "hi")], agent).threshold_tokens == 262_144 - 65_536
+
+    @pytest.mark.asyncio
+    async def test_a_window_the_provider_reports_lowers_it(self) -> None:
+        agent = self._agent()
+        with patch.object(VLLMProvider, "fetch_context_window", return_value=262_144):
+            await resolve_context_window(agent.llm_provider)
+        assert agent.llm_provider.max_reply_tokens == 131_072
+
+    def test_a_window_a_rejection_states_lowers_it(self) -> None:
+        agent = self._agent(context_window=262_144)
+        _adopt_window(agent, 100_000)
+        assert agent.llm_provider.max_reply_tokens == 50_000

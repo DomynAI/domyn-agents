@@ -11,8 +11,25 @@ import httpx
 from pydantic import BaseModel, Field, model_validator
 
 from domyn.agents.core import TOKEN_USAGE_METADATA_KEY
-from domyn.agents.llm.context_window import models_url, window_from_models_listing
-from domyn.agents.logger import url_origin
+from domyn.agents.llm.context_window import (
+    deployment_key,
+    models_url,
+    window_from_models_listing,
+)
+from domyn.agents.logger import get_logger, url_origin
+
+DEFAULT_MAX_TOKENS_SHARE = 0.5
+"""``BaseLLMProvider.max_tokens_share`` when nothing sets it: the reply's ceiling
+claims at most half the window, and the prompt keeps the other half."""
+
+MAX_TOKENS_KEYS = ("max_tokens", "max_completion_tokens", "max_output_tokens")
+"""Every spelling of the reply's ceiling, lowered by ``max_tokens_share`` whatever the
+provider: OpenAI's provider takes ``max_tokens`` and renames it to
+``max_output_tokens`` only when it builds the request."""
+
+_lowered_max_tokens: set[tuple[Any, ...]] = set()
+"""Deployments, windows and ceilings already logged as lowered: once each per process,
+as a provider may be built for every request."""
 
 
 class StructuredOutputType(StrEnum):
@@ -591,6 +608,67 @@ class BaseLLMProvider(BaseModel, ABC):
                 if isinstance(value, int) and not isinstance(value, bool) and value > 0:
                     limit = value
         return limit
+
+    max_tokens_share: float = Field(
+        default=DEFAULT_MAX_TOKENS_SHARE,
+        gt=0,
+        le=1,
+        description=(
+            "Largest share of `context_window` the reply's ceiling may claim. A "
+            "`max_tokens` above it is lowered to it, so the prompt keeps the rest: a "
+            "model whose longest reply is its whole window is declared with "
+            "`max_tokens` equal to the window, and sent as it is every request asks for "
+            "the prompt plus the whole window, which a server checking prompt plus "
+            "output refuses whatever the prompt, while compaction, which reserves "
+            "`max_reply_tokens`, would leave the prompt only its tenth floor."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _clamp_max_tokens_at_construction(self) -> "BaseLLMProvider":
+        """Lower the reply's ceiling when the window is declared with the provider."""
+        self._clamp_max_tokens()
+        return self
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Lower the reply's ceiling again when the window arrives after construction:
+        reported by the endpoint or the catalogue (`resolve_context_window`), assumed
+        by the CLI, or stated by a rejection (`_adopt_window`), which every one of them
+        assigns to ``context_window``."""
+        super().__setattr__(name, value)
+        if name == "context_window":
+            self._clamp_max_tokens()
+
+    def _clamp_max_tokens(self) -> None:
+        """Lower the reply's ceiling to ``max_tokens_share`` of the window, where it is
+        read: ``generation_params`` and ``body``, under every spelling (`MAX_TOKENS_KEYS`).
+
+        Does nothing without a window. Changes this object only: a configuration file
+        keeps the ``max_tokens`` written in it, and the dicts given to the constructor
+        were copied by validation."""
+        window = self.context_window
+        if not isinstance(window, int) or isinstance(window, bool) or window <= 0:
+            return
+        cap = max(1, int(window * self.max_tokens_share))
+        for source in (getattr(self, "generation_params", None), getattr(self, "body", None)):
+            if not isinstance(source, dict):
+                continue
+            for key in MAX_TOKENS_KEYS:
+                value = source.get(key)
+                if isinstance(value, int) and not isinstance(value, bool) and value > cap:
+                    source[key] = cap
+                    self._log_lowered(key, value, cap)
+
+    def _log_lowered(self, key: str, value: int, cap: int) -> None:
+        marker = (deployment_key(self), self.context_window, key, value, cap)
+        if marker in _lowered_max_tokens:
+            return
+        _lowered_max_tokens.add(marker)
+        get_logger().info(
+            f"`{key}` of {self.model_name} lowered from {value} to {cap}: "
+            f"{self.max_tokens_share:g} of its {self.context_window}-token window "
+            f"(`max_tokens_share`), so the prompt keeps the rest"
+        )
 
     @model_validator(mode="before")
     @classmethod

@@ -138,8 +138,11 @@ def run_headless_config(
     as JSON ``null``, OpenAI's "unset", and the server's default applies. A
     ``reasoning_effort`` of ``None`` is not sent at all.
 
-    The compactor keeps room for one whole reply under the window: ``max_tokens`` when
-    given, else its own default.
+    The compactor is given no ``reserve_tokens``: it keeps room for the provider's
+    reply ceiling (``max_reply_tokens``), which is ``max_tokens`` after
+    ``max_tokens_share`` has lowered it, so a ``max_tokens`` as large as the window
+    leaves the prompt half of it rather than the tenth floor; with no ``max_tokens``,
+    its own default.
     """
     generation_params: dict[str, Any] = {"max_tokens": max_tokens, "temperature": temperature}
     if reasoning_effort is not None:
@@ -159,8 +162,6 @@ def run_headless_config(
         provider["context_window"] = context_window
 
     compactor: dict[str, Any] = {"strategy": "two_phase"}
-    if max_tokens is not None:
-        compactor["reserve_tokens"] = max_tokens
 
     agent: dict[str, Any] = {
         "name": AGENT_NAME,

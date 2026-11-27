@@ -4,10 +4,13 @@ import os
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
+import respx
 import yaml
 from typer.testing import CliRunner
 
+from domyn.agents import BaseEvent, ExecutionEventType, Part, Runner
 from domyn.agents.cli.cli import app
 from domyn.agents.cli.commands.run_headless import command as run_headless
 from domyn.agents.cli.commands.run_headless.command import DEFAULT_INSTRUCTIONS, run_headless_config
@@ -15,6 +18,8 @@ from domyn.agents.instructions import load_declared
 from domyn.agents.interfaces.cli import config as cli_config
 from domyn.agents.interfaces.cli.state import CliState
 from domyn.agents.loader import load_application_from_file
+from domyn.agents.planner_strategy.context_management.budget import CONTEXT_USAGE_METADATA_KEY
+from domyn.agents.planner_strategy.context_management.compaction import DEFAULT_RESERVE_TOKENS
 from tests.cli.test_repl_session import _repl
 
 ENDPOINT = "http://127.0.0.1:8787/v1"
@@ -62,8 +67,8 @@ class TestTheConfiguration:
         assert provider["generation_params"]["reasoning_effort"] == "high"
         # The variable's name, never the key itself.
         assert provider["api_key"] == "${OPENAI_API_KEY}"
-        # Room for one whole reply under the window.
-        assert config["planner_strategies"][0]["compactor"]["reserve_tokens"] == 393_216
+        # The reserve is left to the provider's reply ceiling, after the share.
+        assert "reserve_tokens" not in config["planner_strategies"][0]["compactor"]
 
     def test_the_tools_reach_the_machine_it_runs_on(self) -> None:
         bundle = _config()["tool_bundles"][0]
@@ -94,6 +99,96 @@ class TestTheConfiguration:
         assert loaded is not None
         assert "Do not ask questions." in loaded.agent[0].text
         assert loaded.agent[0].path is None
+
+
+class TestCompactionFollowsTheEffectiveMaxTokens:
+    """The reserve is the reply ceiling after `max_tokens_share`, as everywhere in the
+    CLI: a `--max-tokens` as large as the window compacts at half of it. Written into
+    the config as a `reserve_tokens`, it reserved the whole window and every request
+    over the tenth floor (4,000 here) was compacted.
+
+    Through the runner, against the endpoint the config names, so what is checked is
+    whether a turn of the loaded agent compacts, not only the threshold it computes.
+    The sizes leave room for what every request carries besides the message (tool
+    definitions, instructions: about 6,000 tokens).
+    """
+
+    WINDOW = 40_000
+
+    async def _turn(self, tmp_path: Path, text: str, **given: Any) -> list[BaseEvent]:
+        path = tmp_path / "config.yaml"
+        path.write_text(yaml.safe_dump(_config(context_window=self.WINDOW, **given)))
+        agent = await load_application_from_file(str(path))
+        answer = {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "done"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"completion_tokens": 1},
+        }
+        user_input = BaseEvent(
+            event_type=ExecutionEventType.USER_INPUT, author="user", content=[Part(text=text)]
+        )
+        with respx.mock:
+            respx.post(f"{ENDPOINT}/chat/completions").mock(
+                return_value=httpx.Response(200, json=answer)
+            )
+            return [
+                event
+                async for event in Runner().run(
+                    application_name="test",
+                    user_id="u",
+                    user_input=user_input,
+                    root=agent,
+                    conversation_id="c1",
+                )
+            ]
+
+    @staticmethod
+    def _compacted(events: list[BaseEvent]) -> bool:
+        return any(e.event_type == ExecutionEventType.CONTEXT_COMPACTION_START for e in events)
+
+    @staticmethod
+    def _threshold(events: list[BaseEvent]) -> int:
+        start = next(e for e in events if e.event_type == ExecutionEventType.LLM_START)
+        return int(start.metadata[CONTEXT_USAGE_METADATA_KEY]["threshold_tokens"])
+
+    def test_no_reserve_is_written_into_the_config(self) -> None:
+        compactor = _config(context_window=self.WINDOW, max_tokens=self.WINDOW)[
+            "planner_strategies"
+        ][0]["compactor"]
+        assert "reserve_tokens" not in compactor
+
+    @pytest.mark.asyncio
+    async def test_under_half_the_window_it_does_not_compact(self, tmp_path: Path) -> None:
+        # ~8,000 tokens of request: over the tenth floor, under half the window.
+        events = await self._turn(tmp_path, "x" * 24_000, max_tokens=self.WINDOW)
+        assert self._threshold(events) == self.WINDOW // 2
+        assert not self._compacted(events)
+
+    @pytest.mark.asyncio
+    async def test_past_half_the_window_it_compacts(self, tmp_path: Path) -> None:
+        # ~22,000 tokens of request: past half the window, under the window.
+        events = await self._turn(tmp_path, "x" * 66_000, max_tokens=self.WINDOW)
+        assert self._threshold(events) == self.WINDOW // 2
+        assert self._compacted(events)
+
+    @pytest.mark.asyncio
+    async def test_a_smaller_max_tokens_is_reserved_as_it_is(self, tmp_path: Path) -> None:
+        events = await self._turn(tmp_path, "x" * 24_000, max_tokens=4_000)
+        assert self._threshold(events) == self.WINDOW - 4_000
+        assert not self._compacted(events)
+
+    @pytest.mark.asyncio
+    async def test_without_max_tokens_the_default_reserve_applies(self, tmp_path: Path) -> None:
+        under = await self._turn(tmp_path, "x" * 45_000)
+        assert self._threshold(under) == self.WINDOW - DEFAULT_RESERVE_TOKENS
+        assert not self._compacted(under)
+        # ~25,000 tokens: past the window less the default reserve.
+        assert self._compacted(await self._turn(tmp_path, "x" * 75_000))
 
 
 @pytest.fixture
