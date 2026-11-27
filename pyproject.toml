@@ -104,6 +104,9 @@ slack = [
     "slack-bolt>=1.20.0",
     "slack-sdk>=3.27.0",
 ]
+kafka = [
+    "aiokafka>=0.11.0",
+]
 cli = [
     "prompt-toolkit>=3.0.50",
 ]
@@ -283,6 +286,7 @@ module = [
     "telegram.*",
     "slack_bolt.*",
     "slack_sdk.*",
+    "aiokafka.*",
     # Optional, and not installable on 3.15 (the audio extra).
     "onnx_asr.*",
     "onnxruntime.*",

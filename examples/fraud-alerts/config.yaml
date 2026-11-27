@@ -1,0 +1,92 @@
+# A fraud analyst agent that works the alerts arriving on Kafka, served by `domyn serve`.
+# See README.md to run it.
+
+version: "1.0"
+entrypoint: FraudAnalyst
+
+llm_providers:
+  - name: llm
+    type: open_router
+    model_name: nvidia/nemotron-3-ultra-550b-a55b:free
+    api_key: ${OPENROUTER_API_KEY}
+
+# Both hooks are in policy.py. Paths are relative to the folder `domyn serve` runs in: this one.
+hooks:
+  # Before the approval gate of each action: allow, deny, or ask an analyst.
+  - name: fraud_policy
+    path: policy.py
+    type: updater
+    trigger: pre_tool_approval
+  # After each action: one line in the audit log.
+  - name: audit
+    path: policy.py
+    type: listener
+    trigger: post_tool_call
+
+# The routes of services.py, served as MCP tools at /mcp (SERVICES_URL is in .env, and
+# Docker Compose sets its own). Each tool is its route's
+# operation_id. The four that only read need nothing more.
+tools:
+  - {name: get_alert, type: mcp, server_url: "${SERVICES_URL}/mcp"}
+  - {name: get_customer, type: mcp, server_url: "${SERVICES_URL}/mcp"}
+  - {name: get_transactions, type: mcp, server_url: "${SERVICES_URL}/mcp"}
+  - {name: get_spending_metrics, type: mcp, server_url: "${SERVICES_URL}/mcp"}
+  - {name: get_payment, type: mcp, server_url: "${SERVICES_URL}/mcp"}
+  # The three that act wait for approval, unless fraud_policy decides first.
+  - name: block_card
+    type: mcp
+    server_url: "${SERVICES_URL}/mcp"
+    approval_type: user_confirm
+    hooks: [fraud_policy, audit]
+  - name: close_alert
+    type: mcp
+    server_url: "${SERVICES_URL}/mcp"
+    approval_type: user_confirm
+    hooks: [fraud_policy, audit]
+  # params_update: the analyst can change the amount before approving it.
+  - name: release_payment
+    type: mcp
+    server_url: "${SERVICES_URL}/mcp"
+    approval_type: params_update
+    hooks: [fraud_policy, audit]
+
+agents:
+  - name: FraudAnalyst
+    description: Investigates one fraud alert and takes one action on it.
+    instruction: >-
+      You are a fraud analyst at a bank. Each message is one alert from the fraud engine.
+      Read the skill for the alert's type first. Then look at the customer, their recent
+      transactions and their spending metrics, and decide. Take exactly one action: block
+      the card when the activity is fraud, close the alert when it is a false alarm, or
+      release a held payment that is legitimate. Some actions wait for an analyst; if one
+      is refused, do not try another action, explain what you found instead. End with a
+      case note of three sentences at most: what you found, what you did, and why.
+    llm_provider: llm
+    tools:
+      - get_alert
+      - get_customer
+      - get_transactions
+      - get_spending_metrics
+      - get_payment
+      - block_card
+      - close_alert
+      - release_payment
+    skills:
+      source:
+        type: local_dir
+        paths: [skills]
+
+# How `domyn serve config.yaml --channel multi` serves the agent.
+serve:
+  channels:
+    - type: kafka
+      bootstrap_servers: ${KAFKA_BOOTSTRAP}
+      # An alert, keyed by its id, starts a conversation; an analyst's answer, under
+      # the same key, resumes it.
+      topics: [fraud.alerts, fraud.decisions]
+      # What the agent does, for the console: its calls, the actions waiting for an
+      # analyst, its case notes, the end of each turn.
+      output_topic: fraud.events
+      events: [tool_start, tool_end, tool_needs_feedback, response, error_occurred, agent_end]
+      group_id: fraud-agent
+      max_in_flight: 3

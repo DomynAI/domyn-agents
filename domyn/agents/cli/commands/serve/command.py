@@ -53,6 +53,17 @@ Channel values
                  - name: MyAgent
                    ...
 
+           A ``kafka`` entry reads turns from Kafka topics and writes events to one
+           (``domyn[kafka]``; see ``domyn/agents/channels/kafka.py``)::
+
+                   - type: kafka
+                     bootstrap_servers: localhost:9092
+                     topics: [alerts, decisions]   # turns in, and approval answers
+                     output_topic: events          # approval requests, answers, ends
+                     group_id: domyn-serve         # optional
+                     max_in_flight: 8              # optional: turns at once
+                     options: {}                   # optional: passed to aiokafka
+
            ``serve.transcriber`` (beside ``channels``) gives every channel that names
            none of its own a transcriber for voice notes; without one, the agent is
            told a voice message arrived that it cannot read.
@@ -615,13 +626,7 @@ def _read_serve_channels_config(path: Path) -> list[dict[str, Any]]:
     This is independent of ``ConfigurationV1`` (which ignores unknown top-level
     keys like ``serve``) — it just re-reads the same file as plain YAML.
     """
-    try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except Exception as exc:
-        console.print(f"[red]ERROR:[/red] failed to parse YAML {path}: {exc}")
-        raise typer.Exit(1) from exc
-
-    serve = (raw or {}).get("serve") or {}
+    serve = _read_serve_section(path)
     channels = serve.get("channels")
     if not channels or not isinstance(channels, list):
         console.print(
@@ -640,6 +645,19 @@ def _read_serve_channels_config(path: Path) -> list[dict[str, Any]]:
             if isinstance(entry, dict)
         ]
     return cast(list[dict[str, Any]], channels)
+
+
+def _read_serve_section(path: Path) -> dict[str, Any]:
+    """The file's ``serve`` block, with ``${VAR}`` resolved as in the rest of the file."""
+    from domyn.agents.loader import interpolate_env_vars
+
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        serve = (raw or {}).get("serve") or {}
+        return cast(dict[str, Any], interpolate_env_vars(serve, str(path)))
+    except Exception as exc:
+        console.print(f"[red]ERROR:[/red] failed to read 'serve' in {path}: {exc}")
+        raise typer.Exit(1) from exc
 
 
 def _channel_transcriber(entry: dict[str, Any]) -> Any:
@@ -740,9 +758,35 @@ def _build_channel_from_config(entry: dict[str, Any]) -> Any:
             transcriber=_channel_transcriber(entry),
         )
 
+    if channel_type == "kafka":
+        try:
+            from domyn.agents.channels.kafka import DEFAULT_EVENTS, KafkaChannel
+
+            missing = [k for k in ("bootstrap_servers", "topics", "output_topic") if k not in entry]
+            if missing:
+                raise ValueError(f"missing {', '.join(missing)}")
+            return KafkaChannel(
+                bootstrap_servers=entry["bootstrap_servers"],
+                topics=entry["topics"],
+                output_topic=entry["output_topic"],
+                group_id=entry.get("group_id", "domyn-serve"),
+                events=entry.get("events", DEFAULT_EVENTS),
+                max_in_flight=entry.get("max_in_flight", 8),
+                options=entry.get("options"),
+            )
+        except ImportError as exc:
+            console.print(
+                "[red]ERROR:[/red] Kafka channel not available. "
+                "Install with: pip install 'domyn[kafka]'"
+            )
+            raise typer.Exit(1) from exc
+        except (ValueError, TypeError) as exc:
+            console.print(f"[red]ERROR:[/red] channel 'kafka': {exc}")
+            raise typer.Exit(1) from exc
+
     console.print(
         f"[red]ERROR:[/red] unknown channel type '{channel_type}' in serve.channels. "
-        "Choose: relay, telegram, slack, whatsapp"
+        "Choose: relay, telegram, slack, whatsapp, kafka"
     )
     raise typer.Exit(1)
 

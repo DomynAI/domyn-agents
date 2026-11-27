@@ -294,6 +294,36 @@ class TestBuildChannelFromConfig:
             transcriber=None,
         )
 
+    def test_kafka_channel_takes_its_settings_from_the_entry(self) -> None:
+        from domyn.agents.cli.commands.serve.command import _build_channel_from_config
+
+        with patch("domyn.agents.channels.kafka.KafkaChannel") as mock_cls:
+            _build_channel_from_config(
+                {
+                    "type": "kafka",
+                    "bootstrap_servers": "kafka:29092",
+                    "topics": ["alerts", "decisions"],
+                    "output_topic": "events",
+                    "max_in_flight": 3,
+                }
+            )
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs["bootstrap_servers"] == "kafka:29092"
+        assert kwargs["topics"] == ["alerts", "decisions"]
+        assert kwargs["output_topic"] == "events"
+        assert kwargs["max_in_flight"] == 3
+        assert kwargs["group_id"] == "domyn-serve"
+
+    def test_kafka_channel_without_its_topics_exits_with_1(self) -> None:
+        from domyn.agents.cli.commands.serve.command import _build_channel_from_config
+
+        with (
+            patch("domyn.agents.channels.kafka.KafkaChannel"),
+            pytest.raises(_ExitExc) as exc_info,
+        ):
+            _build_channel_from_config({"type": "kafka", "bootstrap_servers": "kafka:29092"})
+        assert _exit_code(exc_info) == 1
+
     def test_unknown_channel_type_exits_with_1(self) -> None:
         from domyn.agents.cli.commands.serve.command import _build_channel_from_config
 
@@ -1371,3 +1401,35 @@ class TestPlatformToolsDefault:
             "domyn.agents.integrations.domyn_platform_sdk.sdk_installed", return_value=installed
         ):
             assert self._expose(asked) is expected
+
+
+class TestServeVariables:
+    def test_variables_in_the_serve_block_are_resolved(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from domyn.agents.cli.commands.serve.command import _read_serve_channels_config
+
+        monkeypatch.setenv("KAFKA_BOOTSTRAP", "kafka:29092")
+        yaml_file = tmp_path / "agent.yaml"
+        yaml_file.write_text(
+            'serve:\n  channels:\n    - {type: kafka, bootstrap_servers: "${KAFKA_BOOTSTRAP}"}\n'
+        )
+
+        [channel] = _read_serve_channels_config(yaml_file)
+
+        assert channel["bootstrap_servers"] == "kafka:29092"
+
+    def test_an_unset_variable_exits_with_1(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from domyn.agents.cli.commands.serve.command import _read_serve_channels_config
+
+        monkeypatch.delenv("NOT_SET_ANYWHERE", raising=False)
+        yaml_file = tmp_path / "agent.yaml"
+        yaml_file.write_text(
+            'serve:\n  channels:\n    - {type: kafka, topics: "${NOT_SET_ANYWHERE}"}\n'
+        )
+
+        with pytest.raises(_ExitExc) as exc_info:
+            _read_serve_channels_config(yaml_file)
+        assert _exit_code(exc_info) == 1

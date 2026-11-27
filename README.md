@@ -61,7 +61,7 @@ To build agents in a Python project (Python 3.12 or later), add it as a dependen
 uv add domyn
 ```
 
-With pip, run `pip install "domyn[cli]"`. Agents import from `domyn.agents` (`from domyn.agents import Agent, Runner`). Optional extras add integrations: `tracing` (OpenTelemetry), `langchain`, `langgraph`, `slack`, `telegram` and `audio` (local speech to text).
+With pip, run `pip install "domyn[cli]"`. Agents import from `domyn.agents` (`from domyn.agents import Agent, Runner`). Optional extras add integrations: `tracing` (OpenTelemetry), `langchain`, `langgraph`, `slack`, `telegram`, `kafka` (the Kafka channel of `domyn serve`) and `audio` (local speech to text).
 
 ## Getting started
 
