@@ -1,0 +1,92 @@
+# KYC onboarding of a company: a coordinator and two specialists working at the same time.
+# See README.md to run it.
+
+version: "1.0"
+entrypoint: KYCCoordinator
+
+llm_providers:
+  - name: llm
+    type: open_router
+    model_name: nvidia/nemotron-3-ultra-550b-a55b:free
+    api_key: ${OPENROUTER_API_KEY}
+
+# The bank's rule on onboarding decisions, in policy.py: it rules on save_memo before the
+# analyst is asked. Paths are relative to the folder `domyn` runs in: this one.
+hooks:
+  - name: kyc_policy
+    path: policy.py
+    type: updater
+    trigger: pre_tool_approval
+
+tools:
+  # Deterministic screening against the sanctions lists and the internal watchlist.
+  - name: screen_name
+    type: function
+    path: screening.py
+  # The business registry: directors and shareholders.
+  - name: lookup_company
+    type: function
+    path: registry.py
+  # The one action: the analyst confirms it, after the bank's rule.
+  - name: save_memo
+    type: function
+    path: memo.py
+    approval_type: user_confirm
+    hooks: [kyc_policy]
+
+# The case files, for the documents review: read_file, list_dir and the like, on cases/ only.
+tool_bundles:
+  - name: case_files
+    bundles: [files]
+    workspace: ./cases
+
+agents:
+  - name: KYCCoordinator
+    description: Runs the KYC review of a company that asks to open an account.
+    instruction: >-
+      You run the KYC review of a company that asks to open an account. Give the two
+      checks to your specialists at the same time, in one response: ScreeningAnalyst
+      screens every party behind the company, DocumentsAnalyst finds the beneficial
+      owners and reviews the case's documents. Tell each the company's name and the case
+      folder. When both have answered, read the kyc-memo skill, decide, and save the memo
+      with save_memo. Then tell the analyst the decision and why, in a few lines.
+    llm_provider: llm
+    sub_agents: [ScreeningAnalyst, DocumentsAnalyst]
+    tools: [save_memo]
+    stream: true
+    skills:
+      source:
+        type: local_dir
+        paths: [skills/kyc-memo]
+
+  - name: ScreeningAnalyst
+    description: >-
+      Screens a company's parties (the company, its directors and shareholders, down the
+      ownership chain) against the sanctions lists and the bank's watchlist, and says for
+      each candidate whether it is a match or a false positive.
+    instruction: >-
+      Read the sanctions-screening skill first. Find the parties in the business registry,
+      screen each one, decide on every candidate with the reason, and report one line per
+      party.
+    llm_provider: llm
+    tools: [lookup_company, screen_name]
+    skills:
+      source:
+        type: local_dir
+        paths: [skills/sanctions-screening]
+
+  - name: DocumentsAnalyst
+    description: >-
+      Finds a company's beneficial owners from the business registry and reviews the
+      documents of its account opening request: what is missing, expired or inconsistent.
+    instruction: >-
+      Read the beneficial-ownership skill first. Find the beneficial owners in the business
+      registry, read the case's request.md, and report the owners and every missing
+      document or inconsistency. Only read the case files: never write them.
+    llm_provider: llm
+    tools: [lookup_company]
+    tool_bundles: [case_files]
+    skills:
+      source:
+        type: local_dir
+        paths: [skills/beneficial-ownership]
