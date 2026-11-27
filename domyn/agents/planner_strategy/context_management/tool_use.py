@@ -9,9 +9,11 @@ import json
 import uuid
 from typing import Any
 
+from domyn.agents.approvals import INJECTED_PARAMS, user_edit_note
 from domyn.agents.core import (
     METADATA_CONVERTED_TO_AGENT_END,
     METADATA_EXTERNAL_PART_AGENT_VISIBLE,
+    METADATA_INITIAL_PARAMETERS,
     METADATA_TOOL_BATCH,
     BaseAgent,
     BaseEvent,
@@ -146,6 +148,24 @@ class ToolUseContextManager(ContextManager):
             getattr(getattr(agent, "llm_provider", None), "reasoning_key_in_use", None)
         )
 
+        # The final arguments of each call the user edited, by its TOOL_START: the call
+        # is shown as it ran. Each result goes to the nearest call before it, as ids can repeat.
+        final_parameters_by_tool_start_id: dict[str | None, dict[str, Any]] = {}
+        final_parameters_by_call_id: dict[str, dict[str, Any]] = {}
+        for event in reversed(event_to_parse):
+            action: Any = event.action
+            if action is None:
+                continue
+            if event.metadata.get(METADATA_INITIAL_PARAMETERS) is not None:
+                final_parameters_by_call_id[action.call_id] = action.parameters or {}
+            elif (
+                event.event_type == ExecutionEventType.TOOL_START
+                and action.call_id in final_parameters_by_call_id
+            ):
+                final_parameters_by_tool_start_id[event.event_id] = final_parameters_by_call_id.pop(
+                    action.call_id
+                )
+
         for event in event_to_parse:
             boundaries.append((event.event_id, len(messages)))
 
@@ -163,14 +183,21 @@ class ToolUseContextManager(ContextManager):
                         # renders the whole call as attributed narration.
                         continue
                     if event.action:
+                        shown_arguments = event.action.parameters or {}
+                        if event.event_id in final_parameters_by_tool_start_id:
+                            # The planner's own arguments (`reasoning`) stay as made.
+                            shown_arguments = {
+                                **final_parameters_by_tool_start_id[event.event_id],
+                                **{
+                                    k: v for k, v in shown_arguments.items() if k in INJECTED_PARAMS
+                                },
+                            }
                         tool_call = LLMToolCall(
                             id=event.action.call_id,
                             type="function",
                             function=ToolCallFunction(
                                 name=event.action.name,
-                                arguments=json.dumps(
-                                    event.action.parameters or {}, ensure_ascii=False
-                                ),
+                                arguments=json.dumps(shown_arguments, ensure_ascii=False),
                             ),
                         )
                         # Group consecutive TOOL_START events into one assistant message
@@ -227,9 +254,15 @@ class ToolUseContextManager(ContextManager):
                             )
                             header = ""
                             body_budget = self.max_tool_result_chars
-                        observation = _keep_start_and_end(
-                            texts.text_of(event),
-                            body_budget,
+                        # The note on an edited call is outside the cut, so a long result never
+                        # cuts it, and takes its room from the result's.
+                        text = texts.text_of(event)
+                        note = user_edit_note(event, has_result=text != "")
+                        if note and text:
+                            note += "\n\n"
+                        observation = note + _keep_start_and_end(
+                            text,
+                            max(body_budget - len(note), 0),
                             event.event_id if reads_back else None,
                         )
                         if event.author != agent.name:
@@ -262,14 +295,6 @@ class ToolUseContextManager(ContextManager):
                                     read_back=read_back(event) if reads_back else None,
                                 )
                             )
-
-                case ExecutionEventType.TOOL_FEEDBACK:
-                    if event.action:
-                        observation = str(event.action.observation or "")
-                        # A plain approval carries no text: an empty user turn
-                        # would tell the model nothing, after every approval.
-                        if observation:
-                            messages.append(LLMMessage(role=self.user_role, content=observation))
 
                 case ExecutionEventType.EXTERNAL_PART:
                     # Externally-injected content (e.g. from a channel) only

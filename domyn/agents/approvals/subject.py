@@ -16,12 +16,15 @@ willing to be approved *for*, and having to say it out loud is a feature.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
+from domyn.agents.core import METADATA_INITIAL_PARAMETERS, ExecutionEventType
 from domyn.agents.logger import get_logger
 
 if TYPE_CHECKING:
     from domyn.agents.approvals.models import ApprovalRequest
+    from domyn.agents.core import BaseEvent
 
 # Parameters the planner adds to a tool's schema for its own purposes, which are
 # no part of what the user is approving. They must never reach a subject, for two
@@ -44,6 +47,86 @@ INJECTED_PARAMS: frozenset[str] = frozenset({"reasoning"})
 def visible_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
     """The parameters a subject may be built from: the call minus planner noise."""
     return {key: value for key, value in parameters.items() if key not in INJECTED_PARAMS}
+
+
+def user_edit_note(tool_result_event: BaseEvent, has_result: bool) -> str:
+    """The note for the model before the result of a call the user edited before approving
+    it (*has_result* false: the note alone, saying the call gave nothing); empty for any
+    other event.
+
+    Added where the result is rendered for a model, never to the stored result: the
+    note is an instruction to the model, and the stored result is what users see.
+    """
+    initial_parameters = tool_result_event.metadata.get(METADATA_INITIAL_PARAMETERS)
+    final_action: Any = tool_result_event.action  # mypy reads `BaseEvent.action` as `None`
+    if initial_parameters is None or final_action is None:
+        return ""
+
+    final_parameters = visible_parameters(final_action.parameters or {})
+    initial_parameters = visible_parameters(initial_parameters)
+    edits = [
+        f"{key} to {json.dumps(_shortened(value), ensure_ascii=False, default=str)}"
+        for key, value in final_parameters.items()
+        if initial_parameters.get(key) != value
+    ]
+    edits += [f"no {key}" for key in initial_parameters if key not in final_parameters]
+    arguments = {key: _shortened(value) for key, value in final_parameters.items()}
+    final_call = f"{final_action.name}({json.dumps(arguments, ensure_ascii=False, default=str)})"
+    failed = tool_result_event.event_type == ExecutionEventType.TOOL_ERROR
+    if has_result:
+        outcome = f", and the {'error' if failed else 'result'} below is for them."
+    else:
+        outcome = ", and failed with no error message." if failed else ", and returned nothing."
+    # Before the result, saying the edit is the request now: after it, or without that, models
+    # read the edit as a mistake and made the call again with the values of the user's message.
+    note = (
+        f"Note: the user edited this call before approving it, setting {' and '.join(edits)}, so "
+        f"it ran as {final_call}, with the user's arguments, not yours{outcome} By editing it the "
+        "user changed their request: where the edit differs from their earlier message or your "
+        "task, the edit is what they want now, not a mistake, so do not go back to the values "
+        "they replaced."
+    )
+    if failed:
+        # Told to retry with the user's arguments, models fell back to their own instead.
+        note += (
+            " Do not call the tool again with the values they replaced, not even to work around "
+            "this error: tell the user the call with their values failed and ask what to do."
+        )
+    else:
+        note += (
+            " The call is done: do not make it again. Use the user's arguments from now on, in "
+            "related calls too."
+        )
+    return note
+
+
+def _shortened(value: Any) -> Any:
+    """*value*, or its start and end when long: the whole of it is in the call the model sees."""
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    if len(text) <= 2_000:
+        return value
+    return f"{text[:1_000]}…[{len(text) - 2_000} characters not shown]…{text[-1_000:]}"
+
+
+def with_user_edit_note(tool_result: Any, tool_result_event: BaseEvent) -> Any:
+    """*tool_result*, after ``user_edit_note`` when *tool_result_event* is the result of a
+    call the user edited before approving it; unchanged for any other event.
+
+    *tool_result* is passed apart because it is not always the event's observation: the
+    delegate relay passes the error message of a failed call. A missing or empty one gets
+    the note alone.
+    """
+    text = (
+        json.dumps(tool_result, ensure_ascii=False, default=str)
+        if isinstance(tool_result, dict | list)
+        else tool_result
+    )
+    # Only a missing result is no result: a 0 or False is the result.
+    has_result = text is not None and text != ""
+    note = user_edit_note(tool_result_event, has_result=has_result)
+    if not note:
+        return tool_result
+    return f"{note}\n\n{text}" if has_result else note
 
 
 def compute_subject(tool: Any, parameters: dict[str, Any]) -> str:

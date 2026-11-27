@@ -35,7 +35,9 @@ from domyn.agents.approvals.subject import (
     build_request,
     compute_parts,
     compute_subject,
+    user_edit_note,
     visible_parameters,
+    with_user_edit_note,
 )
 
 __all__ = [
@@ -57,5 +59,7 @@ __all__ = [
     "compute_subject",
     "hardline_match",
     "is_already_approved",
+    "user_edit_note",
     "visible_parameters",
+    "with_user_edit_note",
 ]

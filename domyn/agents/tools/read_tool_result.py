@@ -75,13 +75,15 @@ class ShownTexts:
 
     def text_of(self, event: BaseEvent) -> str:
         """The text of the tool result *event*, with what its call streamed."""
-        observation = str(getattr(event.action, "observation", None) or "")
+        tool_result = getattr(event.action, "observation", None)
+        # Only a missing result is empty: a 0 or False is the result.
+        observation = "" if tool_result is None else str(tool_result)
         streamed = self._streamed.pop(getattr(event.action, "call_id", ""), None)
-        if not streamed:
-            return observation
-        return (
-            f"{observation}{_GAP}Shown to the user while the tool ran:\n" + "".join(streamed)
-        ).lstrip()
+        if streamed:
+            observation = (
+                f"{observation}{_GAP}Shown to the user while the tool ran:\n" + "".join(streamed)
+            ).lstrip()
+        return observation
 
 
 class ToolResults:
