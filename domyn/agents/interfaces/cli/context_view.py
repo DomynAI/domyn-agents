@@ -65,9 +65,7 @@ def indicator(usage: ContextUsage | None) -> tuple[str, str] | None:
     if fraction < ATTENTION_FRACTION:
         return None
 
-    # A request estimated over the window still goes out when the estimate may be off
-    # (prose is overcounted), and the model may take it.
-    text = f"context used: {min(fraction, 1.0):.0%}"
+    text = f"context used: {fraction:.0%}"
     if usage.tokens_until_threshold and usage.threshold_tokens and usage.context_window:
         # A compaction is still ahead: say where, in the same unit. At the threshold it
         # already ran, and promising another would be wrong.
@@ -95,7 +93,7 @@ def render(
 
     if usage is None:
         console.print(
-            "  No request in this conversation yet, so nothing to measure.",
+            "  No request answered in this conversation yet, so nothing to measure.",
             style=meta,
             highlight=False,
         )
@@ -138,8 +136,6 @@ def render(
     )
 
     if usage.context_window:
-        # Not capped like the indicator: it is the total above against the window, and a
-        # capped share would contradict it.
         fraction = usage.fraction_used or 0.0
         console.print(
             f"   {'model window':<22} {thousands(usage.context_window):>7}  {fraction:>4.0%} used",

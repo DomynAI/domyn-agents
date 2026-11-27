@@ -25,7 +25,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from domyn.agents.core import METADATA_TOOL_BATCH, BaseEvent, ExecutionEventType, Part
 from domyn.agents.llm.base import LLMMessage, context_limit_from_error, reported_prompt_tokens
-from domyn.agents.llm.context_window import deployment_key, remember_stated_window
+from domyn.agents.llm.context_window import (
+    deployment_key,
+    raise_assumed_window,
+    remember_stated_window,
+)
 from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.context_management.budget import (
     CONTEXT_USAGE_METADATA_KEY,
@@ -1000,8 +1004,9 @@ class Compactor(BaseModel):
         state: dict[str, Any] | None,
         agent_name: str,
         provider: Any = None,
-    ) -> None:
-        """Remember what the provider counted for the request just answered.
+    ) -> bool:
+        """Remember what the provider counted for the request just answered, and say
+        whether it was kept.
 
         ``measured`` is the ``usage_metadata`` that went out with that request. From
         then on the size of a request is the provider's count of the last one plus
@@ -1013,6 +1018,9 @@ class Compactor(BaseModel):
 
         Not the calibration this replaces: that multiplied every estimate by a
         ratio learned on other text, so prose made dense text look small.
+
+        The model took the request, so a window assumed for ``provider`` that is smaller
+        than the count is raised to it (`raise_assumed_window`).
         """
         reported = reported_prompt_tokens(usage)
         raw = (measured or {}).get(CONTEXT_USAGE_METADATA_KEY) or {}
@@ -1020,20 +1028,22 @@ class Compactor(BaseModel):
             raw.get("tool_definition_tokens") or 0
         )
         if state is None or reported is None or estimated <= 0:
-            return
+            return False
         low, high = _ANCHOR_RATIO
         if not low <= reported / estimated <= high:
             get_logger().warning(
                 f"provider token count ignored for {agent_name}: {reported} reported "
                 f"against {estimated} estimated"
             )
-            return
+            return False
+        raise_assumed_window(provider, reported)
         state.setdefault(_ANCHORS_KEY, {})[agent_name] = {
             "reported": reported,
             "estimated": estimated,
             "generation": read_record(state, agent_name).generation,
             "deployment": _deployment(provider),
         }
+        return True
 
     def _anchor(
         self, state: dict[str, Any] | None, agent: Any, key: str | None = None

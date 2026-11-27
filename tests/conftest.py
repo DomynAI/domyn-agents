@@ -122,7 +122,7 @@ def _no_session_home_from_the_shell(monkeypatch: pytest.MonkeyPatch) -> None:
 def _forget_context_windows() -> None:
     """Start every test with no context window remembered.
 
-    `llm/context_window.py` remembers windows in two module-level dicts for as long as
+    `llm/context_window.py` remembers windows in module-level dicts for as long as
     the process lives, and pytest runs all of a worker's tests in one process. Without
     this, a window one test taught (a rejection stating 32768 for an endpoint and model)
     would still be there in the next test that builds a provider for them, and that test
@@ -135,6 +135,7 @@ def _forget_context_windows() -> None:
 
     context_window._answers.clear()
     context_window._stated.clear()
+    context_window._assumed.clear()
     compaction._warned_reserves.clear()
 
 

@@ -32,6 +32,10 @@ would be refused again. It does not expire like an answer because it cannot be c
 like one: an answer is asked again with one GET, a stated window only by another
 refused request, after which the conversation is compacted toward half its size instead
 of at the threshold. Nothing is written to disk.
+
+A window a host assumes because nothing above answers (:func:`assume_context_window`, the
+CLI's fallback) is raised to the provider's count of any larger request the model takes
+(:func:`raise_assumed_window`), and kept the same way.
 """
 
 from __future__ import annotations
@@ -78,6 +82,13 @@ Only ever lowered: a smaller statement replaces a larger one, and it caps a wind
 any other source without ever raising one. A server later given a larger window keeps
 the old one here until this process restarts: compaction starts earlier than it needs
 to, but no request is refused."""
+
+_assumed: dict[tuple[str, str, str], int] = {}
+"""The window a host assumed for each provider class, endpoint and model that reports
+none (:func:`assume_context_window`), kept until the process exits.
+
+Only ever raised, by a request the model took that was larger
+(:func:`raise_assumed_window`): the model taking it proves the window is at least that."""
 
 
 def positive_int(value: Any) -> int | None:
@@ -176,6 +187,43 @@ def remember_stated_window(provider: Any, window: int) -> None:
     known = _stated.get(key)
     if known is None or window < known:
         _stated[key] = window
+
+
+def assume_context_window(provider: Any, window: int) -> None:
+    """Give ``provider`` ``window`` as an assumption, for an endpoint that reports none: or
+    the largest request its endpoint and model have taken, when that is larger."""
+    key = deployment_key(provider)
+    if key is not None:
+        window = _assumed[key] = max(window, _assumed.get(key, 0))
+    provider.context_window = window
+
+
+def forget_assumed_window(provider: Any) -> None:
+    """Stop treating ``provider``'s window as assumed: its endpoint reports one now."""
+    key = deployment_key(provider)
+    if key is not None:
+        _assumed.pop(key, None)
+
+
+def window_assumed(provider: Any) -> bool:
+    """Whether ``provider``'s window is the one assumed for it, not one declared or
+    reported, or stated by a rejection."""
+    key = deployment_key(provider)
+    window = getattr(provider, "context_window", None)
+    return key is not None and window is not None and window == _assumed.get(key)
+
+
+def raise_assumed_window(provider: Any, tokens: int) -> None:
+    """The model took a request it counted at ``tokens``: an assumed window smaller than
+    that is wrong, and is raised to it. A declared one is left as it is."""
+    key = deployment_key(provider)
+    if key is None or not window_assumed(provider) or tokens <= provider.context_window:
+        return
+    get_logger().info(
+        f"context window of {provider.model_name} raised to {tokens} tokens: "
+        "the model took a request that large"
+    )
+    _assumed[key] = provider.context_window = tokens
 
 
 def deployment_key(provider: Any) -> tuple[str, str, str] | None:

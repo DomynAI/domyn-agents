@@ -69,10 +69,12 @@ class TestTheIndicatorSpeaks:
         assert attention[1] == "meta"
         assert serious[1] == "warning"
 
-    def test_never_over_the_whole_window(self, theme: Theme) -> None:
-        """An estimate over the window still goes out, and the model may take it."""
-        shown = context_view.indicator(_usage(messages=130_000, window=100_000))
-        assert shown == ("context used: 100%", "warning")
+    def test_it_reads_the_share_context_shows(self, theme: Theme) -> None:
+        """Past the window too (a declared window smaller than the model's): one number,
+        not one capped and one not."""
+        usage = _usage(messages=130_000, window=100_000)
+        assert context_view.indicator(usage) == ("context used: 130%", "warning")
+        assert "130% used" in _render(theme, usage)
 
     def test_with_a_policy_it_shows_where_compaction_runs(self, theme: Theme) -> None:
         """When a threshold exists, it is shown in the same unit as the share."""

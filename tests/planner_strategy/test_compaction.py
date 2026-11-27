@@ -787,6 +787,36 @@ class TestMeasuringFromTheProvidersCount:
         assert compactor.assess(sent, on("deepseek"), state=state).current_tokens == alone
 
 
+class TestARequestTheModelTook:
+    """Its count proves the window at least that large: an assumed window is raised to
+    it, a declared one is a choice and is kept."""
+
+    @pytest.mark.parametrize(("assumed", "kept"), [(True, 190_000), (False, 150_000)])
+    def test_it_raises_an_assumed_window_only(self, assumed: bool, kept: int) -> None:
+        from domyn.agents.llm.context_window import assume_context_window
+
+        provider = VLLMProvider(model_name="m", url="http://llm.test/v1/chat/completions")
+        if assumed:
+            assume_context_window(provider, 150_000)
+        else:
+            provider.context_window = 150_000
+        compactor = _active()
+        sent = {"context_usage": {"message_tokens": 200_000, "tool_definition_tokens": 0}}
+
+        assert compactor.observe({"prompt_tokens": 190_000}, sent, {}, "Assistant", provider)
+        assert provider.context_window == kept
+
+    def test_a_count_on_another_basis_raises_nothing(self) -> None:
+        from domyn.agents.llm.context_window import assume_context_window
+
+        provider = VLLMProvider(model_name="m", url="http://llm.test/v1/chat/completions")
+        assume_context_window(provider, 150_000)
+        sent = {"context_usage": {"message_tokens": 20_000, "tool_definition_tokens": 0}}
+
+        assert not _active().observe({"prompt_tokens": 190_000}, sent, {}, "Assistant", provider)
+        assert provider.context_window == 150_000
+
+
 class _Logged:
     """Returns the estimates a live run logged, by how many messages a list has, so a
     test can replay that run's numbers exactly."""

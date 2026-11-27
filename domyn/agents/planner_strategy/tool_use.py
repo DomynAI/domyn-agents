@@ -1059,12 +1059,21 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
 
             # What the provider counted for this request: the base the next one is
             # measured from (see `Compactor.observe`).
-            self.compactor.observe(
+            counted = self.compactor.observe(
                 getattr(response, "usage", None),
                 usage_metadata,
                 interaction_context.state,
                 record,
                 getattr(agent, "llm_provider", None),
+            )
+            # The request measured again, now that the count is its correction: what a
+            # front-end shows is the size the model took, against the window after it.
+            measured = (
+                self.compactor.usage_metadata(
+                    messages, tool_defs, agent, interaction_context.state, turn_context, key=record
+                )
+                if counted
+                else {}
             )
 
             # With thought, reasoning is normally carried by the action it produced,
@@ -1084,7 +1093,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 author=agent.name,
                 content=[Part(text="LLM response received", thought=final_thought)],
                 is_partial=False,
-                metadata=token_usage_metadata(token_usage),
+                metadata=token_usage_metadata(token_usage) | measured,
             )
 
             if gave_up_on_malformed_json:
