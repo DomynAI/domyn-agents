@@ -50,9 +50,9 @@ def request_timeout(read: float | None) -> httpx.Timeout:
 def keepalive_socket_options() -> list[tuple[int, int, int]]:
     """TCP keepalive on, with the probe timings this platform lets a socket set.
 
-    Only the constants the platform defines are used: macOS names the idle time
-    ``TCP_KEEPALIVE`` rather than ``TCP_KEEPIDLE``, and a platform with none of
-    them still gets keepalive with the system's timings.
+    Only the constants the platform defines are used: the idle time is
+    ``TCP_KEEPIDLE``, or ``TCP_KEEPALIVE`` where the platform names it so, and a
+    platform with none of them still gets keepalive with the system's timings.
     """
     options = [(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)]
     idle = getattr(socket, "TCP_KEEPIDLE", None)

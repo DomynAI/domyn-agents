@@ -73,7 +73,7 @@ class TestKeepalive:
             for level, name, value in keepalive_socket_options():
                 sock.setsockopt(level, name, value)
                 if name == socket.SO_KEEPALIVE:
-                    # A flag: macOS reads it back as its bit (8), not as 1.
+                    # A flag: a platform may read it back as its bit, not as 1.
                     assert sock.getsockopt(level, name)
                 else:
                     assert sock.getsockopt(level, name) == value
