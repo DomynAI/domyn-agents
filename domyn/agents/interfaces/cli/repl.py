@@ -61,7 +61,6 @@ from domyn.agents.interfaces.cli.approval import (
 from domyn.agents.interfaces.cli.attachments import AttachmentContext, Attachments
 from domyn.agents.interfaces.cli.calls import as_written
 from domyn.agents.interfaces.cli.config import (
-    DEFAULT_CONTEXT_WINDOW,
     LOCAL_SKILLS_DIRS,
     apply_context_window,
     approvals_paths,
@@ -73,6 +72,7 @@ from domyn.agents.interfaces.cli.config import (
     read_raw_config,
     skill_workspace_roots,
     unique_paths,
+    window_assumed,
 )
 from domyn.agents.interfaces.cli.export import (
     ExportError,
@@ -1423,7 +1423,7 @@ class Repl:
                 f"The window, {window:,} tokens, is `{key}` in {where}: "
                 "if the model takes more, raise it there."
             )
-        if window == DEFAULT_CONTEXT_WINDOW:
+        if window_assumed(provider):
             return (
                 f"The window, {window:,} tokens, is assumed: the endpoint does not report one. "
                 f"If the model takes more, set `context_window` in {where}."
@@ -1460,7 +1460,9 @@ class Repl:
         metadata = event.metadata or {}
         usage = self._state.last_usage
         if event.error_code in (REQUEST_TOO_LONG, CONVERSATION_TOO_LONG):
-            self._window_refused = event.author or getattr(self._agent, "name", "")
+            # After a rejection the window in use says nothing about the model.
+            if not metadata.get("rejected"):
+                self._window_refused = event.author or getattr(self._agent, "name", "")
             return
         if event.event_type is ExecutionEventType.CONTEXT_COMPACTED:
             saved = metadata.get("tokens_saved")

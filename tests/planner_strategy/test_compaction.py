@@ -1096,7 +1096,7 @@ class TestAMessageNoWindowHolds:
         ]
 
     def test_only_a_request_over_the_window_on_its_own_is_found(self) -> None:
-        found = _active().oversized(self._pasted(30_000), _Agent(5_000))
+        found = _active().oversized(self._pasted(40_000), _Agent(5_000))
         assert list(found) == ["paste"]
         assert found["paste"] >= 10_000
 
@@ -1104,8 +1104,21 @@ class TestAMessageNoWindowHolds:
         """A request that fits alone, not with the tool definitions sent beside it."""
         messages = self._pasted(12_000)
         tools = [{"type": "function", "function": {"name": "t", "description": "x" * 3_000}}]
-        assert _active().oversized(messages, _Agent(4_500)) == {}
-        assert list(_active().oversized(messages, _Agent(4_500), tools)) == ["paste"]
+        assert _active().oversized(messages, _Agent(2_250)) == {}
+        assert list(_active().oversized(messages, _Agent(2_250), tools)) == ["paste"]
+
+    def test_a_message_estimated_a_little_over_the_window_goes_out(self) -> None:
+        """Prose costs as little as half its estimate: only a rejection proves it too long."""
+        compactor = _active()
+        messages = self._pasted(16_500)
+        agent = _Agent(5_000)
+        assert compactor.oversized(messages, agent) == {}
+        metadata = compactor.usage_metadata(messages, None, agent, {})
+        assert compactor.refuse_over_window(messages, metadata, {}, "A", "A") is None
+
+    def test_against_a_window_a_rejection_stated_the_estimate_is_enough(self) -> None:
+        found = _active().oversized(self._pasted(16_500), _Agent(None), window=5_000)
+        assert list(found) == ["paste"]
 
     def test_over_the_window_without_any_message_none_is_to_blame(self) -> None:
         """Tool definitions alone over the window: every message would be found."""
@@ -1158,7 +1171,7 @@ class TestAMessageNoWindowHolds:
         compactor = _active()
         state: dict[str, Any] = {}
         messages = self._pasted(9_000)
-        window = compactor.tokens_after(messages) - 100
+        window = compactor.tokens_after(messages) // 2 - 100
         metadata = compactor.usage_metadata(messages, None, _Agent(window), state)
 
         event = compactor.refuse_over_window(messages, metadata, state, "A", "A")

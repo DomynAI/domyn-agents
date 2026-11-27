@@ -983,11 +983,11 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
 
                 except Exception as e:
                     # Rejected as too long: the estimate under-counted. Compact
-                    # harder and go round again, once — a second rejection is an
-                    # error like any other.
+                    # harder and go round again, once; after that, or when nothing
+                    # compacted, a message the rejection proves too big is left out.
                     recovery = (
                         None
-                        if overflow_retried or not is_context_overflow(e)
+                        if not is_context_overflow(e)
                         else self.compactor.overflow_plan(
                             conversation,
                             agent,
@@ -999,17 +999,25 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                         )
                     )
                     if recovery is not None:
-                        overflow_retried = True
-                        logger.warning("request rejected as too long: compacting, then retrying")
-                        yield self.compactor.start_event(recovery, agent.name)
-                        _, compaction_done = await self.compactor.run(
-                            conversation, recovery, interaction_context.state, agent.name, record
-                        )
-                        yield compaction_done
-                        if compaction_done.metadata.get("changed"):
-                            continue
-                        # Nothing compacted: the same request would be rejected again. A
-                        # message the rejection proves too big is left out, or the turn ends.
+                        if not overflow_retried:
+                            overflow_retried = True
+                            logger.warning(
+                                "request rejected as too long: compacting, then retrying"
+                            )
+                            yield self.compactor.start_event(recovery, agent.name)
+                            _, compaction_done = await self.compactor.run(
+                                conversation,
+                                recovery,
+                                interaction_context.state,
+                                agent.name,
+                                record,
+                            )
+                            yield compaction_done
+                            if compaction_done.metadata.get("changed"):
+                                continue
+                        # The same request would be rejected again. A message the
+                        # rejection proves too big is left out, or the turn ends: each
+                        # round leaves one out or ends it.
                         stated = context_limit_from_error(e)
                         _, left_out = self.compactor.leave_out_oversized(
                             conversation,

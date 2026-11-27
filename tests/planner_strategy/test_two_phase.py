@@ -695,3 +695,10 @@ class TestASummaryThatSavesNothing:
         plan = compactor.assess(messages, _agent(provider))
         await compactor.run(messages, plan, state, AGENT)
         assert len(provider.seen) == 1, "the same span was summarized again"
+
+        # Another agent's span declined does not let this one's be asked again.
+        plan = compactor.assess(messages, _agent(provider))
+        await compactor.run(messages, plan, state, "Other")
+        plan = compactor.assess(messages, _agent(provider))
+        await compactor.run(messages, plan, state, AGENT)
+        assert len(provider.seen) == 2, "each agent's declined span is its own"

@@ -420,6 +420,23 @@ class TestWhenTheProviderRejectsTheRequestAsTooLong:
 
     @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
     @pytest.mark.asyncio
+    async def test_rejected_again_after_compacting_the_request_is_left_out(
+        self, planner_name: str
+    ) -> None:
+        """The summary of the first paste changed the request, and the retry was rejected
+        too: the paste is left out rather than the turn ending on the provider's error, and
+        kept in the conversation to be rejected again."""
+        repl, buffer, provider = self._repl(
+            planner_name, ("long " * 9_000, "long " * 20_000), {2, 4}
+        )
+        await repl.run()
+        out = " ".join(buffer.getvalue().split())
+
+        assert provider.calls == 4
+        assert "was not sent" in out and "LLM error" not in out
+
+    @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
+    @pytest.mark.asyncio
     async def test_a_second_rejection_ends_the_turn(self, planner_name: str) -> None:
         repl, buffer, provider = self._repl(
             planner_name, ("long " * 30_000, "hello"), range(2, 99), prune_only=True
@@ -483,14 +500,27 @@ class TestAMessageLargerThanTheWindow:
         assert "long long" not in sent and "not sent" in sent
 
     @pytest.mark.asyncio
-    async def test_no_request_over_the_window_goes_out(self) -> None:
-        """What the indicator shows is what went out: never over 100%."""
-        repl, buffer, provider, usages = self._repl(self.HALF, self.HALF, "ciao", prune_only=True)
+    async def test_a_message_estimated_a_little_over_the_window_is_sent(self) -> None:
+        """Prose costs as little as half its estimate: the model may well take it, and
+        only a rejection proves it too long."""
+        repl, buffer, provider, _ = self._repl("long " * 15_000)  # ~25k estimated
+        await repl.run()
+
+        assert len(provider.seen) == 1
+        assert "not sent" not in buffer.getvalue()
+        assert "Hello from the agent." in buffer.getvalue()
+
+    @pytest.mark.asyncio
+    async def test_no_request_over_twice_the_window_goes_out(self) -> None:
+        """Over twice the window no error of the estimate makes it fit."""
+        repl, buffer, provider, usages = self._repl(
+            self.HALF, self.HALF, "ciao", window=12_000, prune_only=True
+        )
         await repl.run()
 
         assert len(provider.seen) == 2, "the second paste does not fit what is left"
         assert "does not fit in what is left" in buffer.getvalue()
-        assert usages and all(u.total_tokens <= u.context_window for u in usages)
+        assert usages and all(u.total_tokens <= 2 * u.context_window for u in usages)
 
     @pytest.mark.asyncio
     async def test_an_older_paste_is_summarized_so_the_next_one_fits(self) -> None:
@@ -554,15 +584,53 @@ class TestAMessageLargerThanTheWindow:
         assert repl._window_refused == "Helper"
         assert "20,000 tokens" in str(repl._window_hint(repl._window_refused))
 
-    @pytest.mark.asyncio
-    async def test_an_assumed_window_says_it_is_assumed(self) -> None:
-        from domyn.agents.interfaces.cli.config import DEFAULT_CONTEXT_WINDOW
+    @staticmethod
+    async def _resolved(provider: Any, reported: int | None, monkeypatch: Any) -> None:
+        """``provider``'s window as the CLI resolves it, the endpoint reporting
+        ``reported``."""
+        from domyn.agents.interfaces.cli import config as cli_config
 
-        repl, buffer, _, _ = self._repl(
-            "long " * 100_000, window=DEFAULT_CONTEXT_WINDOW, config={"llm_providers": []}
-        )
+        async def resolve(p: Any) -> int | None:
+            if reported is not None:
+                p.context_window = reported
+            return reported
+
+        monkeypatch.setattr(cli_config, "resolve_context_window", resolve)
+        provider.context_window = None
+        await cli_config.apply_context_window(provider)
+
+    @pytest.mark.asyncio
+    async def test_an_assumed_window_says_it_is_assumed(self, monkeypatch: Any) -> None:
+        repl, buffer, provider, _ = self._repl("long " * 200_000, config={"llm_providers": []})
+        await self._resolved(provider, None, monkeypatch)
         await repl.run()
         assert "is assumed: the endpoint does not report one" in buffer.getvalue()
+
+    @pytest.mark.asyncio
+    async def test_a_reported_window_of_the_assumed_size_is_not_called_assumed(
+        self, monkeypatch: Any
+    ) -> None:
+        from domyn.agents.interfaces.cli.config import DEFAULT_CONTEXT_WINDOW
+
+        repl, buffer, provider, _ = self._repl("long " * 200_000, config={"llm_providers": []})
+        await self._resolved(provider, DEFAULT_CONTEXT_WINDOW, monkeypatch)
+        await repl.run()
+        assert "it was not sent" in " ".join(buffer.getvalue().split())
+        assert "is assumed" not in buffer.getvalue()
+
+    def test_a_refusal_after_a_rejection_gives_no_window_hint(self) -> None:
+        """The model has just rejected a request under the window in use: "if the model
+        takes more" would point the wrong way."""
+        repl, _, _, _ = self._repl(config={"llm_providers": []})
+        repl._record_usage(
+            BaseEvent(
+                event_type=ExecutionEventType.ERROR_OCCURRED,
+                author="Assistant",
+                error_code="ConversationTooLong",
+                metadata={"rejected": True},
+            )
+        )
+        assert repl._window_refused is None
 
 
 class TestSayingWhenPruningIsNoLongerEnough:

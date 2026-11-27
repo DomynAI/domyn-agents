@@ -44,7 +44,7 @@ from domyn.agents.instructions.discovery import AUTODISCOVERY_DIRS
 from domyn.agents.interfaces.cli.theme import Theme
 from domyn.agents.llm import BaseLLMProvider
 from domyn.agents.llm.base import DEFAULT_MAX_TOKENS_SHARE
-from domyn.agents.llm.context_window import resolve_context_window
+from domyn.agents.llm.context_window import deployment_key, resolve_context_window
 from domyn.agents.loader import interpolate_env_vars
 from domyn.agents.logger import get_logger
 from domyn.agents.memory.managers.base import MemoryExecutionMode
@@ -185,8 +185,24 @@ async def apply_context_window(provider: Any) -> None:
     """
     if not isinstance(provider, BaseLLMProvider):
         return
+    key = deployment_key(provider)
+    _assumed_windows.discard(key)
     if await resolve_context_window(provider) is None:
         provider.context_window = DEFAULT_CONTEXT_WINDOW
+        _assumed_windows.add(key)
+
+
+_assumed_windows: set[tuple[str, str, str] | None] = set()
+"""The deployments (``deployment_key``) `apply_context_window` assumed a window for."""
+
+
+def window_assumed(provider: Any) -> bool:
+    """Whether ``provider``'s window is `DEFAULT_CONTEXT_WINDOW` because nothing declared
+    or reported one, not because an endpoint reports that very number."""
+    return (
+        getattr(provider, "context_window", None) == DEFAULT_CONTEXT_WINDOW
+        and deployment_key(provider) in _assumed_windows
+    )
 
 
 def max_tokens_share_of(raw: dict[str, Any] | None) -> float:

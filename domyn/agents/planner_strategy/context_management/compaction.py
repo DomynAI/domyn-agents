@@ -50,9 +50,9 @@ the same history, so "what has been dropped" is not a property they share.
 """
 
 _DECLINED_KEY = "declined_summary"
-"""The event ids of the last span whose summary was no shorter than the text, in
-``InteractionContext.state``: every later request still over the threshold would
-pay for the same summary again."""
+"""The event ids of the last span whose summary was no shorter than the text, per
+agent (``compaction_key``), in ``InteractionContext.state``: every later request
+still over the threshold would pay for the same summary again."""
 
 _ANCHORS_KEY = "context_anchors"
 """Where the provider's count of the last request lives, per agent, in
@@ -108,7 +108,7 @@ def forget_copy(state: dict[str, Any] | None, agent_name: str, interaction_id: s
         return False
     key = f"{agent_name}{_COPY_MARK}{interaction_id}"
     dropped = False
-    for table in (state.get(_RECORDS_KEY), state.get(_ANCHORS_KEY)):
+    for table in (state.get(_RECORDS_KEY), state.get(_ANCHORS_KEY), state.get(_DECLINED_KEY)):
         if table and key in table:
             del table[key]
             dropped = True
@@ -1097,8 +1097,9 @@ class Compactor(BaseModel):
         messages: list[LLMMessage],
         plan: CompactionPlan,
         state: dict[str, Any] | None = None,
+        key: str | None = None,
     ) -> CompactionOutcome:
-        """Apply the strategy. Never raises.
+        """Apply the strategy, for ``key``'s record (``compaction_key``). Never raises.
 
         A failure means "do not compress": the oversized request goes out anyway
         and the provider will reject it with a readable error, which is a smaller
@@ -1113,6 +1114,7 @@ class Compactor(BaseModel):
                 policy=self.policy,
                 state=state if state is not None else {},
                 llm_provider=plan.llm_provider,
+                key=key,
             )
         except Exception as exc:
             get_logger().warning(f"compaction failed, sending uncompacted: {type(exc).__name__}")
@@ -1284,7 +1286,7 @@ class Compactor(BaseModel):
         ``key``'s (``compaction_key``), ``author``'s when not given."""
         key = key or author
         before = plan.current_tokens
-        outcome = await self.apply(messages, plan, state)
+        outcome = await self.apply(messages, plan, state, key)
         after = (
             plan.budget.tokens_for(outcome.messages)
             if plan.budget is not None
@@ -1430,15 +1432,20 @@ class Compactor(BaseModel):
     ) -> dict[str, int]:
         """The requests in ``messages`` no request can carry, by event id, with their
         estimated tokens: alone, with what every request carries (system prompt, tool
-        definitions, turn context), over ``window``, the agent's when not given. With a
-        stand-in for the window (``stated`` false: half a rejected request), alone over
-        it: what every request carries is in the half too.
+        definitions, turn context), over ``window``, one a rejection gave. With a
+        stand-in for it (``stated`` false: half a rejected request), alone over it: what
+        every request carries is in the half too.
+
+        Against the agent's own window (``window`` not given), over twice it: nothing
+        has proved the request too long, and the estimate counts prose at up to about
+        twice its tokens (``_beyond_estimate_error``).
 
         Empty without a window or a strategy that acts, and when what every request
         carries is over the window by itself: no message is to blame. Estimated without
         the measured correction, which belongs to text the provider has already counted.
         """
-        window = window or _context_window(agent)
+        if window is None:
+            window = _beyond_estimate_error(_context_window(agent))
         if not self.active or window is None:
             return {}
         fixed = 0
@@ -1473,17 +1480,18 @@ class Compactor(BaseModel):
         """Leave out the ``oversized`` requests and say so: ``messages`` without them,
         and the event to yield. A ``REQUEST_TOO_LONG`` refusal ends the turn (the
         current request is one of them); a ``CONTEXT_COMPACTED`` lets it go on.
-        ``stated`` is false when ``window`` is a stand-in, which the refusal then does
-        not quote."""
+        ``window``, when given, is one a rejection gave, and ``stated`` is false when it
+        is a stand-in, which the refusal then does not quote."""
         oversized = self.oversized(messages, agent, tool_defs, turn_context, window, stated)
         if not oversized:
             return messages, None
         messages = self.leave_out(messages, oversized, state, key)
         current = current_request_id(messages)
         if current in oversized:
+            rejected = window is not None
             window = window or _context_window(agent)
             return messages, self.message_refusal(
-                oversized[current], window if stated else None, agent.name
+                oversized[current], window if stated else None, agent.name, rejected
             )
         return messages, self.left_out_event(oversized, agent.name)
 
@@ -1516,12 +1524,14 @@ class Compactor(BaseModel):
                 "shortened further: the message was not sent, and is left out of this "
                 "conversation. Send a shorter one, or a file the agent can read.",
                 author,
+                rejected=True,
             )
         return self.refusal(
             CONVERSATION_TOO_LONG,
             "The model rejected the request as too long, and the conversation cannot be "
             "shortened further. Start a new conversation.",
             author,
+            rejected=True,
         )
 
     def leave_out(
@@ -1538,18 +1548,22 @@ class Compactor(BaseModel):
         get_logger().info(f"{len(excluded)} message(s) too long for the window left out")
         return _left_out(messages, excluded)
 
-    def refusal(self, code: str, text: str, author: str) -> BaseEvent:
+    def refusal(self, code: str, text: str, author: str, rejected: bool = False) -> BaseEvent:
         """The event ending a turn whose request cannot be sent (``REQUEST_TOO_LONG``,
-        ``CONVERSATION_TOO_LONG``)."""
+        ``CONVERSATION_TOO_LONG``), with ``rejected`` in its metadata when the provider
+        rejected it: the window in use is then no fact about the model."""
         return BaseEvent(
             event_type=ExecutionEventType.ERROR_OCCURRED,
             author=author,
             content=[Part(text=text)],
             error_code=code,
             error_message=text,
+            metadata={"rejected": True} if rejected else {},
         )
 
-    def message_refusal(self, tokens: int, window: int | None, author: str) -> BaseEvent:
+    def message_refusal(
+        self, tokens: int, window: int | None, author: str, rejected: bool = False
+    ) -> BaseEvent:
         """The request alone is over the window, quoted only when known: a stand-in for
         one (half a rejected request) is no fact about the model."""
         size = (
@@ -1563,6 +1577,7 @@ class Compactor(BaseModel):
             "left out of this conversation. Send a shorter version, or a file the agent "
             "can read.",
             author,
+            rejected,
         )
 
     def left_out_event(self, excluded: dict[str, int], author: str) -> BaseEvent:
@@ -1585,25 +1600,27 @@ class Compactor(BaseModel):
         key: str,
         author: str,
     ) -> BaseEvent | None:
-        """The event ending the turn when the request, compacted, is still over the
-        window, else ``None``: the indicator shows this same total, so no request it
-        would show over 100% goes out.
+        """The event ending the turn when the request, compacted, is still over twice
+        the window, which no error of the estimate explains (``_beyond_estimate_error``),
+        else ``None``: a request under that goes out, and a rejection decides.
 
-        The request is left out when it is the last message and the rest fits without
-        it: the request before it fitted, so the conversation stays usable.
+        The request is left out when it is the last message and the rest is not over
+        that without it: the request before it went out, so the conversation stays
+        usable.
         """
         raw = (usage_metadata or {}).get(CONTEXT_USAGE_METADATA_KEY)
         if not self.active or not isinstance(raw, dict):
             return None
         usage = ContextUsage.model_validate(raw)
         window = usage.context_window
+        limit = _beyond_estimate_error(window)
         total = usage.total_tokens
-        if window is None or total <= window:
+        if window is None or limit is None or total <= limit:
             return None
         last = conversation[-1] if conversation else None
         if last is not None and last.source_event_id and _is_request(last):
             tokens = int(self.estimator.estimate_messages([last]))
-            if total - tokens <= window:
+            if total - tokens <= limit:
                 self.leave_out(conversation, {last.source_event_id: tokens}, state, key)
                 return self.refusal(
                     REQUEST_TOO_LONG,
@@ -1619,6 +1636,14 @@ class Compactor(BaseModel):
             f"tokens of {window:,}) and cannot be shortened further. Start a new conversation.",
             author,
         )
+
+
+def _beyond_estimate_error(window: int | None) -> int | None:
+    """What a request must be estimated over to be over ``window`` whatever the
+    estimate's error: twice it. Prose costs as little as 0.56 real tokens per estimated
+    one (Qwen3-32B), so refused on the estimate alone, prose the model would take was
+    refused; a request between the two goes out, and a rejection decides."""
+    return 2 * window if window is not None else None
 
 
 def current_request_id(messages: list[LLMMessage]) -> str | None:
@@ -2054,7 +2079,9 @@ class TwoPhaseCompaction(CompactionStrategy):
         declined = phase_one.model_copy(
             update={"note": "context compacted: the summary was no shorter than the text"}
         )
-        if state.get(_DECLINED_KEY) == event_ids:
+        declined_spans = state.setdefault(_DECLINED_KEY, {})
+        key = kwargs.get("key") or ""
+        if declined_spans.get(key) == event_ids:
             return declined
         try:
             summary = await self.summarizer.summarize(pruned_middle, llm_provider=provider)
@@ -2078,7 +2105,7 @@ class TwoPhaseCompaction(CompactionStrategy):
             after_pruning
         ):
             # A one-line greeting came back as a longer paragraph: kept, it grew the context.
-            state[_DECLINED_KEY] = event_ids
+            declined_spans[key] = event_ids
             return declined
 
         return CompactionOutcome(
