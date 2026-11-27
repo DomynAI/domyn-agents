@@ -44,6 +44,32 @@ CHOICE_STYLES: dict[str, str] = {
 }
 
 
+# Lines of the screen a picker leaves to what is not its options: its label, its
+# hint, and a few for the prompt the terminal draws around it.
+_CHROME_ROWS = 5
+_MIN_VISIBLE = 3
+
+
+def visible_options() -> int:
+    """How many option rows fit the terminal, for a picker drawn inline."""
+    import shutil
+
+    return max(_MIN_VISIBLE, shutil.get_terminal_size((80, 24)).lines - _CHROME_ROWS)
+
+
+def window(count: int, index: int, visible: int | None) -> range:
+    """The rows to draw out of ``count``: all, or ``visible`` of them around ``index``."""
+    if visible is None or count <= visible:
+        return range(count)
+    start = min(max(index - visible // 2, 0), count - visible)
+    return range(start, start + visible)
+
+
+def _position(shown: range, count: int, index: int) -> str:
+    """``(12/40)`` after a label whose list is cut to a window, else nothing."""
+    return f" ({index + 1}/{count})" if len(shown) < count else ""
+
+
 def choice_rows(
     theme: Theme,
     label: str,
@@ -52,8 +78,12 @@ def choice_rows(
     keys: list[str],
     *,
     descriptions: dict[str, str] | None = None,
+    visible: int | None = None,
 ) -> list[tuple[str, str]]:
     """A pick-one question as prompt_toolkit fragments, ending in a newline.
+
+    ``visible`` caps the options drawn: the window follows ``index``, so a list longer
+    than the terminal scrolls instead of leaving its end out of reach.
 
     ``keys`` are the hint's entries after ``↑↓ move`` (``enter select``…), since
     what the other keys do depends on who asks.
@@ -66,8 +96,12 @@ def choice_rows(
     unicode = theme.capabilities.unicode
     pointer_glyph = "\u276f" if unicode else ">"
     descriptions = descriptions or {}
-    rows: list[tuple[str, str]] = [("class:choice-label", f"  {label}\n")]
-    for position, option in enumerate(options):
+    shown = window(len(options), index, visible)
+    rows: list[tuple[str, str]] = [
+        ("class:choice-label", f"  {label}{_position(shown, len(options), index)}\n")
+    ]
+    for position in shown:
+        option = options[position]
         selected = position == index
         pointer = f"{pointer_glyph} " if selected else "  "
         style = "class:choice-selected" if selected else "class:choice-option"
@@ -229,6 +263,7 @@ def _select_with_arrows(
                     "ctrl-c cancel",
                 ],
                 descriptions=descriptions,
+                visible=visible_options(),
             )
         )
 
@@ -437,13 +472,19 @@ def multi_choice_rows(
     *,
     descriptions: dict[str, str] | None = None,
     back: bool = False,
+    visible: int | None = None,
 ) -> list[tuple[str, str]]:
     """The `choice_rows` look for a tick-any question: a box before each row, a group's
-    options indented below it. ``back`` adds Ctrl-B to the hint."""
+    options indented below it. ``back`` adds Ctrl-B to the hint; ``visible`` cuts the
+    rows to a window around ``index``, as in `choice_rows`."""
     pointer_glyph = "\u276f" if theme.capabilities.unicode else ">"
     descriptions = descriptions or {}
-    rows: list[tuple[str, str]] = [("class:choice-label", f"  {label}\n")]
-    for position, row in enumerate(ticks.rows):
+    shown = window(len(ticks.rows), index, visible)
+    rows: list[tuple[str, str]] = [
+        ("class:choice-label", f"  {label}{_position(shown, len(ticks.rows), index)}\n")
+    ]
+    for position in shown:
+        row = ticks.rows[position]
         current = position == index
         pointer = f"{pointer_glyph} " if current else "  "
         style = "class:choice-selected" if current else "class:choice-option"
@@ -557,7 +598,15 @@ def _multiselect_with_arrows(
 
     def render() -> FormattedText:
         return FormattedText(
-            multi_choice_rows(theme, label, ticks, index, descriptions=descriptions, back=back)
+            multi_choice_rows(
+                theme,
+                label,
+                ticks,
+                index,
+                descriptions=descriptions,
+                back=back,
+                visible=visible_options(),
+            )
         )
 
     bindings = KeyBindings()

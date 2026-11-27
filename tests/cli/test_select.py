@@ -1,7 +1,7 @@
 """Tests for the arrow-key option selector."""
 
 import asyncio
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -248,3 +248,40 @@ def test_rows_are_numbered(theme: Theme) -> None:
     texts = [text.rstrip() for _, text in rows]
     assert any(text.endswith("1. openai") for text in texts)
     assert any(text.endswith("3. custom") for text in texts)
+
+
+class TestALongListScrolls:
+    MANY: ClassVar[list[str]] = [f"option {n}" for n in range(1, 41)]
+
+    @staticmethod
+    def _options(rows: list[tuple[str, str]]) -> list[str]:
+        return [
+            text.strip()
+            for style, text in rows
+            if style.startswith("class:choice-") and ". " in text
+        ]
+
+    def test_only_the_visible_rows_are_drawn(self, theme: Theme) -> None:
+        rows = select_mod.choice_rows(theme, "pick", self.MANY, 0, [], visible=10)
+        assert len(self._options(rows)) == 10
+
+    def test_the_window_follows_the_highlight_to_the_end(self, theme: Theme) -> None:
+        rows = select_mod.choice_rows(theme, "pick", self.MANY, 39, [], visible=10)
+        shown = self._options(rows)
+        assert shown[-1].endswith("40. option 40")
+        assert len(shown) == 10
+
+    def test_a_cut_list_says_where_the_highlight_is(self, theme: Theme) -> None:
+        rows = select_mod.choice_rows(theme, "pick", self.MANY, 24, [], visible=10)
+        assert rows[0][1] == "  pick (25/40)\n"
+
+    def test_a_list_that_fits_is_drawn_whole(self, theme: Theme) -> None:
+        rows = select_mod.choice_rows(theme, "pick", OPTIONS, 0, [], visible=10)
+        assert rows[0][1] == "  pick\n"
+        assert len(self._options(rows)) == len(OPTIONS)
+
+    def test_a_tick_list_scrolls_too(self, theme: Theme) -> None:
+        ticks = select_mod._TickList(self.MANY, None, [])
+        rows = select_mod.multi_choice_rows(theme, "tick", ticks, 39, visible=10)
+        assert rows[0][1] == "  tick (40/40)\n"
+        assert sum("option " in text for _, text in rows) == 10
