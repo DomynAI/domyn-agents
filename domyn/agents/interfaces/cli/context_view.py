@@ -65,17 +65,11 @@ def indicator(usage: ContextUsage | None) -> tuple[str, str] | None:
     if fraction < ATTENTION_FRACTION:
         return None
 
-    share = f"{fraction:.0%}"
-
-    remaining = usage.tokens_until_threshold
-    if remaining:
-        # A compaction will happen: the useful thing is the distance to it. At zero it
-        # already ran, and what is left is the share.
-        text = f"context {share} · compaction in ~{thousands(remaining)} tokens"
-    else:
-        # No compaction coming, or it already ran: no distance to promise. The share
-        # remains, which is what needs to be known anyway.
-        text = f"context {share} of {thousands(usage.context_window or 0)}"
+    text = f"context used: {fraction:.0%}"
+    if usage.tokens_until_threshold and usage.threshold_tokens and usage.context_window:
+        # A compaction is still ahead: say where, in the same unit. At the threshold it
+        # already ran, and promising another would be wrong.
+        text += f" (auto-compact at {usage.threshold_tokens / usage.context_window:.0%})"
 
     return text, "warning" if fraction >= WARNING_FRACTION else "meta"
 
