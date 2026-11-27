@@ -963,6 +963,8 @@ Built-in provider types (registered in `LLMProviderFactory`, `domyn/agents/llm/_
 
 All providers talk raw HTTP via `httpx` — no vendor SDKs are declared as dependencies.
 
+**`vllm`, `custom` and `openai` send through `llm_client(read_timeout)`** (`llm/http_client.py`): connect 10 s, write and pool 60 s, and a `read` that depends on the call — the provider's `timeout` on a streamed call, where it is the gap between two chunks, and `non_stream_read_timeout` (default `None`, no limit) on one that is not, where `read` would cap the whole generation (300 s cut 27 of 596 trials of one eval run while the server was still generating; the longest streamed reply measured took 1,078 s). A dead peer is then found by TCP keepalive (`keepalive_socket_options`: idle 60 s, every 15 s, 4 probes, only the constants the platform defines; about two minutes), which also keeps idle-dropping load balancers off a long reply. A client given its own transport ignores the proxy variables, so `llm_client` mounts the ones httpx reads from the environment with the same socket options. `domyn run-headless` builds its agent with `stream: False`.
+
 There is **no** mock/fake provider in the package: tests define local mock providers as fixtures.
 
 Providers implement `BaseLLMProvider` interface with `async def generate(messages, **kwargs) -> LLMResponse`.

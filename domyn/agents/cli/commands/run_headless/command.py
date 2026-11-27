@@ -168,7 +168,7 @@ def run_headless_config(
         "instruction": "",
         "llm_provider": CLI_DEFAULT_PROVIDER_NAME,
         "planner_strategy": CLI_PLANNER,
-        "stream": True,
+        "stream": False,
         "tool_bundles": [CLI_DEFAULT_TOOL_BUNDLE_NAME],
     }
     if instructions:
