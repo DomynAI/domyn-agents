@@ -305,6 +305,67 @@ class TestRendering:
 
         assert clock.now <= banner_mod._ANIMATION_CEILING_S + 1.0
 
+    def test_frames_overwrite_in_place_without_blanking_a_row(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A row erased before it is rewritten can be painted empty: that was the
+        flicker. Frames overwrite in one synchronized block each, and the overlay
+        is cleared and the cursor shown at the end."""
+        monkeypatch.setattr(banner_mod, "time", _VirtualClock())
+        console, buffer = _console(400)
+
+        banner_mod._animate_art(console, (("a\nb", 0.02), ("c\nd", 0.04)))
+
+        output = buffer.getvalue()
+        assert "\x1b[2K" not in output
+        assert output.count(banner_mod._SYNC_BEGIN) == 3  # two frames, then the clear
+        assert output.count(banner_mod._SYNC_END) == 3
+        assert "\x1b[2A\r" in output
+        assert output.endswith("\x1b[2A\r\x1b[J" + banner_mod._SYNC_END + banner_mod._SHOW_CURSOR)
+
+    def test_a_short_frame_is_padded_to_the_art_height(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hand-edited archive with a shorter frame must not walk the cursor up
+        the wrong number of rows: the missing rows are cleared, not left showing
+        the frame before."""
+        monkeypatch.setattr(banner_mod, "time", _VirtualClock())
+        monkeypatch.setattr(banner_mod, "_skip_key_pressed", lambda: False)
+        console, buffer = _console(400)
+
+        banner_mod._animate_art(console, (("a\nb", 0.02), ("c", 0.02)))
+
+        assert "c\x1b[K\n\x1b[K\n" in buffer.getvalue()
+
+    def test_a_failing_frame_still_hands_the_terminal_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A crash mid-reveal must not leave the cursor hidden or the keys muted:
+        the shell it returns to would be unusable."""
+        restored: list[str] = []
+        monkeypatch.setattr(banner_mod, "_mute_keys", lambda: lambda: restored.append("done"))
+        monkeypatch.setattr(banner_mod, "_skip_key_pressed", lambda: False)
+        monkeypatch.setattr(banner_mod, "time", _VirtualClock())
+
+        painted: list[str] = []
+
+        def _paint_then_fail(console: object, frame: str) -> list[str]:
+            painted.append(frame)
+            if len(painted) == 2:
+                raise RuntimeError("frame failed")
+            return ["row"]
+
+        monkeypatch.setattr(banner_mod, "_paint_rows", _paint_then_fail)
+        console, buffer = _console(400)
+
+        with pytest.raises(RuntimeError, match="frame failed"):
+            banner_mod._animate_art(console, (("a", 0.02), ("b", 0.02)))
+
+        output = buffer.getvalue()
+        assert banner_mod._HIDE_CURSOR in output
+        assert output.endswith(banner_mod._SHOW_CURSOR)
+        assert restored == ["done"]
+
 
 class TestSkipKey:
     """The reveal is skippable: a keypress ends it early.
@@ -312,6 +373,17 @@ class TestSkipKey:
     The interesting cases are all the ways it must *not* skip: a pipe has nobody
     at it, and a keypress the user never made must not be invented.
     """
+
+    def test_keys_are_not_muted_without_a_terminal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A pipe has no echo to turn off and no fd to ask about."""
+        monkeypatch.setattr(banner_mod.sys, "stdin", io.StringIO(""))
+        assert banner_mod._mute_keys() is None
+
+    def test_nothing_to_restore_is_not_an_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Windows and pipes have nothing to mute, and the reveal must not care."""
+        monkeypatch.setattr(banner_mod, "_mute_keys", lambda: None)
+        with banner_mod._keys_not_echoed():
+            pass
 
     def test_skips_never_happen_on_a_pipe(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Redirected stdin has no human at it; the banner must play out."""

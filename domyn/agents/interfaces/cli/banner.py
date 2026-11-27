@@ -27,10 +27,12 @@ Three things gate it, each learned the hard way:
   carry no shape at all; ``NO_COLOR``, a pipe or ``TERM=dumb`` fall back to the
   wordmark rather than printing meaningless glyphs. Half-blocks also need UTF-8.
 
-The art animates in place, over a ``Live`` overlay, never row by row: printing 17
-rows progressively reads as the screen scrolling, which is the opposite of the
-intended effect. The wordmark fallback keeps its short row-by-row reveal — with
-four rows it reads as a reveal, not as scrolling.
+The art animates in place, never row by row: 17 rows printed progressively read as
+the screen scrolling, the opposite of the intended effect. Each frame is one write
+over the previous one — no ``Live``, which blanks a row before redrawing it and left
+the logo empty between frames — inside a synchronized-output block, on the frames'
+own schedule. The wordmark fallback keeps its short row-by-row reveal: with four
+rows it reads as a reveal, not as scrolling.
 """
 
 from __future__ import annotations
@@ -38,7 +40,8 @@ from __future__ import annotations
 import gzip
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -74,10 +77,18 @@ _REVEAL_BUDGET_S = 0.36
 # hand-edited archive cannot hold the session hostage before it starts.
 _ANIMATION_CEILING_S = 8.0
 
-# How often the skip-key reader wakes to check for a keypress while the reveal
-# plays. Each wake costs a tiny syscall, so this is deliberately coarse: 30 Hz
-# keeps the perceived delay under ~33 ms without hammering the terminal.
-_KEY_POLL_S = 1 / 30
+# How often the skip-key reader wakes during the reveal. Frames last 20 or 40 ms,
+# so a coarser wait holds a short frame for a whole poll and the cadence turns
+# uneven; a zero-timeout ``select`` is cheap enough at 200 Hz.
+_KEY_POLL_S = 1 / 200
+
+# Synchronized output (DEC 2026): the terminal holds what it is sent until the
+# frame is complete, then paints it at once. Terminals that do not know it ignore it.
+_SYNC_BEGIN = "\x1b[?2026h"
+_SYNC_END = "\x1b[?2026l"
+_HIDE_CURSOR = "\x1b[?25l"
+_SHOW_CURSOR = "\x1b[?25h"
+_ERASE_LINE_TAIL = "\x1b[K"
 
 _WORDMARK = (
     r"  ___   ___  __  __ __   __ _  _ ",
@@ -191,38 +202,120 @@ def _wait_for_skip(stop: Callable[[], bool]) -> bool:
     return False
 
 
-def _animate_art(console: Console, frames: tuple[tuple[str, float], ...]) -> None:
-    """Play the reveal over a transient overlay, at the frames' own cadence.
+def _mute_keys() -> Callable[[], None] | None:
+    """Turn off echo and line buffering on stdin; return the undo, or ``None``.
 
-    Transient so the frames leave nothing behind: the caller prints the final
-    frame afterwards, permanently, and that is what survives in the scrollback.
-
-    Each frame's sleep subtracts the time already spent rendering it. Without
-    that the render cost adds to the delay instead of being part of it, and the
-    animation runs slower than authored and unevenly from frame to frame.
-
-    A keypress during the reveal skips the rest: the transient overlay
-    closes immediately and the caller's static frame follows, so the user lands
-    on the finished logo without waiting out the cadence.
+    ``None`` when there is nothing to do or nothing could be done: Windows, a pipe.
     """
-    from rich.live import Live
+    if sys.platform == "win32":
+        return None
+    try:
+        import termios
 
-    deadline = time.perf_counter() + _ANIMATION_CEILING_S
+        fd = sys.stdin.fileno()
+        saved = termios.tcgetattr(fd)
+        quiet = termios.tcgetattr(fd)
+        quiet[3] &= ~(termios.ECHO | termios.ICANON)
+        termios.tcsetattr(fd, termios.TCSADRAIN, quiet)
+    except (ImportError, OSError, ValueError, AttributeError):
+        # No ``termios`` module, or no tty behind stdin: nothing to mute. Its own
+        # ``error`` is ``OSError``, and naming it here would break the case where
+        # the import itself failed.
+        return None
 
-    with Live(console=console, refresh_per_second=30, transient=True) as live:
-        for frame, seconds in frames:
-            started = time.perf_counter()
-            if started > deadline:
-                break
-            live.update(Text.from_ansi(frame))
-            frame_end = started + seconds
+    def restore() -> None:
+        with suppress(OSError, termios.error):
+            termios.tcsetattr(fd, termios.TCSADRAIN, saved)
 
-            # Default argument binds the value now, not the loop variable later.
-            def _frame_done(finish: float = frame_end) -> bool:
-                return time.perf_counter() >= finish
+    return restore
 
-            if _wait_for_skip(_frame_done):
-                break
+
+@contextmanager
+def _keys_not_echoed() -> Iterator[None]:
+    """Keep a keypress from being echoed or line-buffered while the reveal plays.
+
+    In the terminal's default mode a key is held until Enter, so skipping would
+    need a newline, and the typed character is drawn by the terminal itself, in
+    the middle of the animation. The Windows console reads keys unechoed already.
+    Always restored, and ``ISIG`` is left alone so Ctrl-C still works.
+    """
+    restore = _mute_keys()
+    try:
+        yield
+    finally:
+        if restore is not None:
+            restore()
+
+
+def _paint_rows(console: Console, frame: str) -> list[str]:
+    """The frame as the terminal will receive it, one string per row.
+
+    Rendered through the console so rich downgrades the 24-bit colours where the
+    terminal lacks them. Each row ends by clearing what is left of the previous
+    frame to its right, so a row is overwritten in place and never blanked first.
+    """
+    with console.capture() as captured:
+        console.print(Text.from_ansi(frame), highlight=False, no_wrap=True, crop=False, end="")
+    return [row + _ERASE_LINE_TAIL for row in captured.get().split("\n")]
+
+
+def _animate_art(console: Console, frames: tuple[tuple[str, float], ...]) -> None:
+    """Play the reveal in place, at the frames' own cadence, then clear it.
+
+    Nothing is left behind: the caller prints the final frame afterwards,
+    permanently, and that is what survives in the scrollback.
+
+    Frames are written straight to the terminal, not through ``Live``: ``Live``
+    erases every row (``ESC[2K``) and rewrites it on a timer of its own, so a
+    terminal painting between the two shows the logo blank, and its 30 Hz is out of
+    step with frames of 20 and 40 ms. Here a frame is one write over the previous
+    one, inside a synchronized-output block, made when it is due.
+
+    The schedule is absolute — a frame is due at the sum of the durations before it
+    — so render time comes out of the wait and a slow frame is caught up, not
+    shifted.
+
+    A keypress skips the rest: the overlay is cleared at once and the caller's static
+    frame follows, so the user lands on the finished logo without waiting out the
+    cadence.
+    """
+    out = console.file
+    rows = 0
+    started = time.perf_counter()
+    deadline = started + _ANIMATION_CEILING_S
+    due = started
+
+    try:
+        with _keys_not_echoed():
+            out.write(_HIDE_CURSOR)
+            for frame, seconds in frames:
+                now = time.perf_counter()
+                if now > deadline:
+                    break
+                painted = _paint_rows(console, frame)
+                if rows:
+                    # Same height every frame; guard anyway so a hand-edited
+                    # archive cannot move the cursor off the art.
+                    painted = (painted + [_ERASE_LINE_TAIL] * rows)[:rows]
+                    move_up = f"\x1b[{rows}A\r"
+                else:
+                    rows = len(painted)
+                    move_up = ""
+                out.write(f"{_SYNC_BEGIN}{move_up}{chr(10).join(painted)}\n{_SYNC_END}")
+                out.flush()
+
+                due += seconds
+
+                # Default argument binds the value now, not the loop variable later.
+                def _frame_done(finish: float = due) -> bool:
+                    return time.perf_counter() >= finish
+
+                if _wait_for_skip(_frame_done):
+                    break
+    finally:
+        clear = f"\x1b[{rows}A\r\x1b[J" if rows else ""
+        out.write(f"{_SYNC_BEGIN}{clear}{_SYNC_END}{_SHOW_CURSOR}")
+        out.flush()
 
 
 def _pick_art_width(console: Console, theme: Theme) -> int | None:
