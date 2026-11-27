@@ -1015,6 +1015,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             turn_context,
                             interaction_context.state,
                             record,
+                            rejected=True,
                         )
                         if left_out is not None:
                             yield left_out
@@ -1053,6 +1054,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             record,
                             window=stated or recovery.current_tokens // 2,
                             stated=stated is not None,
+                            rejected=True,
                         )
                         if left_out is None:
                             left_out = self.compactor.refuse_rejected(

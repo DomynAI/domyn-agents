@@ -273,13 +273,14 @@ class TestAnAssumedWindow:
         cw.raise_assumed_window(provider, 190_658)
 
         assert provider.context_window == 190_658
-        assert cw.window_assumed(provider)
+        assert cw.window_assumed(provider) and cw.window_taken(provider)
 
     def test_a_smaller_one_leaves_it(self) -> None:
         provider = _vllm()
         cw.assume_context_window(provider, 150_000)
         cw.raise_assumed_window(provider, 90_000)
         assert provider.context_window == 150_000
+        assert not cw.window_taken(provider)
 
     def test_a_declared_window_is_not_raised(self) -> None:
         provider = _vllm(context_window=150_000)
@@ -298,6 +299,34 @@ class TestAnAssumedWindow:
         again = _vllm()
         cw.assume_context_window(again, 150_000)
         assert again.context_window == 190_658
+        assert cw.window_taken(again)
+
+    def test_a_rejection_stating_none_leaves_it_untaken(self) -> None:
+        first = _vllm()
+        cw.assume_context_window(first, 150_000)
+        cw.raise_assumed_window(first, 190_658)
+        cw.doubt_assumed_window(first)
+
+        again = _vllm()
+        cw.assume_context_window(again, 150_000)
+        assert again.context_window == 190_658
+        assert cw.window_assumed(again) and not cw.window_taken(again)
+
+    def test_a_declared_window_is_not_doubted(self) -> None:
+        provider = _vllm(context_window=150_000)
+        cw.doubt_assumed_window(provider)
+        assert provider.context_window == 150_000
+        assert not cw.window_assumed(provider)
+
+    def test_a_larger_guess_than_what_was_taken_is_a_guess(self) -> None:
+        first = _vllm()
+        cw.assume_context_window(first, 150_000)
+        cw.raise_assumed_window(first, 190_658)
+
+        again = _vllm()
+        cw.assume_context_window(again, 300_000)
+        assert again.context_window == 300_000
+        assert not cw.window_taken(again)
 
     def test_another_provider_of_the_deployment_declaring_that_size_is_not_assumed(
         self,
@@ -312,9 +341,10 @@ class TestAnAssumedWindow:
     def test_a_window_the_endpoint_reports_is_not_assumed(self) -> None:
         provider = _vllm()
         cw.assume_context_window(provider, 150_000)
+        cw.raise_assumed_window(provider, 190_658)
         cw.forget_assumed_window(provider)
 
-        assert not cw.window_assumed(provider)
+        assert not cw.window_assumed(provider) and not cw.window_taken(provider)
 
 
 class TestHostedApisThatCannotBeAsked:

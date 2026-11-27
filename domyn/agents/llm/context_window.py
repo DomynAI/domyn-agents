@@ -85,9 +85,10 @@ any other source without ever raising one. A server later given a larger window 
 the old one here until this process restarts: compaction starts earlier than it needs
 to, but no request is refused."""
 
-_assumed: dict[tuple[str, str, str], int] = {}
+_assumed: dict[tuple[str, str, str], tuple[int, bool]] = {}
 """The window a host assumed for each provider class, endpoint and model that reports
-none (:func:`assume_context_window`), kept until the process exits.
+none (:func:`assume_context_window`), and whether the model took a request that large,
+kept until the process exits.
 
 Only ever raised, by a request the model took that was larger
 (:func:`raise_assumed_window`): the model taking it proves the window is at least that."""
@@ -195,9 +196,14 @@ def assume_context_window(provider: Any, window: int) -> None:
     """Give ``provider`` ``window`` as an assumption, for an endpoint that reports none: or
     the largest request its endpoint and model have taken, when that is larger."""
     key = deployment_key(provider)
+    taken = False
     if key is not None:
-        window = _assumed[key] = max(window, _assumed.get(key, 0))
+        known, taken = _assumed.get(key, (0, False))
+        taken = taken and known >= window
+        window = max(window, known)
+        _assumed[key] = (window, taken)
     provider.context_window = provider._assumed_window = window
+    provider._window_taken = taken
 
 
 def forget_assumed_window(provider: Any) -> None:
@@ -207,6 +213,7 @@ def forget_assumed_window(provider: Any) -> None:
     if key is not None:
         _assumed.pop(key, None)
     provider._assumed_window = None
+    provider._window_taken = False
 
 
 def window_assumed(provider: Any) -> bool:
@@ -227,8 +234,26 @@ def raise_assumed_window(provider: Any, tokens: int) -> None:
     )
     key = deployment_key(provider)
     if key is not None:
-        _assumed[key] = tokens
+        _assumed[key] = (tokens, True)
     provider.context_window = provider._assumed_window = tokens
+    provider._window_taken = True
+
+
+def doubt_assumed_window(provider: Any) -> None:
+    """A rejection stating no window: the assumed one, taken or not, is what compacts from
+    now on, as no request larger than it is known to fit."""
+    if not window_assumed(provider):
+        return
+    key = deployment_key(provider)
+    if key is not None:
+        _assumed[key] = (provider.context_window, False)
+    provider._window_taken = False
+
+
+def window_taken(provider: Any) -> bool:
+    """Whether ``provider``'s window is assumed and the model took a request that large:
+    then it is no more than a size the window is not below."""
+    return window_assumed(provider) and getattr(provider, "_window_taken", False) is True
 
 
 def deployment_key(provider: Any) -> tuple[str, str, str] | None:

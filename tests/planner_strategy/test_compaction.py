@@ -1189,6 +1189,38 @@ class TestAMessageNoWindowHolds:
         assert not compactor.awaits_rejection(self._pasted(300), agent, None, None)
         assert not compactor.awaits_rejection(messages, _Agent(5_000), None, None)
 
+    def test_an_assumed_window_the_model_took_compacts_nothing(self) -> None:
+        """Only a size the window is not below: compacted against, a paste the model had
+        just taken was summarized away on the next message."""
+        from domyn.agents.llm.context_window import assume_context_window, raise_assumed_window
+
+        provider = VLLMProvider(model_name="m", url="http://llm.test/v1/chat/completions")
+        assume_context_window(provider, 5_000)
+        agent = SimpleNamespace(name="Assistant", llm_provider=provider)
+        raise_assumed_window(provider, 6_000)
+
+        assert _active().awaits_rejection(self._pasted(300), agent, None, None)
+        usage = _active().usage_metadata(self._pasted(300), None, agent)[CONTEXT_USAGE_METADATA_KEY]
+        assert usage["threshold_tokens"] is None, "a threshold never reached"
+        assert usage["strategy"] is not None
+
+    def test_a_rejection_stating_no_window_makes_it_compact_again(self) -> None:
+        """Taken, it would wait for the next rejection with every request that grew past
+        the real window."""
+        from domyn.agents.llm.context_window import assume_context_window, raise_assumed_window
+
+        provider = VLLMProvider(model_name="m", url="http://llm.test/v1/chat/completions")
+        assume_context_window(provider, 5_000)
+        agent = SimpleNamespace(name="Assistant", llm_provider=provider)
+        raise_assumed_window(provider, 6_000)
+        compactor = _active()
+        compactor.overflow_plan(self._pasted(300), agent, error=Exception("too long"), key="A")
+
+        assert provider.context_window == 6_000
+        assert not compactor.awaits_rejection(self._pasted(300), agent, None, None)
+        usage = compactor.usage_metadata(self._pasted(300), None, agent)[CONTEXT_USAGE_METADATA_KEY]
+        assert usage["threshold_tokens"] is not None
+
     def test_against_a_window_a_rejection_stated_the_estimate_is_enough(self) -> None:
         found = _active().oversized(self._pasted(16_500), _Agent(None), window=5_000)
         assert list(found) == ["paste"]

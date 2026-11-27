@@ -468,12 +468,17 @@ class TestWhenTheProviderRejectsTheRequestAsTooLong:
         )
         if assumed:
             assume_context_window(provider, 100_000)
+        events: list[BaseEvent] = []
+        record = repl._record_usage
+        repl._record_usage = lambda event: (events.append(event), record(event))
         await repl.run()
         out = " ".join(buffer.getvalue().split())
 
         assert provider.calls == 4, "a summary was paid for"
         assert "compacting context" not in out
         assert "it was not sent" in out
+        refusals = [e for e in events if e.error_code == "RequestTooLong"]
+        assert refusals and all(e.metadata.get("rejected") for e in refusals)
 
     @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
     @pytest.mark.asyncio
@@ -775,6 +780,81 @@ class TestTheShareShownIsOfWhatTheModelTook:
         assert repl._state.last_usage.total_tokens == 1_000
         repl._record_usage(event(ExecutionEventType.LLM_END, "second"))
         assert repl._state.last_usage.total_tokens == 2_000
+
+
+class TestAnAssumedWindowTheModelWentPast:
+    """A request the model took proves the window is at least that large, not that it is
+    that large: nothing is compacted against it before a rejection says where it is."""
+
+    @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
+    @pytest.mark.asyncio
+    async def test_the_paste_it_took_is_in_the_next_request(self, planner_name: str) -> None:
+        from domyn.agents.llm import LLMResponse
+        from domyn.agents.llm.context_window import assume_context_window
+        from domyn.agents.planner_strategy import (
+            ToolUsePlannerStrategy,
+            ToolUseWithThoughtPlannerStrategy,
+        )
+        from tests.cli.test_repl_session import ScriptedProvider, _repl
+
+        class Counting(ScriptedProvider):
+            seen: list[Any]
+
+            async def generate(self, messages: Any, **kwargs: Any) -> Any:
+                self.seen.append(list(messages))
+                size = sum(len(str(m.content)) for m in messages)
+                return LLMResponse(
+                    content=self.answer,
+                    generated_tokens=50,
+                    execution_time=0.0,
+                    usage={"prompt_tokens": size // 3, "completion_tokens": 50},
+                )
+
+        paste = "DOCSTART " + "lorem ipsum dolor " * 5_000  # ~30k estimated
+        repl, _ = _repl(paste, "what is in the doc?")
+        planners = {
+            "tool_use": ToolUsePlannerStrategy,
+            "tool_use_thought": ToolUseWithThoughtPlannerStrategy,
+        }
+        repl._agent.planner = planners[planner_name]()
+        provider = Counting(name="main", context_window=20_000, seen=[])
+        assume_context_window(provider, 20_000)
+        repl._agent.llm_provider = provider
+        await repl.run()
+
+        assert len(provider.seen) == 2, "a summary was paid for"
+        assert all("DOCSTART" in str([m.content for m in seen]) for seen in provider.seen)
+
+    @pytest.mark.asyncio
+    async def test_no_compaction_is_announced_against_it(self) -> None:
+        """After a /clear in the same process, below the window: no threshold to show."""
+        from domyn.agents.llm import LLMResponse
+        from domyn.agents.llm.context_window import assume_context_window
+        from tests.cli.test_repl_session import ScriptedProvider, _repl
+
+        class Counting(ScriptedProvider):
+            counts: list[int]
+
+            async def generate(self, messages: Any, **kwargs: Any) -> Any:
+                return LLMResponse(
+                    content=self.answer,
+                    generated_tokens=1,
+                    execution_time=0.0,
+                    usage={"prompt_tokens": self.counts.pop(0)},
+                )
+
+        # The first request raises the window to 100k; the second fills 80% of it.
+        prose = "long " * 15_000
+        repl, buffer = _repl(prose, "/clear", prose, "/context")
+        provider = Counting(name="main", context_window=20_000, counts=[100_000, 80_000])
+        assume_context_window(provider, 20_000)
+        repl._agent.llm_provider = provider
+        await repl.run()
+
+        out = buffer.getvalue()
+        assert "context used: 80%" in out
+        assert "auto-compact" not in out
+        assert "when the model rejects a request" in out
 
 
 class TestSayingWhenPruningIsNoLongerEnough:

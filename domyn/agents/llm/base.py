@@ -553,6 +553,8 @@ class BaseLLMProvider(BaseModel, ABC):
     _assumed_window: int | None = PrivateAttr(default=None)
     """The window a host assumed for it (`assume_context_window`): assumed while
     ``context_window`` is still that."""
+    _window_taken: bool = PrivateAttr(default=False)
+    """The model took a request as large as the assumed window (`raise_assumed_window`)."""
 
     max_reply_keys: ClassVar[tuple[str, ...]] = ("max_tokens", "max_completion_tokens")
     """The request keys that carry the reply's ceiling (``max_reply_tokens``): the

@@ -149,6 +149,14 @@ def render(
                 style=meta,
                 highlight=False,
             )
+        elif usage.strategy:
+            # An assumed window the model went past: only a rejection compacts.
+            console.print(
+                f"   {'until compaction':<22} {'—':>7}   "
+                f"when the model rejects a request ({usage.strategy})",
+                style=meta,
+                highlight=False,
+            )
         else:
             # The field the user came looking for. Staying silent would leave
             # them wondering whether the number is missing or the compaction is:

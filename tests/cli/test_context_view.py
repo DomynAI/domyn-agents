@@ -203,6 +203,12 @@ class TestDoNotPromiseACompactionThatWillNotHappen:
         assert "no compaction configured" in out
         assert "until compaction" in out  # the field is there, the promise is not
 
+    def test_with_a_strategy_and_no_threshold_a_rejection_compacts(self, theme: Theme) -> None:
+        """An assumed window the model went past: no threshold, a rejection decides."""
+        out = _render(theme, _usage(messages=20_000, window=128_000, strategy="two_phase"))
+        assert "when the model rejects a request (two_phase)" in out
+        assert "no compaction configured" not in out
+
     def test_with_a_strategy_it_shows_distance_and_name(self, theme: Theme) -> None:
         out = _render(
             theme,

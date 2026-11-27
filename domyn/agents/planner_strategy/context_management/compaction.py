@@ -32,10 +32,12 @@ from domyn.agents.llm.base import (
 )
 from domyn.agents.llm.context_window import (
     deployment_key,
+    doubt_assumed_window,
     forget_assumed_window,
     raise_assumed_window,
     remember_stated_window,
     window_assumed,
+    window_taken,
 )
 from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.context_management.budget import (
@@ -621,10 +623,14 @@ def _adopt_window(agent: Any, window: int | None) -> None:
     deployment (``remember_stated_window``), so a provider built again for the next
     turn starts from it. Only ever lowered — a declared window larger than the real
     one is the mistake the rejection just proved; a smaller one is a choice. An assumed
-    one is no choice, and is replaced whatever its size.
+    one is no choice, and is replaced whatever its size; a rejection that states none
+    makes it compact again (``doubt_assumed_window``).
     """
     provider = getattr(agent, "llm_provider", None)
-    if provider is None or not window or window <= 0:
+    if provider is None:
+        return
+    if not window or window <= 0:
+        doubt_assumed_window(provider)
         return
     remember_stated_window(provider, window)
     declared = _context_window(agent)
@@ -1402,12 +1408,15 @@ class Compactor(BaseModel):
         Computed like ``assess`` computes its total, so the usage a front-end
         shows and the number the threshold is checked against are one number.
         Threshold and strategy name only when a compaction will actually happen:
-        a threshold announced and never reached is misinformation.
+        a threshold announced and never reached is misinformation. Against an assumed
+        window the model went past only a rejection compacts (`awaits_rejection`), so
+        the strategy is named without a threshold.
         """
         window = _context_window(agent)
         memory = [m for m in (turn_context or []) if getattr(m, "part", None) == "memory"]
         threshold = None
-        if self.active and window is not None:
+        taken = window_taken(getattr(agent, "llm_provider", None))
+        if self.active and window is not None and not taken:
             reserve = _reserve(self.policy, agent)
             floor = _threshold_floor(self.policy, agent, window, reserve)
             threshold = _threshold(window, reserve, floor)
@@ -1489,9 +1498,13 @@ class Compactor(BaseModel):
         tool_defs: list[dict[str, Any]] | None,
         turn_context: list[LLMMessage] | None,
     ) -> bool:
-        """A request a declared window would refuse, under an assumed one: nothing is
-        compacted for it before a rejection says whether the model holds it."""
-        return window_assumed(getattr(agent, "llm_provider", None)) and bool(
+        """Under an assumed window, nothing is compacted before a rejection says where
+        the window is: for a request a declared window of its size would refuse, or once
+        the model took a request that large, which proves only that it holds that much."""
+        provider = getattr(agent, "llm_provider", None)
+        if not window_assumed(provider):
+            return False
+        return window_taken(provider) or bool(
             self.oversized(messages, agent, tool_defs, turn_context, assumed=True)
         )
 
@@ -1505,19 +1518,20 @@ class Compactor(BaseModel):
         key: str,
         window: int | None = None,
         stated: bool = True,
+        rejected: bool = False,
     ) -> tuple[list[LLMMessage], BaseEvent | None]:
         """Leave out the ``oversized`` requests and say so: ``messages`` without them,
         and the event to yield. A ``REQUEST_TOO_LONG`` refusal ends the turn (the
         current request is one of them); a ``CONTEXT_COMPACTED`` lets it go on.
         ``window``, when given, is one a rejection gave, and ``stated`` is false when it
-        is a stand-in, which the refusal then does not quote."""
+        is a stand-in, which the refusal then does not quote; ``rejected`` says a
+        rejection came first."""
         oversized = self.oversized(messages, agent, tool_defs, turn_context, window, stated)
         if not oversized:
             return messages, None
         messages = self.leave_out(messages, oversized, state, key)
         current = current_request_id(messages)
         if current in oversized:
-            rejected = window is not None
             window = window or _context_window(agent)
             return messages, self.message_refusal(
                 oversized[current], window if stated else None, agent.name, rejected
