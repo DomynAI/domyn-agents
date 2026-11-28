@@ -69,15 +69,21 @@ class TestTheIndicatorSpeaks:
         assert attention[1] == "meta"
         assert serious[1] == "warning"
 
-    def test_with_a_policy_it_shows_the_distance_not_the_share(self, theme: Theme) -> None:
-        """When a threshold exists, the useful thing is how far it is."""
+    def test_it_reads_the_share_context_shows(self, theme: Theme) -> None:
+        """Past the window too (a declared window smaller than the model's): one number,
+        not one capped and one not."""
+        usage = _usage(messages=130_000, window=100_000)
+        assert context_view.indicator(usage) == ("context used: 130%", "warning")
+        assert "130% used" in _render(theme, usage)
+
+    def test_with_a_policy_it_shows_where_compaction_runs(self, theme: Theme) -> None:
+        """When a threshold exists, it is shown in the same unit as the share."""
         shown = context_view.indicator(
             _usage(messages=75_000, window=100_000, threshold_tokens=84_000, strategy="prune_only")
         )
         assert shown is not None
         text, _ = shown
-        assert "compaction" in text
-        assert "9k" in text  # 84_000 - 75_000
+        assert text == "context used: 75% (auto-compact at 84%)"
 
     def test_tool_definitions_count_towards_the_share(self, theme: Theme) -> None:
         """They are not an extra: they occupy the window like everything else."""
@@ -209,11 +215,18 @@ class TestDoNotPromiseACompactionThatWillNotHappen:
 
     def test_the_indicator_promises_nothing_without_a_strategy(self, theme: Theme) -> None:
         """The share remains — that is true, and it matters that the window will
-        run out — but no distance to an event that will not arrive."""
+        run out — but no threshold that will not fire."""
         shown = context_view.indicator(_usage(messages=100_000, window=128_000))
         assert shown is not None
-        assert "compaction" not in shown[0]
-        assert "78%" in shown[0]
+        assert shown[0] == "context used: 78%"
+
+    def test_past_the_threshold_it_promises_no_compaction(self, theme: Theme) -> None:
+        """Compaction already ran: announcing it again would promise one more."""
+        shown = context_view.indicator(
+            _usage(messages=90_000, window=100_000, threshold_tokens=84_000, strategy="prune_only")
+        )
+        assert shown is not None
+        assert shown[0] == "context used: 90%"
 
     def test_the_indicator_only_promises_with_a_strategy(self, theme: Theme) -> None:
         shown = context_view.indicator(
@@ -221,7 +234,7 @@ class TestDoNotPromiseACompactionThatWillNotHappen:
                 messages=100_000, window=128_000, threshold_tokens=111_616, strategy="prune_only"
             )
         )
-        assert shown is not None and "compaction in" in shown[0]
+        assert shown is not None and "auto-compact at" in shown[0]
 
     @pytest.mark.asyncio
     async def test_from_the_planner_the_default_is_active(self) -> None:

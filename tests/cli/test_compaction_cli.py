@@ -339,6 +339,7 @@ class TestSayingWhenPruningIsNoLongerEnough:
         )
         out = buffer.getvalue()
         assert "still over the limit" in out
+        assert "/clear starts a new conversation" in out
         assert "189.3k" in out, "the numbers must still be there"
 
     def test_a_sufficient_compaction_carries_no_warning(self) -> None:
@@ -384,6 +385,23 @@ class TestSayingWhenPruningIsNoLongerEnough:
         assert "nothing to compact" in out
         assert "still over the limit" in out
         assert out.index("nothing to compact") < out.index("still over the limit")
+
+    def test_a_message_alone_over_the_limit_is_not_sent_to_clear(self) -> None:
+        """A new conversation would not help a message that alone is over the limit."""
+        renderer, buffer = _renderer()
+        renderer.begin_turn()
+        renderer.render(
+            _event(
+                ExecutionEventType.CONTEXT_COMPACTED,
+                changed=False,
+                sufficient=False,
+                threshold_tokens=24_960,
+                request_tokens=34_800,
+            )
+        )
+        out = " ".join(buffer.getvalue().split())
+        assert "this message alone" in out
+        assert "/clear" not in out
 
 
 class TestMeasuringFromTheProvidersCountInARealSession:

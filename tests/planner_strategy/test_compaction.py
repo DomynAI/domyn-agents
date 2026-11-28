@@ -1080,3 +1080,43 @@ class TestTheReserveAfterTheShare:
         agent = self._agent(context_window=262_144)
         _adopt_window(agent, 100_000)
         assert agent.llm_provider.max_reply_tokens == 50_000
+
+
+class TestALargeOlderRequestCanBeSummarized:
+    """Kept whole in the head or in the tail, an older paste was out of every phase's
+    reach, and the conversation stayed over the limit for good."""
+
+    def test_it_is_not_pulled_into_the_tail(self) -> None:
+        messages = [
+            _msg("system", "sys"),
+            _msg("user", "hello"),
+            _msg("assistant", "hi"),
+            _msg("user", _long(30_000)),
+            _msg("assistant", "read it"),
+            _msg("user", "and now?"),
+        ]
+        split = TokenBudgetSplitter().split(
+            messages,
+            policy=CompactionPolicy(keep_recent_tokens=1_000),
+            estimator=HeuristicEstimator(),
+        )
+        assert split.tail == messages[4:]
+        assert messages[3] in split.middle
+
+    def test_the_last_message_is_kept_whatever_its_size(self) -> None:
+        messages = [_msg("system", "sys"), _msg("user", "hello"), _msg("user", _long(30_000))]
+        split = TokenBudgetSplitter().split(
+            messages,
+            policy=CompactionPolicy(keep_recent_tokens=1_000),
+            estimator=HeuristicEstimator(),
+        )
+        assert split.tail == messages[2:]
+
+    def test_a_large_first_message_is_not_protected(self) -> None:
+        messages = [_msg("system", "sys"), _msg("user", _long(30_000)), _msg("user", "and?")]
+        split = TokenBudgetSplitter().split(
+            messages,
+            policy=CompactionPolicy(keep_recent_tokens=1_000, protect_first_n=1),
+            estimator=HeuristicEstimator(),
+        )
+        assert split.head == messages[:1]

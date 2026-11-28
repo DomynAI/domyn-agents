@@ -48,6 +48,11 @@ than tidiness: `context_visibility` means two agents can see different slices of
 the same history, so "what has been dropped" is not a property they share.
 """
 
+_DECLINED_KEY = "declined_summary"
+"""The event ids of the last span whose summary was no shorter than the text, per
+agent (``compaction_key``), in ``InteractionContext.state``: every later request
+still over the threshold would pay for the same summary again."""
+
 _ANCHORS_KEY = "context_anchors"
 """Where the provider's count of the last request lives, per agent, in
 ``InteractionContext.state``: ``{"reported", "estimated", "generation", "deployment"}``.
@@ -102,7 +107,7 @@ def forget_copy(state: dict[str, Any] | None, agent_name: str, interaction_id: s
         return False
     key = f"{agent_name}{_COPY_MARK}{interaction_id}"
     dropped = False
-    for table in (state.get(_RECORDS_KEY), state.get(_ANCHORS_KEY)):
+    for table in (state.get(_RECORDS_KEY), state.get(_ANCHORS_KEY), state.get(_DECLINED_KEY)):
         if table and key in table:
             del table[key]
             dropped = True
@@ -638,24 +643,34 @@ class TokenBudgetSplitter(BaseModel):
         if not messages:
             return Split([], [], [])
 
-        head_size = self._head_size(messages, policy)
+        if keep_recent_tokens is None:
+            keep_recent_tokens = policy.keep_recent_tokens
+        head_size = self._head_size(messages, policy, estimator, keep_recent_tokens)
         head = messages[:head_size]
         rest = messages[head_size:]
         if not rest:
             return Split(head, [], [])
 
-        if keep_recent_tokens is None:
-            keep_recent_tokens = policy.keep_recent_tokens
         cut = self._cut_point(rest, estimator=estimator, keep_recent_tokens=keep_recent_tokens)
         return Split(head, rest[:cut], rest[cut:])
 
     # --- internals --------------------------------------------------------
 
     @staticmethod
-    def _head_size(messages: list[LLMMessage], policy: CompactionPolicy) -> int:
-        """The system prompt plus the first ``protect_first_n``."""
+    def _head_size(
+        messages: list[LLMMessage],
+        policy: CompactionPolicy,
+        estimator: TokenEstimator,
+        keep_recent_tokens: int,
+    ) -> int:
+        """The system prompt plus the first ``protect_first_n``, up to one larger than the
+        tail: a first message that size is no framing, and is left to the summary."""
         size = 1 if messages and messages[0].role == "system" else 0
-        return min(len(messages), size + policy.protect_first_n)
+        for message in messages[size : size + policy.protect_first_n]:
+            if estimator.estimate_messages([message]) > keep_recent_tokens:
+                break
+            size += 1
+        return size
 
     def _cut_point(
         self,
@@ -671,6 +686,10 @@ class TokenBudgetSplitter(BaseModel):
         by stretching the tail back to it. That stretch put every output of a
         long turn in the tail, and compaction found nothing to do exactly when
         one turn had filled the window.
+
+        Only the last message may be a request larger than the whole tail: an older one
+        that size (a pasted document) kept here could never be summarized, and every
+        later request carried it whole.
         """
         spent = 0
         cut = len(rest)
@@ -678,7 +697,10 @@ class TokenBudgetSplitter(BaseModel):
             # Checked before consuming: the message that crosses the budget is kept.
             if spent > keep_recent_tokens:
                 break
-            spent += estimator.estimate_messages([rest[index]])
+            size = estimator.estimate_messages([rest[index]])
+            if index < len(rest) - 1 and size > keep_recent_tokens and _is_request(rest[index]):
+                break
+            spent += size
             cut = index
         return self._retreat_off_tool_boundary(rest, cut)
 
@@ -1022,8 +1044,9 @@ class Compactor(BaseModel):
         messages: list[LLMMessage],
         plan: CompactionPlan,
         state: dict[str, Any] | None = None,
+        key: str | None = None,
     ) -> CompactionOutcome:
-        """Apply the strategy. Never raises.
+        """Apply the strategy, for ``key``'s record (``compaction_key``). Never raises.
 
         A failure means "do not compress": the oversized request goes out anyway
         and the provider will reject it with a readable error, which is a smaller
@@ -1036,8 +1059,9 @@ class Compactor(BaseModel):
                 messages,
                 budget=plan.budget,
                 policy=self.policy,
-                state=state or {},
+                state=state if state is not None else {},
                 llm_provider=plan.llm_provider,
+                key=key,
             )
         except Exception as exc:
             get_logger().warning(f"compaction failed, sending uncompacted: {type(exc).__name__}")
@@ -1206,7 +1230,7 @@ class Compactor(BaseModel):
         ``key``'s (``compaction_key``), ``author``'s when not given."""
         key = key or author
         before = plan.current_tokens
-        outcome = await self.apply(messages, plan, state)
+        outcome = await self.apply(messages, plan, state, key)
         after = (
             plan.budget.tokens_for(outcome.messages)
             if plan.budget is not None
@@ -1266,9 +1290,19 @@ class Compactor(BaseModel):
                 # summarizing, or by starting a new conversation.
                 "sufficient": sufficient,
                 "threshold_tokens": threshold,
+                "request_tokens": self._request_tokens(outcome.messages, plan.budget),
             },
         )
         return outcome.messages, done
+
+    def _request_tokens(self, messages: list[LLMMessage], budget: Budget | None) -> int | None:
+        """The current request with what every request carries, estimated: over the
+        threshold, no compaction can get under it."""
+        requests = _last_requests(messages, 1)
+        if budget is None or not requests:
+            return None
+        system = [m for m in messages if m.role == "system"]
+        return int(self.estimator.estimate_messages(system + requests)) + budget.fixed_tokens
 
     def usage_metadata(
         self,
@@ -1747,6 +1781,13 @@ class TwoPhaseCompaction(CompactionStrategy):
             note="context compacted, but the summary failed",
             pruned_event_ids=pruned_ids,
         )
+        declined = phase_one.model_copy(
+            update={"note": "context compacted: the summary was no shorter than the text"}
+        )
+        declined_spans = state.setdefault(_DECLINED_KEY, {})
+        key = kwargs.get("key") or ""
+        if declined_spans.get(key) == event_ids:
+            return declined
         try:
             summary = await self.summarizer.summarize(pruned_middle, llm_provider=provider)
         except Exception as exc:
@@ -1758,14 +1799,22 @@ class TwoPhaseCompaction(CompactionStrategy):
             get_logger().debug(f"summarization failure detail: {exc}")
             return phase_one
 
+        # Built with the very function `replay` uses, so this request and every
+        # later re-render of it agree by construction. Dropping the middle
+        # wholesale instead looked equivalent and was not: an event rendering
+        # on both sides of the cut is excluded from the record, so replay kept
+        # its messages while this path removed them — and if one of those was
+        # half of a tool-call pair, only the immediate request was malformed.
+        summarized = _restore_summary(after_pruning, summary, set(event_ids))
+        if budget.estimator.estimate_messages(summarized) >= budget.estimator.estimate_messages(
+            after_pruning
+        ):
+            # A one-line greeting came back as a longer paragraph: kept, it grew the context.
+            declined_spans[key] = event_ids
+            return declined
+
         return CompactionOutcome(
-            # Built with the very function `replay` uses, so this request and every
-            # later re-render of it agree by construction. Dropping the middle
-            # wholesale instead looked equivalent and was not: an event rendering
-            # on both sides of the cut is excluded from the record, so replay kept
-            # its messages while this path removed them — and if one of those was
-            # half of a tool-call pair, only the immediate request was malformed.
-            messages=_restore_summary(after_pruning, summary, set(event_ids)),
+            messages=summarized,
             changed=True,
             note=f"context compacted: {len(event_ids)} exchanges summarized",
             pruned_event_ids=pruned_ids,
@@ -1832,14 +1881,16 @@ def _last_requests(messages: list[LLMMessage], count: int) -> list[LLMMessage]:
     a summary standing in for older history."""
     if count <= 0:
         return []
-    requests = [
-        message
-        for message in messages
-        if message.role == "user"
+    return [message for message in messages if _is_request(message)][-count:]
+
+
+def _is_request(message: LLMMessage) -> bool:
+    """A user message that asks something: not a tool result, not a summary."""
+    return (
+        message.role == "user"
         and not _is_tool_result(message)
         and not (isinstance(message.content, str) and message.content.startswith(SUMMARY_MARKER))
-    ]
-    return requests[-count:]
+    )
 
 
 def _summarizable_span(
