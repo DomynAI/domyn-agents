@@ -59,9 +59,11 @@ from domyn.agents.llm.base import (
     add_token_usage,
     context_limit_from_error,
     is_context_overflow,
+    is_rejected_request,
     is_transient,
     token_usage_metadata,
 )
+from domyn.agents.llm.context_window import doubt_assumed_window
 from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.base import BasePlannerStrategy
 from domyn.agents.planner_strategy.context_injection import (
@@ -752,7 +754,9 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 state=interaction_context.state,
                 key=record,
             )
-            if compaction_plan.needed:
+            if compaction_plan.needed and not self.compactor.awaits_rejection(
+                messages, agent, tool_defs, turn_context
+            ):
                 yield self.compactor.start_event(compaction_plan, agent.name)
                 messages, compaction_done = await self.compactor.run(
                     messages, compaction_plan, interaction_context.state, agent.name, record
@@ -772,6 +776,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 interaction_context.state,
                 record,
                 agent.name,
+                getattr(agent, "llm_provider", None),
             )
             if refusal is not None:
                 yield refusal
@@ -1066,6 +1071,10 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             break
                         iteration -= 1
                         continue
+                    if is_rejected_request(e):
+                        # Maybe too long in words we do not read: under a window the
+                        # model went past, the next turn compacts at the threshold again.
+                        doubt_assumed_window(getattr(agent, "llm_provider", None))
                     logger.error(f"LLM generation failed: {type(e).__name__}")
                     logger.debug(
                         f"LLM generation failed: {e}",
@@ -1084,12 +1093,21 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
 
             # What the provider counted for this request: the base the next one is
             # measured from (see `Compactor.observe`).
-            self.compactor.observe(
+            counted = self.compactor.observe(
                 getattr(response, "usage", None),
                 usage_metadata,
                 interaction_context.state,
                 record,
                 getattr(agent, "llm_provider", None),
+            )
+            # The request measured again, now that the count is its correction: what a
+            # front-end shows is the size the model took, against the window after it.
+            measured = (
+                self.compactor.usage_metadata(
+                    messages, tool_defs, agent, interaction_context.state, turn_context, key=record
+                )
+                if counted
+                else {}
             )
 
             # With thought, reasoning is normally carried by the action it produced,
@@ -1109,7 +1127,7 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                 author=agent.name,
                 content=[Part(text="LLM response received", thought=final_thought)],
                 is_partial=False,
-                metadata=token_usage_metadata(token_usage),
+                metadata=token_usage_metadata(token_usage) | measured,
             )
 
             if gave_up_on_malformed_json:

@@ -24,8 +24,21 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, ConfigDict, Field
 
 from domyn.agents.core import METADATA_TOOL_BATCH, BaseEvent, ExecutionEventType, Part
-from domyn.agents.llm.base import LLMMessage, context_limit_from_error, reported_prompt_tokens
-from domyn.agents.llm.context_window import deployment_key, remember_stated_window
+from domyn.agents.llm.base import (
+    LLMMessage,
+    TokenUsage,
+    context_limit_from_error,
+    reported_prompt_tokens,
+)
+from domyn.agents.llm.context_window import (
+    deployment_key,
+    doubt_assumed_window,
+    forget_assumed_window,
+    raise_assumed_window,
+    remember_stated_window,
+    window_assumed,
+    window_taken,
+)
 from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.context_management.budget import (
     CONTEXT_USAGE_METADATA_KEY,
@@ -609,14 +622,21 @@ def _adopt_window(agent: Any, window: int | None) -> None:
     deployment, and every conversation on it benefits — and remembered for that
     deployment (``remember_stated_window``), so a provider built again for the next
     turn starts from it. Only ever lowered — a declared window larger than the real
-    one is the mistake the rejection just proved; a smaller one is a choice.
+    one is the mistake the rejection just proved; a smaller one is a choice. An assumed
+    one is no choice, and is replaced whatever its size; a rejection that states none
+    makes it compact again (``doubt_assumed_window``).
     """
     provider = getattr(agent, "llm_provider", None)
-    if provider is None or not window or window <= 0:
+    if provider is None:
+        return
+    if not window or window <= 0:
+        doubt_assumed_window(provider)
         return
     remember_stated_window(provider, window)
     declared = _context_window(agent)
-    if declared is not None and declared <= window:
+    if window_assumed(provider):
+        forget_assumed_window(provider)
+    elif declared is not None and declared <= window:
         return
     try:
         provider.context_window = window
@@ -1000,8 +1020,9 @@ class Compactor(BaseModel):
         state: dict[str, Any] | None,
         agent_name: str,
         provider: Any = None,
-    ) -> None:
-        """Remember what the provider counted for the request just answered.
+    ) -> bool:
+        """Remember what the provider counted for the request just answered, and say
+        whether it was kept.
 
         ``measured`` is the ``usage_metadata`` that went out with that request. From
         then on the size of a request is the provider's count of the last one plus
@@ -1013,6 +1034,9 @@ class Compactor(BaseModel):
 
         Not the calibration this replaces: that multiplied every estimate by a
         ratio learned on other text, so prose made dense text look small.
+
+        The model took the request and answered it, so a window assumed for ``provider``
+        smaller than the two counts together is raised to them (`raise_assumed_window`).
         """
         reported = reported_prompt_tokens(usage)
         raw = (measured or {}).get(CONTEXT_USAGE_METADATA_KEY) or {}
@@ -1020,20 +1044,23 @@ class Compactor(BaseModel):
             raw.get("tool_definition_tokens") or 0
         )
         if state is None or reported is None or estimated <= 0:
-            return
+            return False
         low, high = _ANCHOR_RATIO
         if not low <= reported / estimated <= high:
             get_logger().warning(
                 f"provider token count ignored for {agent_name}: {reported} reported "
                 f"against {estimated} estimated"
             )
-            return
+            return False
+        answer = TokenUsage.from_provider(usage)
+        raise_assumed_window(provider, reported + ((answer and answer.output_tokens) or 0))
         state.setdefault(_ANCHORS_KEY, {})[agent_name] = {
             "reported": reported,
             "estimated": estimated,
             "generation": read_record(state, agent_name).generation,
             "deployment": _deployment(provider),
         }
+        return True
 
     def _anchor(
         self, state: dict[str, Any] | None, agent: Any, key: str | None = None
@@ -1381,12 +1408,15 @@ class Compactor(BaseModel):
         Computed like ``assess`` computes its total, so the usage a front-end
         shows and the number the threshold is checked against are one number.
         Threshold and strategy name only when a compaction will actually happen:
-        a threshold announced and never reached is misinformation.
+        a threshold announced and never reached is misinformation. Against an assumed
+        window the model went past only a rejection compacts (`awaits_rejection`), so
+        the strategy is named without a threshold.
         """
         window = _context_window(agent)
         memory = [m for m in (turn_context or []) if getattr(m, "part", None) == "memory"]
         threshold = None
-        if self.active and window is not None:
+        taken = window_taken(getattr(agent, "llm_provider", None))
+        if self.active and window is not None and not taken:
             reserve = _reserve(self.policy, agent)
             floor = _threshold_floor(self.policy, agent, window, reserve)
             threshold = _threshold(window, reserve, floor)
@@ -1429,13 +1459,15 @@ class Compactor(BaseModel):
         turn_context: list[LLMMessage] | None = None,
         window: int | None = None,
         stated: bool = True,
+        assumed: bool = False,
     ) -> dict[str, int]:
         """The requests that, with what every request carries, are over ``window`` (a
         rejection's; alone over it when ``stated`` is false), else over twice the agent's
-        (``_beyond_estimate_error``): event id to estimated tokens, without the
+        (``_beyond_estimate_error``) unless it is assumed, which a rejection decides on
+        (counted all the same with ``assumed``): event id to estimated tokens, without the
         correction."""
         held = window
-        if window is None:
+        if window is None and (assumed or not window_assumed(getattr(agent, "llm_provider", None))):
             held = _context_window(agent)
             window = _beyond_estimate_error(held)
         if not self.active or window is None or held is None:
@@ -1458,6 +1490,23 @@ class Compactor(BaseModel):
             if fixed + tokens > window:
                 found[message.source_event_id] = tokens
         return found
+
+    def awaits_rejection(
+        self,
+        messages: list[LLMMessage],
+        agent: Any,
+        tool_defs: list[dict[str, Any]] | None,
+        turn_context: list[LLMMessage] | None,
+    ) -> bool:
+        """Under an assumed window, nothing is compacted before a rejection says where
+        the window is: for a request a declared window of its size would refuse, or once
+        the model took a request that large, which proves only that it holds that much."""
+        provider = getattr(agent, "llm_provider", None)
+        if not window_assumed(provider):
+            return False
+        return window_taken(provider) or bool(
+            self.oversized(messages, agent, tool_defs, turn_context, assumed=True)
+        )
 
     def leave_out_oversized(
         self,
@@ -1590,12 +1639,14 @@ class Compactor(BaseModel):
         state: dict[str, Any] | None,
         key: str,
         author: str,
+        provider: Any = None,
     ) -> BaseEvent | None:
         """The event ending the turn when the compacted request is still over twice the
         window, else ``None``. The current request is left out when it is the last message
-        and the rest is under that without it."""
+        and the rest is under that without it. A window assumed for ``provider`` refuses
+        nothing: a rejection decides."""
         raw = (usage_metadata or {}).get(CONTEXT_USAGE_METADATA_KEY)
-        if not self.active or not isinstance(raw, dict):
+        if not self.active or not isinstance(raw, dict) or window_assumed(provider):
             return None
         usage = ContextUsage.model_validate(raw)
         window = usage.context_window

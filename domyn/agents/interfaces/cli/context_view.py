@@ -93,7 +93,7 @@ def render(
 
     if usage is None:
         console.print(
-            "  No request in this conversation yet, so nothing to measure.",
+            "  No request answered in this conversation yet, so nothing to measure.",
             style=meta,
             highlight=False,
         )
@@ -146,6 +146,14 @@ def render(
         if remaining is not None:
             console.print(
                 f"   {'until compaction':<22} {thousands(remaining):>7}   ({usage.strategy})",
+                style=meta,
+                highlight=False,
+            )
+        elif usage.strategy:
+            # An assumed window the model went past: only a rejection compacts.
+            console.print(
+                f"   {'until compaction':<22} {'—':>7}   "
+                f"when the model rejects a request ({usage.strategy})",
                 style=meta,
                 highlight=False,
             )

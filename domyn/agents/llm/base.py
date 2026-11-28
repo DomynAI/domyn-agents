@@ -8,7 +8,7 @@ from enum import StrEnum, auto
 from typing import Any, ClassVar
 
 import httpx
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from domyn.agents.core import TOKEN_USAGE_METADATA_KEY
 from domyn.agents.llm.context_window import (
@@ -331,6 +331,12 @@ def is_context_overflow(error: BaseException) -> bool:
     return body is not None and bool(_CONTEXT_OVERFLOW.search(body))
 
 
+def is_rejected_request(error: BaseException) -> bool:
+    """Whether the provider refused the request itself, with a 400 or a 413."""
+    response = getattr(error, "response", None)
+    return getattr(response, "status_code", None) in (400, 413)
+
+
 _CONTEXT_LIMIT = (
     re.compile(r"maximum context length is (\d+) tokens", re.IGNORECASE),
     re.compile(r"maximum context length \((\d+)\)", re.IGNORECASE),
@@ -550,6 +556,11 @@ class BaseLLMProvider(BaseModel, ABC):
             "context-window policy is inert without it."
         ),
     )
+    _assumed_window: int | None = PrivateAttr(default=None)
+    """The window a host assumed for it (`assume_context_window`): assumed while
+    ``context_window`` is still that."""
+    _window_taken: bool = PrivateAttr(default=False)
+    """The model took a request as large as the assumed window (`raise_assumed_window`)."""
 
     max_reply_keys: ClassVar[tuple[str, ...]] = ("max_tokens", "max_completion_tokens")
     """The request keys that carry the reply's ceiling (``max_reply_tokens``): the
