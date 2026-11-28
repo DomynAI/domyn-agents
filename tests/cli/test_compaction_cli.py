@@ -451,17 +451,23 @@ class TestWhenTheProviderRejectsTheRequestAsTooLong:
         assert provider.calls == 4
         assert "was not sent" in out and "LLM error" not in out
 
+    @pytest.mark.parametrize("assumed", [False, True], ids=["no window", "assumed window"])
     @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
     @pytest.mark.asyncio
     async def test_a_paste_no_stated_window_holds_is_refused_before_compacting(
-        self, planner_name: str
+        self, planner_name: str, assumed: bool
     ) -> None:
-        """No window known until the rejection states one, which the paste is far over:
-        the earlier exchanges are not summarized for a request that cannot go out."""
+        """No window known, or one assumed, until the rejection states one, which the paste
+        is far over: the earlier exchanges are not summarized for a request that cannot go
+        out, neither before it is sent nor after."""
+        from domyn.agents.llm.context_window import assume_context_window
+
         script = ("first " * 3_000, "second " * 3_000, "third " * 3_000, "long " * 300_000)
         repl, buffer, provider = self._repl(
             planner_name, script, set(), context_window=None, rejects_over_chars=200_000
         )
+        if assumed:
+            assume_context_window(provider, 100_000)
         events: list[BaseEvent] = []
         record = repl._record_usage
         repl._record_usage = lambda event: (events.append(event), record(event))
@@ -520,7 +526,7 @@ class TestAMessageLargerThanTheWindow:
         def spy(event: BaseEvent) -> None:
             record(event)
             if event.event_type is ExecutionEventType.LLM_START:
-                usages.append(repl._state.last_usage)
+                usages.append(repl._state.sent_usage.get(event.interaction_id or ""))
 
         repl._record_usage = spy  # type: ignore[method-assign]
         return repl, buffer, repl._agent.llm_provider, usages
@@ -623,6 +629,45 @@ class TestAMessageLargerThanTheWindow:
         assert repl._window_refused == "Helper"
         assert "20,000 tokens" in str(repl._window_hint(repl._window_refused))
 
+    @staticmethod
+    async def _resolved(provider: Any, reported: int | None, monkeypatch: Any) -> None:
+        """``provider``'s window as the CLI resolves it, the endpoint reporting
+        ``reported``."""
+        from domyn.agents.interfaces.cli import config as cli_config
+
+        async def resolve(p: Any) -> int | None:
+            if reported is not None:
+                p.context_window = reported
+            return reported
+
+        monkeypatch.setattr(cli_config, "resolve_context_window", resolve)
+        provider.context_window = None
+        await cli_config.apply_context_window(provider)
+
+    @pytest.mark.asyncio
+    async def test_an_assumed_window_refuses_nothing_before_the_model_answers(
+        self, monkeypatch: Any
+    ) -> None:
+        """A guess is no reason to refuse: the model may hold far more, and a rejection
+        would say so."""
+        repl, buffer, provider, _ = self._repl("long " * 200_000, config={"llm_providers": []})
+        await self._resolved(provider, None, monkeypatch)
+        await repl.run()
+        assert len(provider.seen) == 1
+        assert "it was not sent" not in " ".join(buffer.getvalue().split())
+
+    @pytest.mark.asyncio
+    async def test_a_reported_window_of_the_assumed_size_is_not_called_assumed(
+        self, monkeypatch: Any
+    ) -> None:
+        from domyn.agents.interfaces.cli.config import DEFAULT_CONTEXT_WINDOW
+
+        repl, buffer, provider, _ = self._repl("long " * 200_000, config={"llm_providers": []})
+        await self._resolved(provider, DEFAULT_CONTEXT_WINDOW, monkeypatch)
+        await repl.run()
+        assert "it was not sent" in " ".join(buffer.getvalue().split())
+        assert "is assumed" not in buffer.getvalue()
+
     def test_a_refusal_after_a_rejection_gives_no_window_hint(self) -> None:
         """The model has just rejected a request under the window in use: "if the model
         takes more" would point the wrong way."""
@@ -636,6 +681,180 @@ class TestAMessageLargerThanTheWindow:
             )
         )
         assert repl._window_refused is None
+
+
+class TestTheShareShownIsOfWhatTheModelTook:
+    """The indicator and `/context` show one number: the request the model answered, at
+    the provider's count, against a window no smaller than that unless it is declared."""
+
+    PROSE = "long " * 15_000  # ~25k estimated
+
+    @staticmethod
+    def _repl(window: int, counted: int, assumed: bool) -> tuple[Any, io.StringIO, Any]:
+        from domyn.agents.llm import LLMResponse
+        from domyn.agents.llm.context_window import assume_context_window
+        from tests.cli.test_repl_session import ScriptedProvider, _repl
+
+        class Counting(ScriptedProvider):
+            async def generate(self, messages: Any, **kwargs: Any) -> Any:
+                return LLMResponse(
+                    content=self.answer,
+                    generated_tokens=1,
+                    execution_time=0.0,
+                    usage={"prompt_tokens": counted},
+                )
+
+        repl, buffer = _repl(TestTheShareShownIsOfWhatTheModelTook.PROSE, "/context")
+        provider = Counting(name="main", context_window=window)
+        if assumed:
+            assume_context_window(provider, window)
+        repl._agent.llm_provider = provider
+        return repl, buffer, provider
+
+    @pytest.mark.asyncio
+    async def test_an_assumed_window_grows_to_what_the_model_took(self) -> None:
+        repl, buffer, provider = self._repl(window=20_000, counted=22_000, assumed=True)
+        await repl.run()
+
+        assert provider.context_window == 22_000
+        out = buffer.getvalue()
+        assert "context used: 100%" in out and "100% used" in out
+
+    @pytest.mark.asyncio
+    async def test_a_declared_window_is_kept_and_both_read_past_it(self) -> None:
+        repl, buffer, provider = self._repl(window=20_000, counted=22_000, assumed=False)
+        await repl.run()
+
+        assert provider.context_window == 20_000
+        out = buffer.getvalue()
+        assert "context used: 110%" in out and "110% used" in out
+
+    def test_a_request_the_model_did_not_answer_is_not_shown(self) -> None:
+        """Rejected, it does not describe the conversation: left out, or not taken."""
+        from domyn.agents.planner_strategy.context_management.budget import ContextUsage
+        from tests.cli.test_repl_session import _repl
+
+        repl, _ = _repl()
+
+        def sent(tokens: int) -> BaseEvent:
+            usage = ContextUsage(message_tokens=tokens, context_window=100_000)
+            return BaseEvent(
+                event_type=ExecutionEventType.LLM_START,
+                author="Assistant",
+                metadata={"context_usage": usage.model_dump()},
+            )
+
+        repl._record_usage(sent(1_000))
+        repl._record_usage(BaseEvent(event_type=ExecutionEventType.LLM_END, author="Assistant"))
+        repl._record_usage(sent(150_000))
+        repl._record_usage(
+            BaseEvent(
+                event_type=ExecutionEventType.ERROR_OCCURRED,
+                author="Assistant",
+                error_code="RequestTooLong",
+                metadata={"rejected": True},
+            )
+        )
+        assert repl._state.last_usage is not None
+        assert repl._state.last_usage.total_tokens == 1_000
+
+    def test_two_copies_of_one_agent_called_together_keep_their_own(self) -> None:
+        from domyn.agents.planner_strategy.context_management.budget import ContextUsage
+        from tests.cli.test_repl_session import _repl
+
+        repl, _ = _repl()
+
+        def event(kind: ExecutionEventType, call: str, tokens: int | None = None) -> BaseEvent:
+            usage = ContextUsage(message_tokens=tokens or 0, context_window=100_000)
+            return BaseEvent(
+                event_type=kind,
+                author="Helper",
+                interaction_id=call,
+                metadata={"context_usage": usage.model_dump()} if tokens else {},
+            )
+
+        repl._record_usage(event(ExecutionEventType.LLM_START, "first", 1_000))
+        repl._record_usage(event(ExecutionEventType.LLM_START, "second", 2_000))
+        repl._record_usage(event(ExecutionEventType.LLM_END, "first"))
+        assert repl._state.last_usage is not None
+        assert repl._state.last_usage.total_tokens == 1_000
+        repl._record_usage(event(ExecutionEventType.LLM_END, "second"))
+        assert repl._state.last_usage.total_tokens == 2_000
+
+
+class TestAnAssumedWindowTheModelWentPast:
+    """A request the model took proves the window is at least that large, not that it is
+    that large: nothing is compacted against it before a rejection says where it is."""
+
+    @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
+    @pytest.mark.asyncio
+    async def test_the_paste_it_took_is_in_the_next_request(self, planner_name: str) -> None:
+        from domyn.agents.llm import LLMResponse
+        from domyn.agents.llm.context_window import assume_context_window
+        from domyn.agents.planner_strategy import (
+            ToolUsePlannerStrategy,
+            ToolUseWithThoughtPlannerStrategy,
+        )
+        from tests.cli.test_repl_session import ScriptedProvider, _repl
+
+        class Counting(ScriptedProvider):
+            seen: list[Any]
+
+            async def generate(self, messages: Any, **kwargs: Any) -> Any:
+                self.seen.append(list(messages))
+                size = sum(len(str(m.content)) for m in messages)
+                return LLMResponse(
+                    content=self.answer,
+                    generated_tokens=50,
+                    execution_time=0.0,
+                    usage={"prompt_tokens": size // 3, "completion_tokens": 50},
+                )
+
+        paste = "DOCSTART " + "lorem ipsum dolor " * 5_000  # ~30k estimated
+        repl, _ = _repl(paste, "what is in the doc?")
+        planners = {
+            "tool_use": ToolUsePlannerStrategy,
+            "tool_use_thought": ToolUseWithThoughtPlannerStrategy,
+        }
+        repl._agent.planner = planners[planner_name]()
+        provider = Counting(name="main", context_window=20_000, seen=[])
+        assume_context_window(provider, 20_000)
+        repl._agent.llm_provider = provider
+        await repl.run()
+
+        assert len(provider.seen) == 2, "a summary was paid for"
+        assert all("DOCSTART" in str([m.content for m in seen]) for seen in provider.seen)
+
+    @pytest.mark.asyncio
+    async def test_no_compaction_is_announced_against_it(self) -> None:
+        """After a /clear in the same process, below the window: no threshold to show."""
+        from domyn.agents.llm import LLMResponse
+        from domyn.agents.llm.context_window import assume_context_window
+        from tests.cli.test_repl_session import ScriptedProvider, _repl
+
+        class Counting(ScriptedProvider):
+            counts: list[int]
+
+            async def generate(self, messages: Any, **kwargs: Any) -> Any:
+                return LLMResponse(
+                    content=self.answer,
+                    generated_tokens=1,
+                    execution_time=0.0,
+                    usage={"prompt_tokens": self.counts.pop(0)},
+                )
+
+        # The first request raises the window to 100k; the second fills 80% of it.
+        prose = "long " * 15_000
+        repl, buffer = _repl(prose, "/clear", prose, "/context")
+        provider = Counting(name="main", context_window=20_000, counts=[100_000, 80_000])
+        assume_context_window(provider, 20_000)
+        repl._agent.llm_provider = provider
+        await repl.run()
+
+        out = buffer.getvalue()
+        assert "context used: 80%" in out
+        assert "auto-compact" not in out
+        assert "when the model rejects a request" in out
 
 
 class TestSayingWhenPruningIsNoLongerEnough:
@@ -660,7 +879,6 @@ class TestSayingWhenPruningIsNoLongerEnough:
         )
         out = buffer.getvalue()
         assert "still over the limit" in out
-        assert "/clear starts a new conversation" in out
         assert "189.3k" in out, "the numbers must still be there"
 
     def test_a_sufficient_compaction_carries_no_warning(self) -> None:

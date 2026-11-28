@@ -192,12 +192,17 @@ class SessionState:
     turns: int = 0
 
     last_usage: ContextUsage | None = None
-    """What the last request to the model cost.
+    """What the last request the model answered cost.
 
-    The planner measures it and ships it in ``LLM_START`` metadata; here it is
-    only collected. The CLI cannot rebuild it on its own because it does not build
-    the ``InteractionContext`` — and in any case the useful number is the one from
-    the request that actually went out, not a hypothetical one."""
+    The planner measures it and ships it in ``LLM_START`` metadata, and again in
+    ``LLM_END`` with the provider's count; here it is only collected. The CLI cannot
+    rebuild it on its own because it does not build the ``InteractionContext`` — and
+    in any case the useful number is the one from the request the model took, not a
+    hypothetical one, nor one it rejected."""
+
+    sent_usage: dict[str, ContextUsage] = field(default_factory=dict)
+    """Per agent call (its interaction), the measurement of the request it sent and has no
+    answer to yet: two copies of one agent called together are two calls."""
 
     def reset_conversation(self) -> None:
         self.conversation_id = f"conv_{uuid.uuid4().hex}"
@@ -205,6 +210,7 @@ class SessionState:
         # The measurement belongs to the conversation: keeping it past /clear
         # would say something false about the new one.
         self.last_usage = None
+        self.sent_usage.clear()
 
     def resume_conversation(self, info: ConversationInfo) -> None:
         """Continue ``info``, from ``--resume`` or ``/resume`` alike.
@@ -217,6 +223,7 @@ class SessionState:
         # It belongs to the conversation that was left, not to the one resumed;
         # the next request replaces it with a real measurement.
         self.last_usage = None
+        self.sent_usage.clear()
 
 
 @dataclass
@@ -1403,7 +1410,7 @@ class Repl:
 
     def _window_hint(self, agent_name: str) -> str | None:
         """Where the window ``agent_name`` was refused against comes from, when it can be
-        changed here: declared in the config."""
+        changed here: declared in the config. An assumed window refuses nothing."""
         provider = getattr(self._agent_named(agent_name), "llm_provider", None)
         window = getattr(provider, "context_window", None)
         if not isinstance(window, int):
@@ -1442,7 +1449,8 @@ class Repl:
         """Collect the context measurement, or a model call's cost, if the event carries one.
 
         ``LLM_END`` carries what its call cost (``token_usage``), added to the turn's
-        total for its ``Completed in`` line.
+        total for its ``Completed in`` line, and the request measured with the
+        provider's count, which replaces the estimate ``LLM_START`` carried.
 
         A manual compaction carries no measurement of its own, only what it
         saved: taken off the last one, so the indicator and ``/context`` do not
@@ -1465,18 +1473,33 @@ class Repl:
                     update={"message_tokens": max(0, usage.message_tokens - saved)}
                 )
             return
-        if event.event_type is ExecutionEventType.LLM_END:
-            self._add_turn_tokens(metadata.get(TOKEN_USAGE_METADATA_KEY))
+        if event.event_type not in (ExecutionEventType.LLM_START, ExecutionEventType.LLM_END):
             return
-        if event.event_type is not ExecutionEventType.LLM_START:
+        call = event.interaction_id or event.author or ""
+        measured = self._usage_in(metadata)
+        if event.event_type is ExecutionEventType.LLM_START:
+            # Shown once answered: a request the model rejects does not describe the
+            # conversation, and one it took is measured again with its count.
+            if measured is not None:
+                self._state.sent_usage[call] = measured
             return
+        self._add_turn_tokens(metadata.get(TOKEN_USAGE_METADATA_KEY))
+        sent = self._state.sent_usage.pop(call, None)
+        answered = measured if measured is not None else sent
+        if answered is not None:
+            self._state.last_usage = answered
+
+    @staticmethod
+    def _usage_in(metadata: dict[str, Any]) -> ContextUsage | None:
+        """The context measurement ``metadata`` carries, ``None`` when none or malformed."""
         raw = metadata.get(CONTEXT_USAGE_METADATA_KEY)
         if not isinstance(raw, dict):
-            return
+            return None
         try:
-            self._state.last_usage = ContextUsage.model_validate(raw)
+            return ContextUsage.model_validate(raw)
         except Exception as exc:
             get_logger().debug(f"context usage metadata ignored: {type(exc).__name__}: {exc}")
+            return None
 
     def _add_turn_tokens(self, raw: Any) -> None:
         """Add one model call's cost to the turn's; malformed metadata is ignored."""

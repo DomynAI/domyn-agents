@@ -44,7 +44,11 @@ from domyn.agents.instructions.discovery import AUTODISCOVERY_DIRS
 from domyn.agents.interfaces.cli.theme import Theme
 from domyn.agents.llm import BaseLLMProvider
 from domyn.agents.llm.base import DEFAULT_MAX_TOKENS_SHARE
-from domyn.agents.llm.context_window import resolve_context_window
+from domyn.agents.llm.context_window import (
+    assume_context_window,
+    forget_assumed_window,
+    resolve_context_window,
+)
 from domyn.agents.loader import interpolate_env_vars
 from domyn.agents.logger import get_logger
 from domyn.agents.memory.managers.base import MemoryExecutionMode
@@ -161,7 +165,8 @@ the damage:
 - **Assume too large** (real model smaller): we compact late or not at all and
   the provider rejects the request — which then states the real window, and it
   is adopted.
-- **Assume too small** (real model larger): we compact earlier than necessary.
+- **Assume too small** (real model larger): we compact earlier than necessary,
+  until the model takes a larger request, which raises it (`raise_assumed_window`).
   Cheap and safe.
 
 150k sits above the common 128k deployments — so those keep their full window
@@ -181,12 +186,14 @@ async def apply_context_window(provider: Any) -> None:
     Kept for the session: the provider holds a window from here on, so nothing is
     asked again until `/model` or the next start, a question that failed included.
     150k when the real window is smaller costs one rejection, which states it; when
-    it is larger, compaction comes earlier than it needs to.
+    it is larger, every larger request the model takes raises it.
     """
     if not isinstance(provider, BaseLLMProvider):
         return
     if await resolve_context_window(provider) is None:
-        provider.context_window = DEFAULT_CONTEXT_WINDOW
+        assume_context_window(provider, DEFAULT_CONTEXT_WINDOW)
+    else:
+        forget_assumed_window(provider)
 
 
 def max_tokens_share_of(raw: dict[str, Any] | None) -> float:
