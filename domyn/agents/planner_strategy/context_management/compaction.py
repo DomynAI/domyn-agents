@@ -29,6 +29,7 @@ from domyn.agents.llm.context_window import deployment_key, remember_stated_wind
 from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.context_management.budget import (
     CONTEXT_USAGE_METADATA_KEY,
+    ContextUsage,
     HeuristicEstimator,
     TokenEstimator,
     measure,
@@ -1430,9 +1431,14 @@ class Compactor(BaseModel):
         stated: bool = True,
     ) -> dict[str, int]:
         """The requests that, with what every request carries, are over ``window`` (a
-        rejection's; alone over it when ``stated`` is false): event id to estimated
-        tokens, without the correction."""
-        if not self.active or window is None:
+        rejection's; alone over it when ``stated`` is false), else over twice the agent's
+        (``_beyond_estimate_error``): event id to estimated tokens, without the
+        correction."""
+        held = window
+        if window is None:
+            held = _context_window(agent)
+            window = _beyond_estimate_error(held)
+        if not self.active or window is None or held is None:
             return {}
         fixed = 0
         if stated:
@@ -1442,7 +1448,7 @@ class Compactor(BaseModel):
             fixed += int(self.estimator.estimate_messages(turn_context or []))
             fixed += int(self.estimator.estimate_tool_definitions(tool_defs or []))
             # Over the window by themselves: no message is to blame.
-            if fixed >= window:
+            if fixed >= held:
                 return {}
         found: dict[str, int] = {}
         for message in messages:
@@ -1576,6 +1582,52 @@ class Compactor(BaseModel):
             ],
             metadata={"changed": True, "excluded": dict(excluded)},
         )
+
+    def refuse_over_window(
+        self,
+        conversation: list[LLMMessage],
+        usage_metadata: dict[str, Any],
+        state: dict[str, Any] | None,
+        key: str,
+        author: str,
+    ) -> BaseEvent | None:
+        """The event ending the turn when the compacted request is still over twice the
+        window, else ``None``. The current request is left out when it is the last message
+        and the rest is under that without it."""
+        raw = (usage_metadata or {}).get(CONTEXT_USAGE_METADATA_KEY)
+        if not self.active or not isinstance(raw, dict):
+            return None
+        usage = ContextUsage.model_validate(raw)
+        window = usage.context_window
+        limit = _beyond_estimate_error(window)
+        total = usage.total_tokens
+        if window is None or limit is None or total <= limit:
+            return None
+        last = conversation[-1] if conversation else None
+        if last is not None and last.source_event_id and _is_request(last):
+            tokens = int(self.estimator.estimate_messages([last]))
+            if total - tokens <= limit:
+                self.leave_out(conversation, {last.source_event_id: tokens}, state, key)
+                return self.refusal(
+                    REQUEST_TOO_LONG,
+                    "The request does not fit in what is left of the model's context window: "
+                    f"with it the conversation is about {total:,} tokens of {window:,}. It was "
+                    "not sent, and is left out of this conversation. A shorter one can be "
+                    "sent, or a new conversation started.",
+                    author,
+                )
+        return self.refusal(
+            CONVERSATION_TOO_LONG,
+            f"The conversation no longer fits the model's context window (about {total:,} "
+            f"tokens of {window:,}) and cannot be shortened further. Start a new conversation.",
+            author,
+        )
+
+
+def _beyond_estimate_error(window: int | None) -> int | None:
+    """Twice ``window``: the estimate counts prose at up to about twice its tokens, so
+    only past that is a request over the window whatever the estimate's error."""
+    return 2 * window if window is not None else None
 
 
 def current_request_id(messages: list[LLMMessage]) -> str | None:

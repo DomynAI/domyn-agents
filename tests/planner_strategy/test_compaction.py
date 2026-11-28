@@ -1083,9 +1083,8 @@ class TestTheReserveAfterTheShare:
 
 
 class TestAMessageNoWindowHolds:
-    """A pasted text larger than the window a rejection states: no compaction shortens a
-    request, so it was sent again, rejected, and carried by every later request of the
-    conversation."""
+    """A pasted text larger than the window: no compaction shortens a request, so it
+    was sent anyway, rejected, and carried by every later request of the conversation."""
 
     @staticmethod
     def _pasted(chars: int) -> list[LLMMessage]:
@@ -1096,6 +1095,27 @@ class TestAMessageNoWindowHolds:
             _msg("user", _long(chars), source_event_id="paste"),
         ]
 
+    def test_only_a_request_over_the_window_on_its_own_is_found(self) -> None:
+        found = _active().oversized(self._pasted(40_000), _Agent(5_000))
+        assert list(found) == ["paste"]
+        assert found["paste"] >= 10_000
+
+    def test_what_every_request_carries_counts(self) -> None:
+        """A request that fits alone, not with the tool definitions sent beside it."""
+        messages = self._pasted(12_000)
+        tools = [{"type": "function", "function": {"name": "t", "description": "x" * 3_000}}]
+        assert _active().oversized(messages, _Agent(2_250)) == {}
+        assert list(_active().oversized(messages, _Agent(2_250), tools)) == ["paste"]
+
+    def test_a_message_estimated_a_little_over_the_window_goes_out(self) -> None:
+        """Prose costs as little as half its estimate: only a rejection proves it too long."""
+        compactor = _active()
+        messages = self._pasted(16_500)
+        agent = _Agent(5_000)
+        assert compactor.oversized(messages, agent) == {}
+        metadata = compactor.usage_metadata(messages, None, agent, {})
+        assert compactor.refuse_over_window(messages, metadata, {}, "A", "A") is None
+
     def test_against_a_window_a_rejection_stated_the_estimate_is_enough(self) -> None:
         found = _active().oversized(self._pasted(16_500), _Agent(None), window=5_000)
         assert list(found) == ["paste"]
@@ -1103,7 +1123,13 @@ class TestAMessageNoWindowHolds:
     def test_over_the_window_without_any_message_none_is_to_blame(self) -> None:
         """Tool definitions alone over the window: every message would be found."""
         tools = [{"type": "function", "function": {"name": "t", "description": "x" * 30_000}}]
-        assert _active().oversized(self._pasted(300), _Agent(5_000), tools, window=5_000) == {}
+        assert _active().oversized(self._pasted(300), _Agent(5_000), tools) == {}
+
+    def test_over_the_window_but_not_twice_it_no_message_is_to_blame(self) -> None:
+        """Measured against twice the window, a message beside them was blamed, and its
+        refusal read as a request smaller than the window."""
+        tools = [{"type": "function", "function": {"name": "t", "description": "x" * 22_500}}]
+        assert _active().oversized(self._pasted(9_000), _Agent(5_000), tools) == {}
 
     def test_against_half_a_rejected_request_a_message_counts_alone(self) -> None:
         """What every request carries is part of the half: added again, a greeting
@@ -1132,14 +1158,13 @@ class TestAMessageNoWindowHolds:
     def test_without_a_window_or_a_strategy_nothing_is_found(self) -> None:
         assert _active().oversized(self._pasted(30_000), _Agent(None)) == {}
         inert = Compactor(strategy=NoOpCompaction())
-        assert inert.oversized(self._pasted(30_000), _Agent(5_000), window=5_000) == {}
+        assert inert.oversized(self._pasted(30_000), _Agent(5_000)) == {}
 
     def test_left_out_it_stays_out_of_every_later_request(self) -> None:
         compactor = _active()
         state: dict[str, Any] = {}
         messages = self._pasted(30_000)
-        found = compactor.oversized(messages, _Agent(5_000), window=5_000)
-        compactor.leave_out(messages, found, state, "A")
+        compactor.leave_out(messages, compactor.oversized(messages, _Agent(5_000)), state, "A")
 
         later = [*self._pasted(30_000), _msg("user", "what happened?", source_event_id="q")]
         replayed = compactor.replay(later, state, "A")
@@ -1147,6 +1172,35 @@ class TestAMessageNoWindowHolds:
         assert "not sent" in str(replayed[3].content)
         assert _long(100) not in str(replayed[3].content)
         assert replayed[3].role == "user" and replayed[4].content == "what happened?"
+
+    def test_the_request_that_does_not_fit_what_is_left_is_left_out(self) -> None:
+        compactor = _active()
+        state: dict[str, Any] = {}
+        messages = self._pasted(9_000)
+        window = compactor.tokens_after(messages) // 2 - 100
+        metadata = compactor.usage_metadata(messages, None, _Agent(window), state)
+
+        event = compactor.refuse_over_window(messages, metadata, state, "A", "A")
+
+        assert event is not None and event.error_code == "RequestTooLong"
+        assert "not sent" in str(compactor.replay(messages, state, "A")[-1].content)
+
+    def test_a_conversation_over_the_window_without_its_request_is_refused_whole(self) -> None:
+        compactor = _active()
+        state: dict[str, Any] = {}
+        messages = [*self._pasted(9_000), _msg("assistant", "ok"), _msg("user", "and?")]
+        metadata = compactor.usage_metadata(messages, None, _Agent(1_000), state)
+
+        event = compactor.refuse_over_window(messages, metadata, state, "A", "A")
+
+        assert event is not None and event.error_code == "ConversationTooLong"
+        assert compactor.replay(messages, state, "A") == messages, "nothing is left out"
+
+    def test_a_request_under_the_window_goes_out(self) -> None:
+        compactor = _active()
+        messages = self._pasted(300)
+        metadata = compactor.usage_metadata(messages, None, _Agent(100_000), {})
+        assert compactor.refuse_over_window(messages, metadata, {}, "A", "A") is None
 
 
 class TestALargeOlderRequestCanBeSummarized:
