@@ -735,6 +735,15 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
             # A copy of the agent called alongside another keeps its own.
             record = compaction_key(agent.name, interaction_context)
             messages = self.compactor.replay(messages, interaction_context.state, record)
+            # A message no window holds is refused before any compaction pays for it, and
+            # an earlier one (a conversation it already broke) is left out.
+            messages, left_out = self.compactor.leave_out_oversized(
+                messages, agent, tool_defs, turn_context, interaction_context.state, record
+            )
+            if left_out is not None:
+                yield left_out
+                if left_out.event_type == ExecutionEventType.ERROR_OCCURRED:
+                    break
             compaction_plan = self.compactor.assess(
                 messages,
                 agent,
@@ -757,6 +766,16 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
             usage_metadata = self.compactor.usage_metadata(
                 messages, tool_defs, agent, interaction_context.state, turn_context, key=record
             )
+            refusal = self.compactor.refuse_over_window(
+                conversation,
+                usage_metadata,
+                interaction_context.state,
+                record,
+                agent.name,
+            )
+            if refusal is not None:
+                yield refusal
+                break
 
             # ── LLM invocation ────────────────────────────────────────────────
             response: LLMResponse | None = None
@@ -984,6 +1003,23 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                         )
                     )
                     if recovery is not None:
+                        # The window the rejection stated is the agent's now: a message
+                        # no window holds is left out before anything is compacted for it.
+                        _, left_out = self.compactor.leave_out_oversized(
+                            conversation,
+                            agent,
+                            tool_defs,
+                            turn_context,
+                            interaction_context.state,
+                            record,
+                            rejected=True,
+                        )
+                        if left_out is not None:
+                            yield left_out
+                            if left_out.event_type == ExecutionEventType.ERROR_OCCURRED:
+                                break
+                            iteration -= 1
+                            continue
                         if not overflow_retried:
                             overflow_retried = True
                             logger.warning(
