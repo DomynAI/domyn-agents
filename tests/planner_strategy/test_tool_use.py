@@ -2486,6 +2486,45 @@ class TestToolUseWithThoughtPlannerStrategy:
         assert any(e.event_type == ExecutionEventType.ERROR_OCCURRED for e in events)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(("status", "doubted"), [(400, True), (413, True), (401, False)])
+    async def test_a_rejection_in_unknown_words_makes_a_taken_window_compact_again(
+        self, monkeypatch, status, doubted
+    ):
+        """Taken, the window compacts nothing before a rejection read as too long: one
+        worded otherwise would leave every later turn sending the same request."""
+        import httpx
+
+        from domyn.agents.llm import VLLMProvider
+        from domyn.agents.llm.context_window import (
+            assume_context_window,
+            raise_assumed_window,
+            window_taken,
+        )
+
+        provider = VLLMProvider(model_name="m", url="http://llm.test/v1/chat/completions")
+        assume_context_window(provider, 5_000)
+        raise_assumed_window(provider, 6_000)
+        request = httpx.Request("POST", provider.url)
+        response = httpx.Response(status, request=request, text="request refused upstream")
+        monkeypatch.setattr(
+            VLLMProvider,
+            "generate",
+            AsyncMock(side_effect=httpx.HTTPStatusError("x", request=request, response=response)),
+        )
+        agent = self._make_agent()
+        agent.stream = False
+        agent.llm_provider = provider
+        context = make_context(
+            conversation_history=[make_event(ExecutionEventType.USER_INPUT, content_text="Hi")]
+        )
+
+        events = [event async for event in self._make_strategy().execute(agent, context)]
+
+        assert any(e.event_type == ExecutionEventType.ERROR_OCCURRED for e in events)
+        assert window_taken(provider) is not doubted
+        assert provider.context_window == 6_000
+
+    @pytest.mark.asyncio
     async def test_stream_true_non_str_llm_response_chunk_not_emitted_as_token(self):
         """LLMResponse chunks (non-str) from generate_streaming must NOT produce RESPONSE_TOKEN."""
         strategy = self._make_strategy()

@@ -59,9 +59,11 @@ from domyn.agents.llm.base import (
     add_token_usage,
     context_limit_from_error,
     is_context_overflow,
+    is_rejected_request,
     is_transient,
     token_usage_metadata,
 )
+from domyn.agents.llm.context_window import doubt_assumed_window
 from domyn.agents.logger import get_logger
 from domyn.agents.planner_strategy.base import BasePlannerStrategy
 from domyn.agents.planner_strategy.context_injection import (
@@ -1069,6 +1071,10 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                             break
                         iteration -= 1
                         continue
+                    if is_rejected_request(e):
+                        # Maybe too long in words we do not read: under a window the
+                        # model went past, the next turn compacts at the threshold again.
+                        doubt_assumed_window(getattr(agent, "llm_provider", None))
                     logger.error(f"LLM generation failed: {type(e).__name__}")
                     logger.debug(
                         f"LLM generation failed: {e}",

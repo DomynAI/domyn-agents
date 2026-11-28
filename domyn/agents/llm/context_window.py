@@ -194,7 +194,8 @@ def remember_stated_window(provider: Any, window: int) -> None:
 
 def assume_context_window(provider: Any, window: int) -> None:
     """Give ``provider`` ``window`` as an assumption, for an endpoint that reports none: or
-    the largest request its endpoint and model have taken, when that is larger."""
+    the largest request its endpoint and model have taken, when that is larger, and then
+    marked taken again (``window_taken``)."""
     key = deployment_key(provider)
     taken = False
     if key is not None:

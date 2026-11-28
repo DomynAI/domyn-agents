@@ -331,6 +331,12 @@ def is_context_overflow(error: BaseException) -> bool:
     return body is not None and bool(_CONTEXT_OVERFLOW.search(body))
 
 
+def is_rejected_request(error: BaseException) -> bool:
+    """Whether the provider refused the request itself, with a 400 or a 413."""
+    response = getattr(error, "response", None)
+    return getattr(response, "status_code", None) in (400, 413)
+
+
 _CONTEXT_LIMIT = (
     re.compile(r"maximum context length is (\d+) tokens", re.IGNORECASE),
     re.compile(r"maximum context length \((\d+)\)", re.IGNORECASE),
