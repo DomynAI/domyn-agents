@@ -249,6 +249,9 @@ def _bytes_of(path: str) -> str:
 # tens of milliseconds (MSYS emulates fork): a report written with a `cat`, a
 # `stat` or a `date` per fact took two seconds to say that `true` had finished.
 # So what the shell can do itself, it does, and what it cannot is asked once.
+# POSIX sh only: on Linux and macOS commands run under /bin/sh, which is dash on
+# Debian and Ubuntu (a bash here-string there was a syntax error, and the whole
+# report said nothing).
 
 
 def _read(var: str, path: str, default: str) -> str:
@@ -260,8 +263,8 @@ def _read(var: str, path: str, default: str) -> str:
     return f"{var}={default}; {{ read -r {var} < {path}; }} 2>/dev/null; "
 
 
-# The current time in epoch seconds: bash 5's own, `date` only on an older bash
-# (macOS ships 3.2).
+# The current time in epoch seconds: bash 5's own (Git Bash), `date` where the
+# shell has none (dash, macOS's bash 3.2).
 _NOW = "${EPOCHSECONDS:-$(date +%s)}"
 
 
@@ -269,7 +272,9 @@ def _log_stats(out: str, err: str) -> str:
     """Set OM, OUTB, EM and ERRB, both logs' modification time and size, with one
     `stat` for the two.
 
-    GNU's flags first, then BSD's when GNU's said nothing. A `stat` that could not
+    GNU's flags first, then BSD's when GNU's said nothing. The values are split by
+    handing them to a function, whose arguments are its own in POSIX sh: no
+    process, and the script's own arguments untouched. A `stat` that could not
     read both files (one removed under it) leaves fewer than four values, and then
     each fact is asked on its own, as before. A size `wc` could not read is 0:
     left empty, the comparisons with the cursors below failed with an error.
@@ -282,8 +287,8 @@ def _log_stats(out: str, err: str) -> str:
     return (
         f"S=$(stat -c '%Y %s' {out} {err} 2>/dev/null); "
         f"[ -n \"$S\" ] || S=$(stat -f '%m %z' {out} {err} 2>/dev/null); "
-        "OM= OUTB= EM= ERRB= X=; "
-        "read -r -d '' OM OUTB EM ERRB X <<< \"$S\"; "
+        "_stats() { OM=$1; OUTB=$2; EM=$3; ERRB=$4; X=$5; }; "
+        "_stats $S; "
         f'if [ -z "$ERRB" ] || [ -n "$X" ]; then {slow}fi; '
     )
 
