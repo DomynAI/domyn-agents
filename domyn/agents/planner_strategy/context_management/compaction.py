@@ -214,6 +214,13 @@ class CompactionRecord(BaseModel):
     pruned_event_ids: list[str] = Field(default_factory=list)
     summary: str | None = None
     summarized_event_ids: list[str] = Field(default_factory=list)
+    excluded: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Messages left out of every request, by event id, with their estimated tokens: "
+            "the model's window could not hold them (`Compactor.leave_out`)."
+        ),
+    )
     generation: int = Field(
         default=0,
         description=(
@@ -280,6 +287,51 @@ def add_to_record(
     record.generation += 1
     state.setdefault(_RECORDS_KEY, {})[agent_name] = record.model_dump()
     return record
+
+
+def record_exclusion(
+    state: dict[str, Any] | None, agent_name: str, excluded: dict[str, int]
+) -> CompactionRecord:
+    """Add messages to those left out of an agent's requests and persist the record."""
+    record = read_record(state, agent_name)
+    if state is None:
+        return record
+    fresh = {
+        event_id: tokens
+        for event_id, tokens in excluded.items()
+        if event_id and event_id not in record.excluded
+    }
+    if not fresh:
+        return record
+    record.excluded.update(fresh)
+    record.generation += 1
+    state.setdefault(_RECORDS_KEY, {})[agent_name] = record.model_dump()
+    return record
+
+
+def _left_out(messages: list[LLMMessage], excluded: dict[str, int]) -> list[LLMMessage]:
+    """``messages`` with each one in ``excluded`` replaced by a line saying it was not sent."""
+    out: list[LLMMessage] = []
+    for message in messages:
+        tokens = excluded.get(message.source_event_id or "")
+        if tokens is None:
+            out.append(message)
+            continue
+        text = (
+            f"[A message was here, about {tokens:,} tokens long. It did not fit "
+            "the model's context window, so it was not sent: only this note is left of it.]"
+        )
+        out.append(message.model_copy(update={"content": text}))
+    return out
+
+
+REQUEST_TOO_LONG = "RequestTooLong"
+"""``error_code`` of a turn ended because its request does not fit the window: it was
+left out of the conversation (``Compactor.leave_out``)."""
+
+CONVERSATION_TOO_LONG = "ConversationTooLong"
+"""``error_code`` of a turn ended because the conversation no longer fits the window
+and cannot be shortened further."""
 
 
 def _rescale(correction: int, base: int, dropped: int) -> tuple[int, int]:
@@ -1086,7 +1138,7 @@ class Compactor(BaseModel):
         is the common case.
         """
         record = read_record(state, agent_name)
-        if not record.pruned_event_ids and not record.summary:
+        if not record.pruned_event_ids and not record.summary and not record.excluded:
             return messages
 
         out = messages
@@ -1095,6 +1147,9 @@ class Compactor(BaseModel):
             # survives afterwards is both cheaper and correct — pruning messages
             # that are about to disappear would be work thrown away.
             out = _restore_summary(out, record.summary, set(record.summarized_event_ids))
+
+        if record.excluded:
+            out = _left_out(out, record.excluded)
 
         if record.pruned_event_ids:
             # The strategy's own pruner when it has one, so the placeholder text
@@ -1290,6 +1345,9 @@ class Compactor(BaseModel):
                 # summarizing, or by starting a new conversation.
                 "sufficient": sufficient,
                 "threshold_tokens": threshold,
+                # Against the stand-in threshold of a rejection: how the turn goes on
+                # is the planner's to say (a retry, or a refusal).
+                "rejected": plan.rejected,
                 "request_tokens": self._request_tokens(outcome.messages, plan.budget),
             },
         )
@@ -1355,6 +1413,175 @@ class Compactor(BaseModel):
             f"{usage.context_window or 'unknown'}"
         )
         return {CONTEXT_USAGE_METADATA_KEY: usage.model_dump()}
+
+    # --- what no request can carry ------------------------------------------
+    #
+    # A message larger than the window is never shortened: it is refused, and left
+    # out of every later request, or the conversation would carry it, and be
+    # rejected, for ever.
+
+    def oversized(
+        self,
+        messages: list[LLMMessage],
+        agent: Any,
+        tool_defs: list[dict[str, Any]] | None = None,
+        turn_context: list[LLMMessage] | None = None,
+        window: int | None = None,
+        stated: bool = True,
+    ) -> dict[str, int]:
+        """The requests that, with what every request carries, are over ``window`` (a
+        rejection's; alone over it when ``stated`` is false): event id to estimated
+        tokens, without the correction."""
+        if not self.active or window is None:
+            return {}
+        fixed = 0
+        if stated:
+            fixed += int(
+                self.estimator.estimate_messages([m for m in messages if m.role == "system"])
+            )
+            fixed += int(self.estimator.estimate_messages(turn_context or []))
+            fixed += int(self.estimator.estimate_tool_definitions(tool_defs or []))
+            # Over the window by themselves: no message is to blame.
+            if fixed >= window:
+                return {}
+        found: dict[str, int] = {}
+        for message in messages:
+            if not message.source_event_id or not _is_request(message):
+                continue
+            tokens = int(self.estimator.estimate_messages([message]))
+            if fixed + tokens > window:
+                found[message.source_event_id] = tokens
+        return found
+
+    def leave_out_oversized(
+        self,
+        messages: list[LLMMessage],
+        agent: Any,
+        tool_defs: list[dict[str, Any]] | None,
+        turn_context: list[LLMMessage] | None,
+        state: dict[str, Any] | None,
+        key: str,
+        window: int | None = None,
+        stated: bool = True,
+        rejected: bool = False,
+    ) -> tuple[list[LLMMessage], BaseEvent | None]:
+        """Leave out the ``oversized`` requests and say so: ``messages`` without them,
+        and the event to yield. A ``REQUEST_TOO_LONG`` refusal ends the turn (the
+        current request is one of them); a ``CONTEXT_COMPACTED`` lets it go on.
+        ``window``, when given, is one a rejection gave, and ``stated`` is false when it
+        is a stand-in, which the refusal then does not quote; ``rejected`` says a
+        rejection came first."""
+        oversized = self.oversized(messages, agent, tool_defs, turn_context, window, stated)
+        if not oversized:
+            return messages, None
+        messages = self.leave_out(messages, oversized, state, key)
+        current = current_request_id(messages)
+        if current in oversized:
+            window = window or _context_window(agent)
+            return messages, self.message_refusal(
+                oversized[current], window if stated else None, agent.name, rejected
+            )
+        return messages, self.left_out_event(oversized, agent.name)
+
+    def refuse_rejected(
+        self,
+        conversation: list[LLMMessage],
+        state: dict[str, Any] | None,
+        key: str,
+        author: str,
+        rejected_tokens: int,
+    ) -> BaseEvent:
+        """The event ending a rejected turn nothing could shorten. The current request is
+        left out when it is the last message and over half the rejected one: a smaller one
+        is not to blame."""
+        last = conversation[-1] if conversation else None
+        tokens = int(self.estimator.estimate_messages([last])) if last is not None else 0
+        if (
+            last is not None
+            and last.source_event_id
+            and _is_request(last)
+            and tokens > rejected_tokens // 2
+        ):
+            self.leave_out(conversation, {last.source_event_id: tokens}, state, key)
+            return self.refusal(
+                REQUEST_TOO_LONG,
+                "The model rejected the request as too long, and the conversation cannot be "
+                "shortened further: the request was not sent, and is left out of this "
+                "conversation. A shorter one, or a file to read instead, can be sent.",
+                author,
+                rejected=True,
+            )
+        return self.refusal(
+            CONVERSATION_TOO_LONG,
+            "The model rejected the request as too long, and the conversation cannot be "
+            "shortened further. Start a new conversation.",
+            author,
+            rejected=True,
+        )
+
+    def leave_out(
+        self,
+        messages: list[LLMMessage],
+        excluded: dict[str, int],
+        state: dict[str, Any] | None,
+        key: str,
+    ) -> list[LLMMessage]:
+        """Record ``excluded`` for ``key`` and return ``messages`` without their text:
+        every later request replays it (``replay``). The measured correction is retired
+        with the change, as for any change to the record not made by ``run``."""
+        record_exclusion(state, key, excluded)
+        get_logger().info(f"{len(excluded)} message(s) too long for the window left out")
+        return _left_out(messages, excluded)
+
+    def refusal(self, code: str, text: str, author: str, rejected: bool = False) -> BaseEvent:
+        """The event ending a turn whose request cannot be sent (``REQUEST_TOO_LONG``,
+        ``CONVERSATION_TOO_LONG``), with ``rejected`` in its metadata when the provider
+        rejected it: the window in use is then no fact about the model."""
+        return BaseEvent(
+            event_type=ExecutionEventType.ERROR_OCCURRED,
+            author=author,
+            content=[Part(text=text)],
+            error_code=code,
+            error_message=text,
+            metadata={"rejected": True} if rejected else {},
+        )
+
+    def message_refusal(
+        self, tokens: int, window: int | None, author: str, rejected: bool = False
+    ) -> BaseEvent:
+        """The request alone is over the window, quoted only when known: a stand-in for
+        one (half a rejected request) is no fact about the model."""
+        size = (
+            f"the model's context window holds {window:,}"
+            if window
+            else "the model rejected the request as too long"
+        )
+        return self.refusal(
+            REQUEST_TOO_LONG,
+            f"The request is about {tokens:,} tokens and {size}: it was not sent, and is "
+            "left out of this conversation. A shorter one, or a file to read instead, can "
+            "be sent.",
+            author,
+            rejected,
+        )
+
+    def left_out_event(self, excluded: dict[str, int], author: str) -> BaseEvent:
+        """Earlier messages were left out and the turn goes on: said, not silent."""
+        sizes = ", ".join(f"~{tokens:,}" for tokens in excluded.values())
+        return BaseEvent(
+            event_type=ExecutionEventType.CONTEXT_COMPACTED,
+            author=author,
+            content=[
+                Part(text=f"an earlier message ({sizes} tokens) does not fit the window: left out")
+            ],
+            metadata={"changed": True, "excluded": dict(excluded)},
+        )
+
+
+def current_request_id(messages: list[LLMMessage]) -> str | None:
+    """The event id of the last request in ``messages``, the one the turn answers."""
+    requests = _last_requests(messages, 1)
+    return requests[0].source_event_id if requests else None
 
 
 # ---------------------------------------------------------------------------

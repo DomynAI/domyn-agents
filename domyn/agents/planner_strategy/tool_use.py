@@ -57,6 +57,7 @@ from domyn.agents.llm.base import (
     LLMToolCall,
     TokenUsage,
     add_token_usage,
+    context_limit_from_error,
     is_context_overflow,
     is_transient,
     token_usage_metadata,
@@ -967,11 +968,11 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
 
                 except Exception as e:
                     # Rejected as too long: the estimate under-counted. Compact
-                    # harder and go round again, once — a second rejection is an
-                    # error like any other.
+                    # harder and go round again, once; after that, or when nothing
+                    # compacted, a message the rejection proves too big is left out.
                     recovery = (
                         None
-                        if overflow_retried or not is_context_overflow(e)
+                        if not is_context_overflow(e)
                         else self.compactor.overflow_plan(
                             conversation,
                             agent,
@@ -983,13 +984,51 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                         )
                     )
                     if recovery is not None:
-                        overflow_retried = True
-                        logger.warning("request rejected as too long: compacting, then retrying")
-                        yield self.compactor.start_event(recovery, agent.name)
-                        _, compaction_done = await self.compactor.run(
-                            conversation, recovery, interaction_context.state, agent.name, record
+                        if not overflow_retried:
+                            overflow_retried = True
+                            logger.warning(
+                                "request rejected as too long: compacting, then retrying"
+                            )
+                            yield self.compactor.start_event(recovery, agent.name)
+                            _, compaction_done = await self.compactor.run(
+                                conversation,
+                                recovery,
+                                interaction_context.state,
+                                agent.name,
+                                record,
+                            )
+                            yield compaction_done
+                            if compaction_done.metadata.get("changed"):
+                                # The same step again, not another iteration.
+                                iteration -= 1
+                                continue
+                        # The same request would be rejected again. A message the
+                        # rejection proves too big is left out, or the turn ends: each
+                        # round leaves one out or ends it.
+                        stated = context_limit_from_error(e)
+                        _, left_out = self.compactor.leave_out_oversized(
+                            conversation,
+                            agent,
+                            tool_defs,
+                            turn_context,
+                            interaction_context.state,
+                            record,
+                            window=stated or recovery.current_tokens // 2,
+                            stated=stated is not None,
+                            rejected=True,
                         )
-                        yield compaction_done
+                        if left_out is None:
+                            left_out = self.compactor.refuse_rejected(
+                                conversation,
+                                interaction_context.state,
+                                record,
+                                agent.name,
+                                recovery.current_tokens,
+                            )
+                        yield left_out
+                        if left_out.event_type == ExecutionEventType.ERROR_OCCURRED:
+                            break
+                        iteration -= 1
                         continue
                     logger.error(f"LLM generation failed: {type(e).__name__}")
                     logger.debug(
@@ -1356,11 +1395,9 @@ class ToolUsePlannerStrategy(BasePlannerStrategy):
                         reasoning_content=reasoning,
                     )
                 return
-
-        # The while loop above can also end via an early `break` (LLM exception,
-        # malformed tool-call arguments after retries exhausted) — only report
-        # "max iterations reached" when that's actually why the loop ended.
-        if iteration >= self.max_iterations:
+        else:
+            # The loop ran out: a `break` (an error, a refusal) is not the limit, even on
+            # the last iteration, nor is a retry after a rejection.
             max_iterations_message = f"Reached maximum iterations ({self.max_iterations})"
             if self.use_stop:
                 yield BaseEvent(

@@ -249,11 +249,18 @@ class TestBothPlanners:
 
 class TestWhenTheProviderRejectsTheRequestAsTooLong:
     """The estimate under-counted and the provider said so. Compacting harder and
-    asking again saves the turn; asking again forever would not end it."""
+    asking again saves the turn; asking again with nothing changed only repeats the
+    rejection, and asking again forever would not end it."""
 
     @staticmethod
     def _repl(
-        planner_name: str, rejections: int, context_window: int | None = 100_000
+        planner_name: str,
+        script: tuple[str, ...],
+        rejected: set[int] | range,
+        context_window: int | None = 100_000,
+        prune_only: bool = False,
+        body: str = "This model's maximum context length is 40960 tokens.",
+        rejects_over_chars: int | None = None,
     ) -> tuple[Any, io.StringIO, Any]:
         import httpx
 
@@ -264,14 +271,17 @@ class TestWhenTheProviderRejectsTheRequestAsTooLong:
         from tests.cli.test_repl_session import ScriptedProvider, _repl
 
         class Rejecting(ScriptedProvider):
-            rejections: int = 0
+            rejected: Any
             calls: int = 0
+            seen: list[Any]
 
             async def generate(self, messages: Any, **kwargs: Any) -> Any:
                 self.calls += 1
-                if self.calls <= self.rejections:
+                self.seen.append(list(messages))
+                size = sum(len(str(m.content)) for m in messages)
+                over = rejects_over_chars is not None and size > rejects_over_chars
+                if self.calls in self.rejected or over:
                     request = httpx.Request("POST", "http://llm.test/v1/chat/completions")
-                    body = "This model's maximum context length is 40960 tokens."
                     response = httpx.Response(400, request=request, text=body)
                     raise httpx.HTTPStatusError("400", request=request, response=response)
                 return await super().generate(messages, **kwargs)
@@ -280,11 +290,27 @@ class TestWhenTheProviderRejectsTheRequestAsTooLong:
             "tool_use": ToolUsePlannerStrategy,
             "tool_use_thought": ToolUseWithThoughtPlannerStrategy,
         }
-        repl, buffer = _repl("hello")
+        repl, buffer = _repl(*script)
         repl._agent.planner = planners[planner_name]()
-        provider = Rejecting(rejections=rejections, context_window=context_window)
+        if prune_only:
+            repl._agent.planner.compactor = Compactor(strategy=PruneOnlyCompaction())
+        provider = Rejecting(rejected=rejected, context_window=context_window, seen=[])
         repl._agent.llm_provider = provider
         return repl, buffer, provider
+
+    @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
+    @pytest.mark.asyncio
+    async def test_with_nothing_to_compact_the_request_is_not_sent_again(
+        self, planner_name: str
+    ) -> None:
+        """The same request, rejected twice: what a pasted text larger than the
+        window did, at several megabytes each time."""
+        repl, buffer, provider = self._repl(planner_name, ("hello",), {1})
+        await repl.run()
+
+        assert provider.calls == 1
+        assert "cannot be shortened further" in buffer.getvalue()
+        assert "Hello from the agent." not in buffer.getvalue()
 
     @pytest.mark.parametrize(
         "context_window",
@@ -297,24 +323,143 @@ class TestWhenTheProviderRejectsTheRequestAsTooLong:
     async def test_it_compacts_and_the_retry_answers(
         self, planner_name: str, context_window: int | None
     ) -> None:
+        # ~15k tokens answered, then the next turn is rejected: the summary (call 3)
+        # takes the long message and the retry (call 4) answers.
         repl, buffer, provider = self._repl(
-            planner_name, rejections=1, context_window=context_window
+            planner_name, ("long " * 9_000, "hello"), {2}, context_window=context_window
         )
         await repl.run()
 
-        assert provider.calls == 2
-        assert "compacting context" in buffer.getvalue()
+        assert provider.calls == 4
         assert "rejected the request as too long" in buffer.getvalue(), "the reason went unsaid"
-        assert "Hello from the agent." in buffer.getvalue()
+        assert buffer.getvalue().count("Hello from the agent.") == 2
+
+    @pytest.mark.parametrize("prune_only", [False, True], ids=["compacted", "left out"])
+    @pytest.mark.asyncio
+    async def test_a_retry_on_the_last_iteration_is_not_the_limit(self, prune_only: bool) -> None:
+        """A retry of the same request is no iteration of its own."""
+        repl, buffer, _ = self._repl(
+            "tool_use",
+            ("long " * (30_000 if prune_only else 9_000), "hello"),
+            {2},
+            prune_only=prune_only,
+        )
+        repl._agent.planner.max_iterations = 1
+        await repl.run()
+
+        assert "Reached maximum iterations" not in buffer.getvalue()
+        assert buffer.getvalue().count("Hello from the agent.") == 2
+
+    @pytest.mark.parametrize(
+        "context_window", [100_000, None], ids=["declared window", "no window"]
+    )
+    @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
+    @pytest.mark.asyncio
+    async def test_an_earlier_message_the_rejection_proves_too_long_is_left_out(
+        self, planner_name: str, context_window: int | None
+    ) -> None:
+        """~50k tokens answered once, then over the 40,960 the rejection states:
+        nothing compacts it, so it is left out and the retry answers."""
+        repl, buffer, provider = self._repl(
+            planner_name,
+            ("long " * 30_000, "hello"),
+            {2},
+            context_window=context_window,
+            prune_only=True,
+        )
+        await repl.run()
+
+        assert provider.calls == 3
+        assert "does not fit the window: left out" in buffer.getvalue()
+        assert buffer.getvalue().count("Hello from the agent.") == 2
+
+    @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
+    @pytest.mark.asyncio
+    async def test_short_messages_are_never_to_blame(self, planner_name: str) -> None:
+        """Rejected with nothing to compact and no window stated: the system prompt and
+        tool definitions are most of the request, and against half of it, added to them,
+        every message was over. Left out, the conversation lost them for good."""
+        repl, buffer, provider = self._repl(
+            planner_name,
+            ("hi there", "what is 2+2?", "and now?"),
+            {2},
+            context_window=None,
+            prune_only=True,
+            body="prompt is too long",
+        )
+        await repl.run()
+        out = " ".join(buffer.getvalue().split())
+
+        assert provider.calls == 3
+        assert "Start a new conversation" in out and "left out" not in out
+        sent = " ".join(str(m.content) for m in provider.seen[-1])
+        assert "hi there" in sent and "what is 2+2?" in sent and "not sent" not in sent
+
+    @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
+    @pytest.mark.asyncio
+    async def test_a_rejection_stating_no_window_quotes_none(self, planner_name: str) -> None:
+        """Half the rejected request stands in for the window: no fact to tell the user."""
+        repl, buffer, provider = self._repl(
+            planner_name, ("long " * 30_000,), {1}, context_window=None, body="prompt is too long"
+        )
+        await repl.run()
+        out = " ".join(buffer.getvalue().split())
+
+        assert provider.calls == 1
+        assert "it was not sent" in out and "window holds" not in out
+
+    @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
+    @pytest.mark.asyncio
+    async def test_a_request_rejected_for_the_room_its_answer_needs_is_left_out(
+        self, planner_name: str
+    ) -> None:
+        """Under the 40,960 stated, the ~33k-token paste is rejected for the reserve the
+        answer needs (vLLM before 0.32): the paste is left out, not the conversation,
+        so the next message is answered."""
+        repl, buffer, provider = self._repl(
+            planner_name,
+            ("long " * 20_000, "ciao"),
+            set(),
+            context_window=40_960,
+            rejects_over_chars=(40_960 - 16_000) * 3,
+        )
+        await repl.run()
+        out = " ".join(buffer.getvalue().split())
+
+        assert "was not sent" in out
+        assert "Start a new conversation" not in out
+        assert "/clear" not in out and "this message alone" in out
+        assert out.count("Hello from the agent.") == 1
+        last = " ".join(str(m.content) for m in provider.seen[-1])
+        assert "long long" not in last and "not sent" in last
+
+    @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
+    @pytest.mark.asyncio
+    async def test_rejected_again_after_compacting_the_request_is_left_out(
+        self, planner_name: str
+    ) -> None:
+        """The summary of the first paste changed the request, and the retry was rejected
+        too: the paste is left out rather than the turn ending on the provider's error, and
+        kept in the conversation to be rejected again."""
+        repl, buffer, provider = self._repl(
+            planner_name, ("long " * 9_000, "long " * 20_000), {2, 4}
+        )
+        await repl.run()
+        out = " ".join(buffer.getvalue().split())
+
+        assert provider.calls == 4
+        assert "was not sent" in out and "LLM error" not in out
 
     @pytest.mark.parametrize("planner_name", ["tool_use", "tool_use_thought"])
     @pytest.mark.asyncio
     async def test_a_second_rejection_ends_the_turn(self, planner_name: str) -> None:
-        repl, buffer, provider = self._repl(planner_name, rejections=99)
+        repl, buffer, provider = self._repl(
+            planner_name, ("long " * 30_000, "hello"), range(2, 99), prune_only=True
+        )
         await repl.run()
 
-        assert provider.calls == 2, "retried more than once"
-        assert "Hello from the agent." not in buffer.getvalue()
+        assert provider.calls == 3, "retried more than once"
+        assert buffer.getvalue().count("Hello from the agent.") == 1
 
 
 class TestSayingWhenPruningIsNoLongerEnough:
@@ -402,6 +547,19 @@ class TestSayingWhenPruningIsNoLongerEnough:
         out = " ".join(buffer.getvalue().split())
         assert "this message alone" in out
         assert "/clear" not in out
+
+    def test_after_a_rejection_the_planner_says_how_it_goes_on(self) -> None:
+        renderer, buffer = _renderer()
+        renderer.begin_turn()
+        renderer.render(
+            _event(
+                ExecutionEventType.CONTEXT_COMPACTED,
+                changed=False,
+                sufficient=False,
+                rejected=True,
+            )
+        )
+        assert "still over the limit" not in buffer.getvalue()
 
 
 class TestMeasuringFromTheProvidersCountInARealSession:
