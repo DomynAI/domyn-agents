@@ -67,6 +67,10 @@ from domyn.agents.core import METADATA_TOOL_BATCH, BaseEvent, ExecutionEventType
 from domyn.agents.interfaces.cli.calls import as_written, summary
 from domyn.agents.interfaces.cli.markdown import MarkdownStream, render_markdown
 from domyn.agents.memory.managers.base import MemoryAsset
+from domyn.agents.planner_strategy.context_management.compaction import (
+    CONVERSATION_TOO_LONG,
+    REQUEST_TOO_LONG,
+)
 
 if TYPE_CHECKING:
     from rich.console import Console
@@ -420,6 +424,11 @@ class EventRenderer:
         did not happen is how people stop investigating a session that keeps
         being too large."""
         meta = event.metadata or {}
+        if meta.get("excluded"):
+            # An earlier message no window holds, left out so the turn can go on.
+            note = " ".join(part.text for part in event.content if part.text).strip()
+            self._work(note or "an earlier message was left out", "warning")
+            return
         if meta.get("requested"):
             # `/compact` says in its own words what it dropped, or why it dropped
             # nothing — "already dropped" and "nothing worth dropping" ask for
@@ -446,11 +455,12 @@ class EventRenderer:
         else:
             self._work("context compacted", "meta")
 
-        if meta.get("sufficient") is False:
+        if meta.get("sufficient") is False and not meta.get("rejected"):
             # It pruned, and it was not enough. Saying only the first part is how
             # the next line the person sees is a rejected request they have no
-            # reason to connect to this. A new conversation would not help a
-            # message that alone is over the limit.
+            # reason to connect to this. After a rejection the planner says how
+            # the turn goes on, and a new conversation would not help a message
+            # that alone is over the limit.
             request, threshold = meta.get("request_tokens"), meta.get("threshold_tokens")
             if isinstance(request, int) and isinstance(threshold, int) and request > threshold:
                 note = (
@@ -882,6 +892,10 @@ class EventRenderer:
         detail = next((c for c in candidates if c.strip()), "")
 
         code = str(getattr(event, "error_code", "") or "")
+        if code in (REQUEST_TOO_LONG, CONVERSATION_TOO_LONG) and detail:
+            # Written for the person who sent it: the event type and code add nothing.
+            self._work(detail, "error")
+            return
         label = f"{event.event_type.value}"
         if code:
             label += f" [{code}]"
