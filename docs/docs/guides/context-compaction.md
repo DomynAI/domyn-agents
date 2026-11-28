@@ -26,8 +26,8 @@ The estimate counts three characters per token, rounding up, plus a small allowa
 
 The conversation is split in three parts:
 
-- **The head**: the system prompt and the conversation's first message. Never summarized, since it frames the whole conversation.
-- **The tail**: the most recent messages, about `keep_recent_tokens` (20,000 by default) worth, and never more than half the room the conversation has under the threshold, so that a small window can still be compacted. Never compacted, since it is what the agent is working on.
+- **The head**: the system prompt and the conversation's first message. Never summarized, since it frames the whole conversation, unless that message alone is larger than the tail: a pasted document is no framing.
+- **The tail**: the most recent messages, about `keep_recent_tokens` (20,000 by default) worth, and never more than half the room the conversation has under the threshold, so that a small window can still be compacted. Never compacted, since it is what the agent is working on. An earlier message from the user larger than the whole tail stays out of it, so it can be summarized; the last message is always in it.
 - **The middle**: everything in between, which is what gets shortened.
 
 The cut never separates a tool call from its result, which providers would reject.
@@ -35,7 +35,7 @@ The cut never separates a tool call from its result, which providers would rejec
 Compaction happens in two phases:
 
 1. **Pruning.** Each tool output before the tail longer than 200 characters is replaced with a note saying what it was, such as `[fetch_report output dropped to save context — 3 lines. Read it again with read_tool_result(result_id="event_…")]`, with the exit code when the output had one. The agent can read the output again with that call, since the conversation keeps it whole. A sub-agent's task or report, pruned the same way, has no tool output to read and its note gives no call. It needs no model call, and in an agent conversation tool outputs are usually most of the text.
-2. **Summarizing.** If the conversation is still over the threshold, the agent's model is asked to summarize the middle: what the user asked for, what was established, what was tried and failed, and what is still open. The summary replaces the middle, as one message starting with `[conversation summary]`. The user's latest message is never summarized, wherever the tail begins. If the summary fails, the pruning is kept.
+2. **Summarizing.** If the conversation is still over the threshold, the agent's model is asked to summarize the middle: what the user asked for, what was established, what was tried and failed, and what is still open. The summary replaces the middle, as one message starting with `[conversation summary]`. The user's latest message is never summarized, wherever the tail begins. If the summary fails, or is no shorter than what it would replace, the pruning is kept; in the second case the same part is not summarized again while it stays the same.
 
 The conversation itself is never rewritten: every event stays in the history. What was dropped and the summary are recorded in the conversation's state, for each agent, and applied again on every later request, so a compaction lasts and a summary is paid for once. When a later compaction summarizes again, the previous summary is part of what it summarizes.
 

@@ -449,12 +449,16 @@ class EventRenderer:
         if meta.get("sufficient") is False:
             # It pruned, and it was not enough. Saying only the first part is how
             # the next line the person sees is a rejected request they have no
-            # reason to connect to this.
-            self._work(
-                "still over the limit: dropping tool output is no longer enough"
-                " — summarise or start a new conversation",
-                "warning",
-            )
+            # reason to connect to this. A new conversation would not help a
+            # message that alone is over the limit.
+            request, threshold = meta.get("request_tokens"), meta.get("threshold_tokens")
+            if isinstance(request, int) and isinstance(threshold, int) and request > threshold:
+                note = (
+                    "this message alone takes most of the window, and leaves the answer less room"
+                )
+            else:
+                note = "what is left cannot be shortened further — /clear starts a new conversation"
+            self._work(f"still over the limit: {note}", "warning")
 
     def finish(self) -> None:
         """Close any dangling stream. Call when a turn ends."""

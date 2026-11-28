@@ -90,7 +90,7 @@ Every action also has an optional `message`.
 | Type | When | Carries |
 |---|---|---|
 | `context_compaction_start` | The conversation is about to be shortened: the request reached the threshold, the provider rejected it as too long, or a compaction was requested. | `metadata`: `tokens_before`, `threshold_tokens` and `rejected` (the provider rejected the request), or `requested: True`. |
-| `context_compacted` | The compaction finished. | `metadata`: `changed` (something was removed or summarized). At the threshold, also `tokens_before`, `tokens_after`, `threshold_tokens` and `sufficient` (the result fits under the threshold); on request, `requested: True`, `events_dropped` and `tokens_saved`. |
+| `context_compacted` | The compaction finished. | `metadata`: `changed` (something was removed or summarized). At the threshold, also `tokens_before`, `tokens_after`, `threshold_tokens`, `sufficient` (the result fits under the threshold) and `request_tokens` (the latest request with what every request carries: over the threshold, no compaction gets under it); on request, `requested: True`, `events_dropped` and `tokens_saved`. |
 | `error_occurred` | The agent could not continue. The last event of the turn. | `error_message`; `content`: a description, from a planner; `error_code`, from the runner, such as `RequiredSkillUnavailable`. |
 
 ## Accepted as input
