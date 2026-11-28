@@ -861,12 +861,14 @@ def _choosing_repl(rounds: int = 1):
     return repl, scripted, provider, buffer
 
 
-async def _until(condition: Any, timeout: float = 5.0) -> None:
+async def _until(condition: Any, timeout: float = 30.0) -> None:
     """Wait for ``condition``, by the clock rather than by loop ticks.
 
     Reaching the gate goes through work done off the loop (the conversation store,
     the tool call), so a tick budget that is ample on one machine runs out before
-    the approval is even asked on a slower CI runner.
+    the approval is even asked on a slower CI runner. The limit is a ceiling, not
+    a measure: under a second here, the first turn of a worker on a busy Windows
+    runner, which imports what the turn needs, took more than five.
     """
     deadline = asyncio.get_running_loop().time() + timeout
     while not condition():
@@ -876,10 +878,25 @@ async def _until(condition: Any, timeout: float = 5.0) -> None:
 
 
 async def _turn_with(repl: Repl, script: Any) -> None:
-    """Run a turn while ``script`` plays the user, failing rather than hanging."""
-    task = asyncio.ensure_future(script())
-    await asyncio.wait_for(repl._run_turn("read every file"), timeout=15)
-    await asyncio.wait_for(task, timeout=1)
+    """Run a turn while ``script`` plays the user, failing rather than hanging.
+
+    A script that fails ends the test with its own error at once: the question it
+    was to answer stays open, and waiting for the turn reported only a timeout.
+    """
+    user = asyncio.ensure_future(script())
+    turn = asyncio.ensure_future(repl._run_turn("read every file"))
+    await asyncio.wait({user, turn}, timeout=60, return_when=asyncio.FIRST_EXCEPTION)
+    if user.done() and user.exception() is not None:
+        turn.cancel()
+        await asyncio.gather(turn, return_exceptions=True)
+        raise user.exception()  # type: ignore[misc]
+    if not turn.done():
+        turn.cancel()
+        user.cancel()
+        await asyncio.gather(turn, user, return_exceptions=True)
+        raise AssertionError("the turn never ended")
+    turn.result()
+    await asyncio.wait_for(user, timeout=1)
 
 
 class TestTheApprovalInsideTheEditor:
